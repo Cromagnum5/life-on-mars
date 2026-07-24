@@ -2,8 +2,16 @@ import * as THREE from "three";
 
 export type Rigwalker = {
   group: THREE.Group;
-  update: (elapsed: number) => void;
+  moveTo: (destination: THREE.Vector3) => void;
+  update: (
+    delta: number,
+    elapsed: number,
+    terrainHeightAt: (x: number, z: number) => number,
+  ) => void;
 };
+
+const MOVE_SPEED = 3.6;
+const WALK_CYCLE_SPEED = 8.4;
 
 const armor = new THREE.MeshStandardMaterial({
   color: 0x596266,
@@ -154,6 +162,21 @@ export function createRigwalker(): Rigwalker {
   const group = new THREE.Group();
   group.name = "Rigwalker";
 
+  const contactShadow = new THREE.Mesh(
+    new THREE.CircleGeometry(0.72, 24),
+    new THREE.MeshBasicMaterial({
+      color: 0x170b08,
+      transparent: true,
+      opacity: 0.38,
+      depthWrite: false,
+    }),
+  );
+  contactShadow.name = "Rigwalker contact shadow";
+  contactShadow.position.y = -0.17;
+  contactShadow.rotation.x = -Math.PI / 2;
+  contactShadow.scale.set(0.78, 1.15, 1);
+  group.add(contactShadow);
+
   const animatedRoot = new THREE.Group();
   group.add(animatedRoot);
 
@@ -225,10 +248,59 @@ export function createRigwalker(): Rigwalker {
     [0.38, 4.03, -0.16],
   );
 
-  function update(elapsed: number): void {
-    const stride = Math.sin(elapsed * 4.2);
+  let destination: THREE.Vector3 | null = null;
+  let walkCycle = 0;
+  let walkBlend = 0;
+  const targetRotation = new THREE.Quaternion();
+  const upAxis = new THREE.Vector3(0, 1, 0);
+  const movement = new THREE.Vector3();
+
+  function moveTo(nextDestination: THREE.Vector3): void {
+    destination = nextDestination.clone();
+    destination.y = 0;
+  }
+
+  function update(
+    delta: number,
+    elapsed: number,
+    terrainHeightAt: (x: number, z: number) => number,
+  ): void {
+    let moving = false;
+
+    if (destination) {
+      movement.set(
+        destination.x - group.position.x,
+        0,
+        destination.z - group.position.z,
+      );
+      const distance = movement.length();
+
+      if (distance > 0.08) {
+        moving = true;
+        movement.normalize();
+        const travel = Math.min(distance, MOVE_SPEED * delta);
+        group.position.addScaledVector(movement, travel);
+
+        const targetAngle = Math.atan2(movement.x, movement.z);
+        targetRotation.setFromAxisAngle(upAxis, targetAngle);
+        group.quaternion.slerp(targetRotation, 1 - Math.exp(-10 * delta));
+      } else {
+        destination = null;
+      }
+    }
+
+    group.position.y = THREE.MathUtils.damp(
+      group.position.y,
+      terrainHeightAt(group.position.x, group.position.z) + 0.2,
+      12,
+      delta,
+    );
+
+    walkBlend = THREE.MathUtils.damp(walkBlend, moving ? 1 : 0, 10, delta);
+    walkCycle += delta * WALK_CYCLE_SPEED * walkBlend;
+    const stride = Math.sin(walkCycle) * walkBlend;
     const oppositeStride = -stride;
-    const stepLift = Math.abs(Math.cos(elapsed * 4.2));
+    const stepLift = Math.abs(Math.cos(walkCycle)) * walkBlend;
 
     leftLeg.hip.rotation.x = stride * 0.52;
     rightLeg.hip.rotation.x = oppositeStride * 0.52;
@@ -242,10 +314,11 @@ export function createRigwalker(): Rigwalker {
     leftArm.elbow.rotation.x = -0.25 - Math.max(0, stride) * 0.3;
     rightArm.elbow.rotation.x = -0.25 - Math.max(0, -stride) * 0.3;
 
-    animatedRoot.position.y = 0.07 + stepLift * 0.08;
+    animatedRoot.position.y =
+      0.07 + stepLift * 0.08 + Math.sin(elapsed * 1.8) * 0.012;
     animatedRoot.rotation.z = stride * 0.025;
     head.rotation.y = Math.sin(elapsed * 1.1) * 0.07;
   }
 
-  return { group, update };
+  return { group, moveTo, update };
 }

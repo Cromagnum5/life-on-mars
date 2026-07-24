@@ -143,7 +143,8 @@ function createRocks(): THREE.Group {
   return rocks;
 }
 
-scene.add(createTerrain(), createRocks(), createBuildings(terrainHeightAt));
+const terrain = createTerrain();
+scene.add(terrain, createRocks(), createBuildings(terrainHeightAt));
 
 const rigwalker = createRigwalker();
 const rigwalkerPosition = new THREE.Vector2(10, 0.5);
@@ -153,6 +154,41 @@ rigwalker.group.position.set(
   rigwalkerPosition.y,
 );
 scene.add(rigwalker.group);
+
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+let rigwalkerSelected = false;
+
+function updatePointer(event: PointerEvent): void {
+  const bounds = canvas!.getBoundingClientRect();
+  pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
+  pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
+  raycaster.setFromCamera(pointer, camera);
+}
+
+canvas.addEventListener("pointerdown", (event) => {
+  if (event.button !== 0) {
+    return;
+  }
+
+  updatePointer(event);
+  rigwalkerSelected =
+    raycaster.intersectObject(rigwalker.group, true).length > 0;
+});
+
+canvas.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+
+  if (!rigwalkerSelected) {
+    return;
+  }
+
+  updatePointer(event);
+  const terrainHit = raycaster.intersectObject(terrain, false)[0];
+  if (terrainHit) {
+    rigwalker.moveTo(terrainHit.point);
+  }
+});
 
 const keys = new Set<string>();
 
@@ -226,7 +262,7 @@ const clock = new THREE.Clock();
 function animate(): void {
   const delta = Math.min(clock.getDelta(), 0.05);
   updateCamera(delta);
-  rigwalker.update(clock.elapsedTime);
+  rigwalker.update(delta, clock.elapsedTime, terrainHeightAt);
   renderer.render(scene, camera);
 }
 
