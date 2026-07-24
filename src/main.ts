@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BUILDING_SITES, createBuildings } from "./buildings";
+import { createRigwalker } from "./rigwalker";
 import "./style.css";
 
 const MAP_SIZE = 180;
@@ -144,6 +145,15 @@ function createRocks(): THREE.Group {
 
 scene.add(createTerrain(), createRocks(), createBuildings(terrainHeightAt));
 
+const rigwalker = createRigwalker();
+const rigwalkerPosition = new THREE.Vector2(10, 0.5);
+rigwalker.group.position.set(
+  rigwalkerPosition.x,
+  terrainHeightAt(rigwalkerPosition.x, rigwalkerPosition.y) + 0.2,
+  rigwalkerPosition.y,
+);
+scene.add(rigwalker.group);
+
 const keys = new Set<string>();
 
 window.addEventListener("keydown", (event) => keys.add(event.code));
@@ -216,6 +226,7 @@ const clock = new THREE.Clock();
 function animate(): void {
   const delta = Math.min(clock.getDelta(), 0.05);
   updateCamera(delta);
+  rigwalker.update(clock.elapsedTime);
   renderer.render(scene, camera);
 }
 
