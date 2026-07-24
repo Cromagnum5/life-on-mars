@@ -18,4 +18,5 @@ Camera controls:
 Unit controls:
 
 - Left-click a Rigwalker to select it
-- Right-click the terrain to move the selected Rigwalker
+- Left-click and drag to select multiple Rigwalkers
+- Right-click the terrain to move the selected unit or group

@@ -55,8 +55,8 @@ Avoid the name “Optimus” because of its strong association with Transformers
 4. Implement selection and click-to-move controls. **Complete.**
 5. Add the Assembly Bay's 30-second production cycle and visible unit exit. **Complete.**
 6. Add selection feedback, movement markers, and the basic HUD. **Complete.**
-7. Add simple unit separation and building obstacles. **Next.**
-8. Create the first Blender robot and validate the animated GLB pipeline.
+7. Add simple unit separation and building obstacles. **Complete.**
+8. Create the first Blender robot and validate the animated GLB pipeline. **Next.**
 9. Replace placeholders while preserving gameplay behavior.
 
 ## First playable slice
@@ -96,5 +96,10 @@ arrival. The Assembly Bay produces a new independently controllable Rigwalker
 every 30 seconds: its shutter opens, the unit walks from inside to a clear rally
 point, and the shutter closes. Selected units show an orange ring, movement
 orders pulse on the terrain, and the operations HUD reports power, ore, unit
-count, selection, and Assembly Bay progress. Step 7 should keep units separated
-and route them around building footprints.
+count, selection, and Assembly Bay progress. Units support single-click and
+left-drag marquee selection, with group orders arranged into a loose formation.
+Rigwalkers use lightweight local
+steering to maintain personal space and travel around circular building
+footprints; commands placed on a building are moved to its nearest clear edge.
+Step 8 should create the first Blender-authored robot and validate animated GLB
+loading without changing unit gameplay behavior.

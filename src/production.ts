@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { BUILDING_OBSTACLES } from "./buildings";
 import { createRigwalker, type Rigwalker } from "./rigwalker";
 
 const PRODUCTION_SECONDS = 30;
@@ -12,14 +13,7 @@ const RALLY_MIN_X = -18;
 const RALLY_MAX_X = 34;
 const RALLY_MIN_Z = 1;
 const RALLY_MAX_Z = 28;
-const BUILDING_CLEARANCE = 7;
 const UNIT_CLEARANCE = 2.2;
-
-const BUILDING_POSITIONS = [
-  new THREE.Vector2(-12, -8),
-  new THREE.Vector2(10, -6),
-  new THREE.Vector2(0, 12),
-];
 
 type ProductionPhase = "producing" | "opening" | "exiting" | "closing";
 
@@ -140,8 +134,9 @@ export class AssemblyBayProduction {
         THREE.MathUtils.lerp(RALLY_MIN_Z, RALLY_MAX_Z, Math.random()),
       );
       const candidate2D = new THREE.Vector2(candidate.x, candidate.z);
-      const clearOfBuildings = BUILDING_POSITIONS.every(
-        (building) => building.distanceTo(candidate2D) >= BUILDING_CLEARANCE,
+      const clearOfBuildings = BUILDING_OBSTACLES.every(
+        (building) =>
+          building.center.distanceTo(candidate2D) >= building.radius + 1.2,
       );
       const clearOfUnits = this.units.every(
         (unit) => unit.group.position.distanceTo(candidate) >= UNIT_CLEARANCE,

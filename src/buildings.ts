@@ -18,6 +18,12 @@ export const BUILDING_SITES = [
   new THREE.Vector2(0, 12),
 ] as const;
 
+export const BUILDING_OBSTACLES = [
+  { center: BUILDING_SITES[0], radius: 4.8 },
+  { center: BUILDING_SITES[1], radius: 6.2 },
+  { center: BUILDING_SITES[2], radius: 5.1 },
+] as const;
+
 const dark = new THREE.MeshStandardMaterial({
   color: 0x303638,
   metalness: 0.75,

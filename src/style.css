@@ -21,6 +21,15 @@ body,
   overflow: hidden;
 }
 
+.selection-box {
+  position: fixed;
+  display: none;
+  border: 1px solid #ffb35d;
+  background: rgb(242 154 63 / 12%);
+  box-shadow: inset 0 0 10px rgb(242 154 63 / 8%);
+  pointer-events: none;
+}
+
 #game {
   display: block;
   cursor: default;

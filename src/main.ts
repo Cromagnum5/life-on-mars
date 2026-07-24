@@ -1,5 +1,9 @@
 import * as THREE from "three";
-import { BUILDING_SITES, createBuildings } from "./buildings";
+import {
+  BUILDING_OBSTACLES,
+  BUILDING_SITES,
+  createBuildings,
+} from "./buildings";
 import { MovementMarkers } from "./feedback";
 import { AssemblyBayProduction } from "./production";
 import { createRigwalker } from "./rigwalker";
@@ -167,7 +171,9 @@ const movementMarkers = new MovementMarkers(scene);
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
-let selectedRigwalker = null as (typeof production.units)[number] | null;
+let selectedRigwalkers: (typeof production.units)[number][] = [];
+let selectionDragStart: THREE.Vector2 | null = null;
+let selectionDragging = false;
 
 const powerValue = document.querySelector<HTMLElement>("#power-value");
 const resourceValue = document.querySelector<HTMLElement>("#resource-value");
@@ -175,6 +181,7 @@ const productionValue = document.querySelector<HTMLElement>("#production-value")
 const productionBar = document.querySelector<HTMLElement>("#production-bar");
 const unitValue = document.querySelector<HTMLElement>("#unit-value");
 const selectionValue = document.querySelector<HTMLElement>("#selection-value");
+const selectionBox = document.querySelector<HTMLElement>("#selection-box");
 
 if (
   !powerValue ||
@@ -182,17 +189,22 @@ if (
   !productionValue ||
   !productionBar ||
   !unitValue ||
-  !selectionValue
+  !selectionValue ||
+  !selectionBox
 ) {
   throw new Error("Operations HUD is incomplete.");
 }
 
-function selectRigwalker(
-  nextSelection: (typeof production.units)[number] | null,
+function selectRigwalkers(
+  nextSelection: (typeof production.units)[number][],
 ): void {
-  selectedRigwalker?.setSelected(false);
-  selectedRigwalker = nextSelection;
-  selectedRigwalker?.setSelected(true);
+  for (const unit of selectedRigwalkers) {
+    unit.setSelected(false);
+  }
+  selectedRigwalkers = nextSelection;
+  for (const unit of selectedRigwalkers) {
+    unit.setSelected(true);
+  }
 }
 
 function updatePointer(event: PointerEvent): void {
@@ -202,31 +214,127 @@ function updatePointer(event: PointerEvent): void {
   raycaster.setFromCamera(pointer, camera);
 }
 
+function clearBuildingFootprints(position: THREE.Vector3): THREE.Vector3 {
+  const adjusted = position.clone();
+
+  for (const obstacle of BUILDING_OBSTACLES) {
+    const offset = new THREE.Vector2(
+      adjusted.x - obstacle.center.x,
+      adjusted.z - obstacle.center.y,
+    );
+    const clearance = obstacle.radius + 0.8;
+    if (offset.length() < clearance) {
+      if (offset.lengthSq() < 0.001) {
+        offset.set(0, 1);
+      } else {
+        offset.normalize();
+      }
+      adjusted.x = obstacle.center.x + offset.x * clearance;
+      adjusted.z = obstacle.center.y + offset.y * clearance;
+      adjusted.y = terrainHeightAt(adjusted.x, adjusted.z);
+    }
+  }
+
+  return adjusted;
+}
+
 canvas.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) {
     return;
   }
 
-  updatePointer(event);
-  selectRigwalker(
-    production.units.find(
-      (unit) => raycaster.intersectObject(unit.group, true).length > 0,
-    ) ?? null,
+  selectionDragStart = new THREE.Vector2(event.clientX, event.clientY);
+  selectionDragging = false;
+  canvas.setPointerCapture(event.pointerId);
+});
+
+canvas.addEventListener("pointermove", (event) => {
+  if (!selectionDragStart) {
+    return;
+  }
+
+  const distance = selectionDragStart.distanceTo(
+    new THREE.Vector2(event.clientX, event.clientY),
   );
+  if (distance > 5) {
+    selectionDragging = true;
+  }
+  if (!selectionDragging) {
+    return;
+  }
+
+  const left = Math.min(selectionDragStart.x, event.clientX);
+  const top = Math.min(selectionDragStart.y, event.clientY);
+  selectionBox!.style.display = "block";
+  selectionBox!.style.left = `${left}px`;
+  selectionBox!.style.top = `${top}px`;
+  selectionBox!.style.width = `${Math.abs(event.clientX - selectionDragStart.x)}px`;
+  selectionBox!.style.height = `${Math.abs(event.clientY - selectionDragStart.y)}px`;
+});
+
+canvas.addEventListener("pointerup", (event) => {
+  if (event.button !== 0 || !selectionDragStart) {
+    return;
+  }
+
+  if (selectionDragging) {
+    const bounds = canvas.getBoundingClientRect();
+    const left = Math.min(selectionDragStart.x, event.clientX);
+    const right = Math.max(selectionDragStart.x, event.clientX);
+    const top = Math.min(selectionDragStart.y, event.clientY);
+    const bottom = Math.max(selectionDragStart.y, event.clientY);
+    const projected = new THREE.Vector3();
+    selectRigwalkers(
+      production.units.filter((unit) => {
+        projected.copy(unit.group.position).project(camera);
+        const screenX = bounds.left + ((projected.x + 1) / 2) * bounds.width;
+        const screenY = bounds.top + ((1 - projected.y) / 2) * bounds.height;
+        return (
+          projected.z >= -1 &&
+          projected.z <= 1 &&
+          screenX >= left &&
+          screenX <= right &&
+          screenY >= top &&
+          screenY <= bottom
+        );
+      }),
+    );
+  } else {
+    updatePointer(event);
+    const selected = production.units.find(
+      (unit) => raycaster.intersectObject(unit.group, true).length > 0,
+    );
+    selectRigwalkers(selected ? [selected] : []);
+  }
+
+  selectionDragStart = null;
+  selectionDragging = false;
+  selectionBox!.style.display = "none";
+  canvas.releasePointerCapture(event.pointerId);
 });
 
 canvas.addEventListener("contextmenu", (event) => {
   event.preventDefault();
 
-  if (!selectedRigwalker) {
+  if (selectedRigwalkers.length === 0) {
     return;
   }
 
   updatePointer(event);
   const terrainHit = raycaster.intersectObject(terrain, false)[0];
   if (terrainHit) {
-    selectedRigwalker.moveTo(terrainHit.point);
-    movementMarkers.add(terrainHit.point);
+    const columns = Math.ceil(Math.sqrt(selectedRigwalkers.length));
+    const rows = Math.ceil(selectedRigwalkers.length / columns);
+    const spacing = 1.55;
+    selectedRigwalkers.forEach((unit, index) => {
+      const column = index % columns;
+      const row = Math.floor(index / columns);
+      const destination = terrainHit.point.clone();
+      destination.x += (column - (columns - 1) / 2) * spacing;
+      destination.z += (row - (rows - 1) / 2) * spacing;
+      unit.moveTo(clearBuildingFootprints(destination));
+    });
+    movementMarkers.add(clearBuildingFootprints(terrainHit.point));
   }
 });
 
@@ -307,7 +415,12 @@ function updateHud(elapsed: number): void {
       : `00:${productionStatus.secondsRemaining.toString().padStart(2, "0")}`;
   productionBar!.style.width = `${productionStatus.progress * 100}%`;
   unitValue!.textContent = production.units.length.toString();
-  selectionValue!.textContent = selectedRigwalker ? "Rigwalker" : "None";
+  selectionValue!.textContent =
+    selectedRigwalkers.length === 0
+      ? "None"
+      : selectedRigwalkers.length === 1
+        ? "Rigwalker"
+        : `${selectedRigwalkers.length} Rigwalkers`;
 }
 
 const clock = new THREE.Clock();
@@ -318,7 +431,13 @@ function animate(): void {
   production.update(delta);
   movementMarkers.update(delta);
   for (const unit of production.units) {
-    unit.update(delta, clock.elapsedTime, terrainHeightAt);
+    unit.update(
+      delta,
+      clock.elapsedTime,
+      terrainHeightAt,
+      production.units,
+      BUILDING_OBSTACLES,
+    );
   }
   updateHud(clock.elapsedTime);
   renderer.render(scene, camera);

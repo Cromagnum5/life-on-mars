@@ -8,10 +8,20 @@ export type Rigwalker = {
     delta: number,
     elapsed: number,
     terrainHeightAt: (x: number, z: number) => number,
+    nearbyUnits: readonly Rigwalker[],
+    obstacles: readonly NavigationObstacle[],
   ) => void;
 };
 
+export type NavigationObstacle = {
+  center: THREE.Vector2;
+  radius: number;
+};
+
 const MOVE_SPEED = 3.6;
+const SEPARATION_SPEED = 1.1;
+const SEPARATION_RADIUS = 1.25;
+const OBSTACLE_LOOKAHEAD = 1.4;
 const WALK_CYCLE_SPEED = 8.4;
 
 const armor = new THREE.MeshStandardMaterial({
@@ -271,6 +281,10 @@ export function createRigwalker(): Rigwalker {
   const targetRotation = new THREE.Quaternion();
   const upAxis = new THREE.Vector3(0, 1, 0);
   const movement = new THREE.Vector3();
+  const desiredMovement = new THREE.Vector3();
+  const separation = new THREE.Vector3();
+  const radial = new THREE.Vector3();
+  const proposedPosition = new THREE.Vector3();
 
   function moveTo(nextDestination: THREE.Vector3): void {
     destination = nextDestination.clone();
@@ -285,8 +299,37 @@ export function createRigwalker(): Rigwalker {
     delta: number,
     elapsed: number,
     terrainHeightAt: (x: number, z: number) => number,
+    nearbyUnits: readonly Rigwalker[],
+    obstacles: readonly NavigationObstacle[],
   ): void {
     let moving = false;
+    let travelSpeed = 0;
+    separation.set(0, 0, 0);
+
+    for (const other of nearbyUnits) {
+      if (other === rigwalker) {
+        continue;
+      }
+
+      radial.set(
+        group.position.x - other.group.position.x,
+        0,
+        group.position.z - other.group.position.z,
+      );
+      const distance = radial.length();
+      if (distance < SEPARATION_RADIUS) {
+        if (distance < 0.001) {
+          const angle = (group.id % 8) * (Math.PI / 4);
+          radial.set(Math.cos(angle), 0, Math.sin(angle));
+        } else {
+          radial.divideScalar(distance);
+        }
+        separation.addScaledVector(
+          radial,
+          (SEPARATION_RADIUS - distance) / SEPARATION_RADIUS,
+        );
+      }
+    }
 
     if (destination) {
       movement.set(
@@ -298,16 +341,80 @@ export function createRigwalker(): Rigwalker {
 
       if (distance > 0.08) {
         moving = true;
+        travelSpeed = MOVE_SPEED;
         movement.normalize();
-        const travel = Math.min(distance, MOVE_SPEED * delta);
-        group.position.addScaledVector(movement, travel);
-
-        const targetAngle = Math.atan2(movement.x, movement.z);
-        targetRotation.setFromAxisAngle(upAxis, targetAngle);
-        group.quaternion.slerp(targetRotation, 1 - Math.exp(-10 * delta));
+        desiredMovement.copy(movement);
       } else {
         destination = null;
       }
+    }
+
+    if (!moving && separation.lengthSq() > 0.001) {
+      moving = true;
+      travelSpeed = SEPARATION_SPEED;
+      movement.copy(separation).normalize();
+      desiredMovement.copy(movement);
+    } else if (moving && separation.lengthSq() > 0.001) {
+      movement.addScaledVector(separation, 1.35).normalize();
+    }
+
+    if (moving) {
+      for (const obstacle of obstacles) {
+        radial.set(
+          group.position.x - obstacle.center.x,
+          0,
+          group.position.z - obstacle.center.y,
+        );
+        const distance = radial.length();
+
+        if (
+          distance >= obstacle.radius &&
+          distance < obstacle.radius + OBSTACLE_LOOKAHEAD
+        ) {
+          radial.normalize();
+          const headingTowardObstacle = movement.dot(radial) < 0;
+          if (headingTowardObstacle) {
+            const tangent = new THREE.Vector3(-radial.z, 0, radial.x);
+            if (tangent.dot(desiredMovement) < 0) {
+              tangent.multiplyScalar(-1);
+            }
+            const proximity =
+              1 - (distance - obstacle.radius) / OBSTACLE_LOOKAHEAD;
+            movement
+              .addScaledVector(tangent, proximity * 1.8)
+              .addScaledVector(radial, proximity * 0.45)
+              .normalize();
+          }
+        }
+
+        proposedPosition
+          .copy(group.position)
+          .addScaledVector(movement, travelSpeed * delta);
+        const proposedDistance = Math.hypot(
+          proposedPosition.x - obstacle.center.x,
+          proposedPosition.z - obstacle.center.y,
+        );
+        if (distance >= obstacle.radius && proposedDistance < obstacle.radius) {
+          radial.normalize();
+          movement.set(-radial.z, 0, radial.x);
+          if (movement.dot(desiredMovement) < 0) {
+            movement.multiplyScalar(-1);
+          }
+        }
+      }
+
+      const remainingDistance = destination
+        ? Math.hypot(
+            destination.x - group.position.x,
+            destination.z - group.position.z,
+          )
+        : Number.POSITIVE_INFINITY;
+      const travel = Math.min(remainingDistance, travelSpeed * delta);
+      group.position.addScaledVector(movement, travel);
+
+      const targetAngle = Math.atan2(movement.x, movement.z);
+      targetRotation.setFromAxisAngle(upAxis, targetAngle);
+      group.quaternion.slerp(targetRotation, 1 - Math.exp(-10 * delta));
     }
 
     group.position.y = THREE.MathUtils.damp(
@@ -341,5 +448,6 @@ export function createRigwalker(): Rigwalker {
     head.rotation.y = Math.sin(elapsed * 1.1) * 0.07;
   }
 
-  return { group, moveTo, setSelected, update };
+  const rigwalker = { group, moveTo, setSelected, update };
+  return rigwalker;
 }
