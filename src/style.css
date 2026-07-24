@@ -55,6 +55,82 @@ body,
   letter-spacing: 0.23em;
 }
 
+.operations {
+  position: fixed;
+  top: 22px;
+  right: 20px;
+  width: 242px;
+  padding: 14px 15px 15px;
+  border: 1px solid rgb(244 172 114 / 28%);
+  border-radius: 4px;
+  color: #d5bca9;
+  background: linear-gradient(145deg, rgb(29 16 12 / 88%), rgb(18 12 10 / 78%));
+  box-shadow: 0 10px 34px rgb(0 0 0 / 28%);
+  backdrop-filter: blur(9px);
+  pointer-events: none;
+}
+
+.panel-title {
+  margin: 0 0 11px;
+  color: #f0a365;
+  font: 600 0.68rem "Chakra Petch", sans-serif;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+}
+
+.resource-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 7px 12px;
+  margin: 0;
+  font-size: 0.72rem;
+}
+
+.resource-grid dt {
+  color: #9d8b7e;
+}
+
+.resource-grid dd {
+  margin: 0;
+  color: #f3e4d4;
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 600;
+  text-align: right;
+}
+
+.production-status {
+  margin-top: 13px;
+  padding-top: 11px;
+  border-top: 1px solid rgb(255 224 192 / 12%);
+}
+
+.production-status > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  color: #c9b3a1;
+  font-size: 0.7rem;
+}
+
+.production-status strong {
+  color: #ffb35d;
+  font: 600 0.7rem "Chakra Petch", sans-serif;
+}
+
+.progress-track {
+  height: 3px;
+  margin-top: 7px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 9%);
+}
+
+.progress-track span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: #f29a3f;
+  box-shadow: 0 0 8px rgb(242 154 63 / 80%);
+}
+
 .controls {
   position: fixed;
   right: 20px;
@@ -87,7 +163,8 @@ kbd {
 }
 
 @media (max-width: 620px) {
-  .controls {
+  .controls,
+  .operations {
     display: none;
   }
 }

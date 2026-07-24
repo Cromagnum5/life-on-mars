@@ -3,6 +3,7 @@ import * as THREE from "three";
 export type Rigwalker = {
   group: THREE.Group;
   moveTo: (destination: THREE.Vector3) => void;
+  setSelected: (selected: boolean) => void;
   update: (
     delta: number,
     elapsed: number,
@@ -177,6 +178,22 @@ export function createRigwalker(): Rigwalker {
   contactShadow.scale.set(0.78, 1.15, 1);
   group.add(contactShadow);
 
+  const selectionRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.72, 0.84, 32),
+    new THREE.MeshBasicMaterial({
+      color: 0xffb35d,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  selectionRing.name = "Rigwalker selection ring";
+  selectionRing.position.y = -0.14;
+  selectionRing.rotation.x = -Math.PI / 2;
+  selectionRing.visible = false;
+  group.add(selectionRing);
+
   const animatedRoot = new THREE.Group();
   group.add(animatedRoot);
 
@@ -260,6 +277,10 @@ export function createRigwalker(): Rigwalker {
     destination.y = 0;
   }
 
+  function setSelected(selected: boolean): void {
+    selectionRing.visible = selected;
+  }
+
   function update(
     delta: number,
     elapsed: number,
@@ -320,5 +341,5 @@ export function createRigwalker(): Rigwalker {
     head.rotation.y = Math.sin(elapsed * 1.1) * 0.07;
   }
 
-  return { group, moveTo, update };
+  return { group, moveTo, setSelected, update };
 }

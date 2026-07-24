@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BUILDING_SITES, createBuildings } from "./buildings";
+import { MovementMarkers } from "./feedback";
 import { AssemblyBayProduction } from "./production";
 import { createRigwalker } from "./rigwalker";
 import "./style.css";
@@ -162,10 +163,37 @@ const production = new AssemblyBayProduction(
   [rigwalker],
   terrainHeightAt,
 );
+const movementMarkers = new MovementMarkers(scene);
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let selectedRigwalker = null as (typeof production.units)[number] | null;
+
+const powerValue = document.querySelector<HTMLElement>("#power-value");
+const resourceValue = document.querySelector<HTMLElement>("#resource-value");
+const productionValue = document.querySelector<HTMLElement>("#production-value");
+const productionBar = document.querySelector<HTMLElement>("#production-bar");
+const unitValue = document.querySelector<HTMLElement>("#unit-value");
+const selectionValue = document.querySelector<HTMLElement>("#selection-value");
+
+if (
+  !powerValue ||
+  !resourceValue ||
+  !productionValue ||
+  !productionBar ||
+  !unitValue ||
+  !selectionValue
+) {
+  throw new Error("Operations HUD is incomplete.");
+}
+
+function selectRigwalker(
+  nextSelection: (typeof production.units)[number] | null,
+): void {
+  selectedRigwalker?.setSelected(false);
+  selectedRigwalker = nextSelection;
+  selectedRigwalker?.setSelected(true);
+}
 
 function updatePointer(event: PointerEvent): void {
   const bounds = canvas!.getBoundingClientRect();
@@ -180,10 +208,11 @@ canvas.addEventListener("pointerdown", (event) => {
   }
 
   updatePointer(event);
-  selectedRigwalker =
+  selectRigwalker(
     production.units.find(
       (unit) => raycaster.intersectObject(unit.group, true).length > 0,
-    ) ?? null;
+    ) ?? null,
+  );
 });
 
 canvas.addEventListener("contextmenu", (event) => {
@@ -197,6 +226,7 @@ canvas.addEventListener("contextmenu", (event) => {
   const terrainHit = raycaster.intersectObject(terrain, false)[0];
   if (terrainHit) {
     selectedRigwalker.moveTo(terrainHit.point);
+    movementMarkers.add(terrainHit.point);
   }
 });
 
@@ -267,15 +297,30 @@ function updateCamera(delta: number): void {
   camera.lookAt(cameraTarget);
 }
 
+function updateHud(elapsed: number): void {
+  const productionStatus = production.getStatus();
+  powerValue!.textContent = `${120 + Math.floor(elapsed * 0.05)} MWh`;
+  resourceValue!.textContent = `${250 + Math.floor(elapsed * 1.6)} t`;
+  productionValue!.textContent =
+    productionStatus.label === "Deploying"
+      ? "Deploying"
+      : `00:${productionStatus.secondsRemaining.toString().padStart(2, "0")}`;
+  productionBar!.style.width = `${productionStatus.progress * 100}%`;
+  unitValue!.textContent = production.units.length.toString();
+  selectionValue!.textContent = selectedRigwalker ? "Rigwalker" : "None";
+}
+
 const clock = new THREE.Clock();
 
 function animate(): void {
   const delta = Math.min(clock.getDelta(), 0.05);
   updateCamera(delta);
   production.update(delta);
+  movementMarkers.update(delta);
   for (const unit of production.units) {
     unit.update(delta, clock.elapsedTime, terrainHeightAt);
   }
+  updateHud(clock.elapsedTime);
   renderer.render(scene, camera);
 }
 

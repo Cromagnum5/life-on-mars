@@ -14,3 +14,8 @@ Camera controls:
 
 - `WASD` to pan
 - Use the mouse wheel to zoom
+
+Unit controls:
+
+- Left-click a Rigwalker to select it
+- Right-click the terrain to move the selected Rigwalker

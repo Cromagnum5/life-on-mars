@@ -23,6 +23,12 @@ const BUILDING_POSITIONS = [
 
 type ProductionPhase = "producing" | "opening" | "exiting" | "closing";
 
+export type ProductionStatus = {
+  label: "Fabricating" | "Deploying";
+  progress: number;
+  secondsRemaining: number;
+};
+
 export class AssemblyBayProduction {
   readonly units: Rigwalker[];
 
@@ -88,6 +94,20 @@ export class AssemblyBayProduction {
       this.phase = "producing";
       this.phaseElapsed = 0;
     }
+  }
+
+  getStatus(): ProductionStatus {
+    return {
+      label: this.phase === "producing" ? "Fabricating" : "Deploying",
+      progress:
+        this.phase === "producing"
+          ? Math.min(1, this.productionElapsed / PRODUCTION_SECONDS)
+          : 1,
+      secondsRemaining: Math.max(
+        0,
+        Math.ceil(PRODUCTION_SECONDS - this.productionElapsed),
+      ),
+    };
   }
 
   private applyDoorPose(): void {
