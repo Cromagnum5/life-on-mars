@@ -53,8 +53,8 @@ Avoid the name “Optimus” because of its strong association with Transformers
 2. Add primitive versions of the Reactor, Assembly Bay, and Extractor. **Complete.**
 3. Create one primitive animated Rigwalker. **Complete.**
 4. Implement selection and click-to-move controls. **Complete.**
-5. Add the Assembly Bay's 30-second production cycle and visible unit exit. **Next.**
-6. Add selection feedback, movement markers, and the basic HUD.
+5. Add the Assembly Bay's 30-second production cycle and visible unit exit. **Complete.**
+6. Add selection feedback, movement markers, and the basic HUD. **Next.**
 7. Add simple unit separation and building obstacles.
 8. Create the first Blender robot and validate the animated GLB pipeline.
 9. Replace placeholders while preserving gameplay behavior.
@@ -92,4 +92,7 @@ a compact control hint, and distinct primitive models for the Reactor, Assembly
 Bay, Extractor, and Rigwalker. The Rigwalker has an articulated procedural walk
 cycle, can be selected with left click, and accepts terrain movement orders with
 right click. It turns smoothly, follows the terrain, and returns to idle on
-arrival. Step 5 should add timed production and the Assembly Bay exit sequence.
+arrival. The Assembly Bay produces a new independently controllable Rigwalker
+every 30 seconds: its shutter opens, the unit walks from inside to a clear rally
+point, and the shutter closes. Step 6 should make selection and issued orders
+visible and add the basic resource and production interface.

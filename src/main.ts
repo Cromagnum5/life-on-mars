@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BUILDING_SITES, createBuildings } from "./buildings";
+import { AssemblyBayProduction } from "./production";
 import { createRigwalker } from "./rigwalker";
 import "./style.css";
 
@@ -144,7 +145,8 @@ function createRocks(): THREE.Group {
 }
 
 const terrain = createTerrain();
-scene.add(terrain, createRocks(), createBuildings(terrainHeightAt));
+const starterBase = createBuildings(terrainHeightAt);
+scene.add(terrain, createRocks(), starterBase.group);
 
 const rigwalker = createRigwalker();
 const rigwalkerPosition = new THREE.Vector2(10, 0.5);
@@ -154,10 +156,16 @@ rigwalker.group.position.set(
   rigwalkerPosition.y,
 );
 scene.add(rigwalker.group);
+const production = new AssemblyBayProduction(
+  scene,
+  starterBase.assemblyDoor,
+  [rigwalker],
+  terrainHeightAt,
+);
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
-let rigwalkerSelected = false;
+let selectedRigwalker = null as (typeof production.units)[number] | null;
 
 function updatePointer(event: PointerEvent): void {
   const bounds = canvas!.getBoundingClientRect();
@@ -172,21 +180,23 @@ canvas.addEventListener("pointerdown", (event) => {
   }
 
   updatePointer(event);
-  rigwalkerSelected =
-    raycaster.intersectObject(rigwalker.group, true).length > 0;
+  selectedRigwalker =
+    production.units.find(
+      (unit) => raycaster.intersectObject(unit.group, true).length > 0,
+    ) ?? null;
 });
 
 canvas.addEventListener("contextmenu", (event) => {
   event.preventDefault();
 
-  if (!rigwalkerSelected) {
+  if (!selectedRigwalker) {
     return;
   }
 
   updatePointer(event);
   const terrainHit = raycaster.intersectObject(terrain, false)[0];
   if (terrainHit) {
-    rigwalker.moveTo(terrainHit.point);
+    selectedRigwalker.moveTo(terrainHit.point);
   }
 });
 
@@ -262,7 +272,10 @@ const clock = new THREE.Clock();
 function animate(): void {
   const delta = Math.min(clock.getDelta(), 0.05);
   updateCamera(delta);
-  rigwalker.update(delta, clock.elapsedTime, terrainHeightAt);
+  production.update(delta);
+  for (const unit of production.units) {
+    unit.update(delta, clock.elapsedTime, terrainHeightAt);
+  }
   renderer.render(scene, camera);
 }
 

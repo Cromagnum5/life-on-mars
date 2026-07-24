@@ -7,6 +7,11 @@ type MaterialSet = {
   accent: THREE.MeshStandardMaterial;
 };
 
+export type StarterBase = {
+  group: THREE.Group;
+  assemblyDoor: THREE.Group;
+};
+
 export const BUILDING_SITES = [
   new THREE.Vector2(-12, -8),
   new THREE.Vector2(10, -6),
@@ -144,7 +149,7 @@ function createReactor(): THREE.Group {
   return building;
 }
 
-function createAssemblyBay(): THREE.Group {
+function createAssemblyBay(): { group: THREE.Group; door: THREE.Group } {
   const building = new THREE.Group();
   building.name = "Assembly Bay";
   const material = materials(0xf29a3f);
@@ -162,19 +167,23 @@ function createAssemblyBay(): THREE.Group {
     material.dark,
     [0, 4.5, 0],
   );
+  const door = new THREE.Group();
+  door.name = "Assembly Bay door";
+  door.position.set(0, 2.25, 3.54);
+  building.add(door);
   addMesh(
-    building,
+    door,
     new THREE.BoxGeometry(5.5, 2.9, 0.28),
     material.dark,
-    [0, 2.25, 3.54],
+    [0, 0, 0],
   );
 
   for (const x of [-2.15, -1.05, 0, 1.05, 2.15]) {
     addMesh(
-      building,
+      door,
       new THREE.BoxGeometry(0.12, 2.5, 0.12),
       material.metal,
-      [x, 2.25, 3.71],
+      [x, 0, 0.17],
     );
   }
 
@@ -208,7 +217,7 @@ function createAssemblyBay(): THREE.Group {
     material.accent,
     [3.2, 7.15, -1.6],
   );
-  return building;
+  return { group: building, door };
 }
 
 function createExtractor(): THREE.Group {
@@ -280,16 +289,17 @@ function createExtractor(): THREE.Group {
 
 export function createBuildings(
   terrainHeightAt: (x: number, z: number) => number,
-): THREE.Group {
+): StarterBase {
   const buildings = new THREE.Group();
   buildings.name = "Starter Base";
 
-  const instances = [createReactor(), createAssemblyBay(), createExtractor()];
+  const assemblyBay = createAssemblyBay();
+  const instances = [createReactor(), assemblyBay.group, createExtractor()];
   instances.forEach((building, index) => {
     const site = BUILDING_SITES[index];
     building.position.set(site.x, terrainHeightAt(site.x, site.y) + 0.2, site.y);
     buildings.add(building);
   });
 
-  return buildings;
+  return { group: buildings, assemblyDoor: assemblyBay.door };
 }
