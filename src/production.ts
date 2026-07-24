@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { BUILDING_OBSTACLES } from "./buildings";
 import { createRigwalker, type Rigwalker } from "./rigwalker";
+import type { RigwalkerAsset } from "./rigwalker-assets";
 
 const PRODUCTION_SECONDS = 30;
 const DOOR_SPEED = 1.4;
@@ -30,6 +31,7 @@ export class AssemblyBayProduction {
   private readonly door: THREE.Group;
   private readonly terrainHeightAt: (x: number, z: number) => number;
   private readonly closedDoorY: number;
+  private readonly rigwalkerAsset: RigwalkerAsset | null;
   private phase: ProductionPhase = "producing";
   private productionElapsed = 0;
   private phaseElapsed = 0;
@@ -40,11 +42,13 @@ export class AssemblyBayProduction {
     door: THREE.Group,
     units: Rigwalker[],
     terrainHeightAt: (x: number, z: number) => number,
+    rigwalkerAsset: RigwalkerAsset | null,
   ) {
     this.scene = scene;
     this.door = door;
     this.units = units;
     this.terrainHeightAt = terrainHeightAt;
+    this.rigwalkerAsset = rigwalkerAsset;
     this.closedDoorY = door.position.y;
   }
 
@@ -112,7 +116,7 @@ export class AssemblyBayProduction {
   }
 
   private spawnRigwalker(): void {
-    const rigwalker = createRigwalker();
+    const rigwalker = createRigwalker(this.rigwalkerAsset);
     rigwalker.group.position.set(
       ASSEMBLY_BAY_X,
       this.terrainHeightAt(ASSEMBLY_BAY_X, SPAWN_Z) + 0.2,

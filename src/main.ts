@@ -7,11 +7,13 @@ import {
 import { MovementMarkers } from "./feedback";
 import { AssemblyBayProduction } from "./production";
 import { createRigwalker } from "./rigwalker";
+import { loadRigwalkerAsset } from "./rigwalker-assets";
 import "./style.css";
 
 const MAP_SIZE = 180;
 const MIN_ZOOM = 0.75;
 const MAX_ZOOM = 3.2;
+const rigwalkerAsset = await loadRigwalkerAsset("/models/rigwalker.glb");
 
 const canvas = document.querySelector<HTMLCanvasElement>("#game");
 
@@ -153,7 +155,7 @@ const terrain = createTerrain();
 const starterBase = createBuildings(terrainHeightAt);
 scene.add(terrain, createRocks(), starterBase.group);
 
-const rigwalker = createRigwalker();
+const rigwalker = createRigwalker(rigwalkerAsset);
 const rigwalkerPosition = new THREE.Vector2(10, 0.5);
 rigwalker.group.position.set(
   rigwalkerPosition.x,
@@ -166,6 +168,7 @@ const production = new AssemblyBayProduction(
   starterBase.assemblyDoor,
   [rigwalker],
   terrainHeightAt,
+  rigwalkerAsset,
 );
 const movementMarkers = new MovementMarkers(scene);
 

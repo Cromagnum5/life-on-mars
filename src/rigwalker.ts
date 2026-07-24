@@ -1,4 +1,8 @@
 import * as THREE from "three";
+import {
+  instantiateRigwalkerAsset,
+  type RigwalkerAsset,
+} from "./rigwalker-assets";
 
 export type Rigwalker = {
   group: THREE.Group;
@@ -169,7 +173,7 @@ function createArm(side: -1 | 1): {
   return { shoulder, elbow };
 }
 
-export function createRigwalker(): Rigwalker {
+export function createRigwalker(asset: RigwalkerAsset | null = null): Rigwalker {
   const group = new THREE.Group();
   group.name = "Rigwalker";
 
@@ -205,6 +209,8 @@ export function createRigwalker(): Rigwalker {
   group.add(selectionRing);
 
   const animatedRoot = new THREE.Group();
+  animatedRoot.name = "Primitive Rigwalker fallback";
+  animatedRoot.visible = !asset;
   group.add(animatedRoot);
 
   const leftLeg = createLeg(-1);
@@ -274,6 +280,28 @@ export function createRigwalker(): Rigwalker {
     visor,
     [0.38, 4.03, -0.16],
   );
+
+  let mixer: THREE.AnimationMixer | null = null;
+  let idleAction: THREE.AnimationAction | null = null;
+  let walkAction: THREE.AnimationAction | null = null;
+  let activeAction: THREE.AnimationAction | null = null;
+
+  if (asset) {
+    const instance = instantiateRigwalkerAsset(asset);
+    group.add(instance.model);
+    mixer = new THREE.AnimationMixer(instance.model);
+    const idleClip = THREE.AnimationClip.findByName(instance.clips, "Idle");
+    const walkClip = THREE.AnimationClip.findByName(instance.clips, "Walk");
+    if (idleClip) {
+      idleAction = mixer.clipAction(idleClip);
+      idleAction.play();
+      activeAction = idleAction;
+    }
+    if (walkClip) {
+      walkAction = mixer.clipAction(walkClip);
+      walkAction.setEffectiveTimeScale(1.3);
+    }
+  }
 
   let destination: THREE.Vector3 | null = null;
   let walkCycle = 0;
@@ -446,6 +474,18 @@ export function createRigwalker(): Rigwalker {
       0.07 + stepLift * 0.08 + Math.sin(elapsed * 1.8) * 0.012;
     animatedRoot.rotation.z = stride * 0.025;
     head.rotation.y = Math.sin(elapsed * 1.1) * 0.07;
+
+    if (mixer) {
+      const nextAction = moving ? walkAction : idleAction;
+      if (nextAction && nextAction !== activeAction) {
+        nextAction.reset().play();
+        if (activeAction) {
+          nextAction.crossFadeFrom(activeAction, 0.16, false);
+        }
+        activeAction = nextAction;
+      }
+      mixer.update(delta);
+    }
   }
 
   const rigwalker = { group, moveTo, setSelected, update };
