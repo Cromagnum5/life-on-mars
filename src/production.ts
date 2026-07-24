@@ -1,5 +1,4 @@
 import * as THREE from "three";
-import { BUILDING_OBSTACLES } from "./buildings";
 import { createRigwalker, type Rigwalker } from "./rigwalker";
 import type { RigwalkerAsset } from "./rigwalker-assets";
 
@@ -8,13 +7,6 @@ const DOOR_SPEED = 1.4;
 const DOOR_HEIGHT = 2.9;
 const OPEN_DOOR_SCALE = 0.12;
 const EXIT_SECONDS = 2.2;
-const ASSEMBLY_BAY_X = 10;
-const SPAWN_Z = -3.8;
-const RALLY_MIN_X = -18;
-const RALLY_MAX_X = 34;
-const RALLY_MIN_Z = 1;
-const RALLY_MAX_Z = 28;
-const UNIT_CLEARANCE = 2.2;
 
 type ProductionPhase = "producing" | "opening" | "exiting" | "closing";
 
@@ -32,6 +24,9 @@ export class AssemblyBayProduction {
   private readonly terrainHeightAt: (x: number, z: number) => number;
   private readonly closedDoorY: number;
   private readonly rigwalkerAsset: RigwalkerAsset | null;
+  private readonly spawnPosition: THREE.Vector2;
+  private readonly rallyPoint: THREE.Vector3;
+  private readonly accent: number;
   private phase: ProductionPhase = "producing";
   private productionElapsed = 0;
   private phaseElapsed = 0;
@@ -43,12 +38,18 @@ export class AssemblyBayProduction {
     units: Rigwalker[],
     terrainHeightAt: (x: number, z: number) => number,
     rigwalkerAsset: RigwalkerAsset | null,
+    spawnPosition: THREE.Vector2,
+    rallyPoint: THREE.Vector3,
+    accent: number,
   ) {
     this.scene = scene;
     this.door = door;
     this.units = units;
     this.terrainHeightAt = terrainHeightAt;
     this.rigwalkerAsset = rigwalkerAsset;
+    this.spawnPosition = spawnPosition;
+    this.rallyPoint = rallyPoint;
+    this.accent = accent;
     this.closedDoorY = door.position.y;
   }
 
@@ -116,41 +117,16 @@ export class AssemblyBayProduction {
   }
 
   private spawnRigwalker(): void {
-    const rigwalker = createRigwalker(this.rigwalkerAsset);
+    const rigwalker = createRigwalker(this.rigwalkerAsset, this.accent);
     rigwalker.group.position.set(
-      ASSEMBLY_BAY_X,
-      this.terrainHeightAt(ASSEMBLY_BAY_X, SPAWN_Z) + 0.2,
-      SPAWN_Z,
+      this.spawnPosition.x,
+      this.terrainHeightAt(this.spawnPosition.x, this.spawnPosition.y) + 0.2,
+      this.spawnPosition.y,
     );
 
-    rigwalker.moveTo(this.chooseRallyPoint());
+    rigwalker.moveTo(this.rallyPoint);
     this.units.push(rigwalker);
     this.scene.add(rigwalker.group);
   }
 
-  private chooseRallyPoint(): THREE.Vector3 {
-    let candidate = new THREE.Vector3(ASSEMBLY_BAY_X, 0, 3);
-
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      candidate = new THREE.Vector3(
-        THREE.MathUtils.lerp(RALLY_MIN_X, RALLY_MAX_X, Math.random()),
-        0,
-        THREE.MathUtils.lerp(RALLY_MIN_Z, RALLY_MAX_Z, Math.random()),
-      );
-      const candidate2D = new THREE.Vector2(candidate.x, candidate.z);
-      const clearOfBuildings = BUILDING_OBSTACLES.every(
-        (building) =>
-          building.center.distanceTo(candidate2D) >= building.radius + 1.2,
-      );
-      const clearOfUnits = this.units.every(
-        (unit) => unit.group.position.distanceTo(candidate) >= UNIT_CLEARANCE,
-      );
-
-      if (clearOfBuildings && clearOfUnits) {
-        break;
-      }
-    }
-
-    return candidate;
-  }
 }

@@ -69,7 +69,7 @@ function addMesh(
   return mesh;
 }
 
-function createLeg(side: -1 | 1): {
+function createLeg(side: -1 | 1, accent: THREE.Material): {
   hip: THREE.Group;
   knee: THREE.Group;
   ankle: THREE.Group;
@@ -96,7 +96,7 @@ function createLeg(side: -1 | 1): {
   addMesh(
     knee,
     new THREE.CylinderGeometry(0.15, 0.15, 0.28, 8),
-    orange,
+    accent,
     [0, 0, 0],
   ).rotation.z = Math.PI / 2;
   addMesh(
@@ -118,14 +118,14 @@ function createLeg(side: -1 | 1): {
   addMesh(
     ankle,
     new THREE.BoxGeometry(0.23, 0.08, 0.18),
-    orange,
+    accent,
     [0, 0.06, 0.44],
   );
 
   return { hip, knee, ankle };
 }
 
-function createArm(side: -1 | 1): {
+function createArm(side: -1 | 1, accent: THREE.Material): {
   shoulder: THREE.Group;
   elbow: THREE.Group;
 } {
@@ -135,7 +135,7 @@ function createArm(side: -1 | 1): {
   addMesh(
     shoulder,
     new THREE.SphereGeometry(0.19, 8, 6),
-    orange,
+    accent,
     [0, 0, 0],
   );
   addMesh(
@@ -170,23 +170,26 @@ function createArm(side: -1 | 1): {
   return { shoulder, elbow };
 }
 
-function createFallbackVisual(): {
+function createFallbackVisual(accentColor: number): {
   root: THREE.Group;
   update: (delta: number, elapsed: number, moving: boolean) => void;
 } {
   const root = new THREE.Group();
   root.name = "Primitive Rigwalker fallback";
-  const leftLeg = createLeg(-1);
-  const rightLeg = createLeg(1);
+  const accent = orange.clone();
+  accent.color.setHex(accentColor);
+  accent.emissive.setHex(accentColor);
+  const leftLeg = createLeg(-1, accent);
+  const rightLeg = createLeg(1, accent);
   root.add(leftLeg.hip, rightLeg.hip);
 
   addMesh(root, new THREE.BoxGeometry(0.72, 0.38, 0.52), darkMetal, [0, 1.65, 0]);
   addMesh(root, new THREE.BoxGeometry(1.08, 1.12, 0.62), armor, [0, 2.35, 0]);
-  addMesh(root, new THREE.BoxGeometry(0.92, 0.16, 0.68), orange, [0, 2.68, 0.03]);
+  addMesh(root, new THREE.BoxGeometry(0.92, 0.16, 0.68), accent, [0, 2.68, 0.03]);
   addMesh(root, new THREE.BoxGeometry(0.62, 0.86, 0.28), darkMetal, [0, 2.28, -0.56]);
 
-  const leftArm = createArm(-1);
-  const rightArm = createArm(1);
+  const leftArm = createArm(-1, accent);
+  const rightArm = createArm(1, accent);
   root.add(leftArm.shoulder, rightArm.shoulder);
 
   const head = new THREE.Group();
@@ -194,7 +197,7 @@ function createFallbackVisual(): {
   root.add(head);
   addMesh(head, new THREE.BoxGeometry(0.58, 0.52, 0.52), darkMetal, [0, 0, 0]);
   addMesh(head, new THREE.BoxGeometry(0.46, 0.14, 0.07), visor, [0, 0.06, 0.295]);
-  addMesh(head, new THREE.BoxGeometry(0.13, 0.21, 0.15), orange, [0.28, 0.18, -0.04]);
+  addMesh(head, new THREE.BoxGeometry(0.13, 0.21, 0.15), accent, [0.28, 0.18, -0.04]);
   addMesh(
     root,
     new THREE.CylinderGeometry(0.035, 0.035, 0.75, 6),
@@ -232,7 +235,10 @@ function createFallbackVisual(): {
   return { root, update };
 }
 
-export function createRigwalker(asset: RigwalkerAsset | null = null): Rigwalker {
+export function createRigwalker(
+  asset: RigwalkerAsset | null = null,
+  accentColor = 0xf29a3f,
+): Rigwalker {
   const group = new THREE.Group();
   group.name = "Rigwalker";
 
@@ -267,7 +273,7 @@ export function createRigwalker(asset: RigwalkerAsset | null = null): Rigwalker 
   selectionRing.visible = false;
   group.add(selectionRing);
 
-  const fallbackVisual = asset ? null : createFallbackVisual();
+  const fallbackVisual = asset ? null : createFallbackVisual(accentColor);
   if (fallbackVisual) {
     group.add(fallbackVisual.root);
   }
@@ -279,6 +285,14 @@ export function createRigwalker(asset: RigwalkerAsset | null = null): Rigwalker 
 
   if (asset) {
     const model = asset.instantiate();
+    model.traverse((object) => {
+      if (object instanceof THREE.Mesh && /Accent|Stripe|Shoulder|Knee|Toe/.test(object.name)) {
+        const material = (object.material as THREE.MeshStandardMaterial).clone();
+        material.color.setHex(accentColor);
+        material.emissive?.setHex(accentColor);
+        object.material = material;
+      }
+    });
     group.add(model);
     mixer = new THREE.AnimationMixer(model);
     const idleClip = THREE.AnimationClip.findByName(asset.clips, "Idle");

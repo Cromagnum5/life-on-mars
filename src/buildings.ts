@@ -10,19 +10,33 @@ type MaterialSet = {
 export type StarterBase = {
   group: THREE.Group;
   assemblyDoor: THREE.Group;
+  spawnPosition: THREE.Vector2;
+  accent: number;
 };
 
-export const BUILDING_SITES = [
+export const CORPORATIONS = [
+  { name: "Helios", accent: 0x32b9ff, center: new THREE.Vector2(-58, 38), rotation: -Math.PI / 4 },
+  { name: "Vanguard", accent: 0xff4f57, center: new THREE.Vector2(58, -38), rotation: (3 * Math.PI) / 4 },
+] as const;
+
+const LOCAL_BUILDING_SITES = [
   new THREE.Vector2(-12, -8),
   new THREE.Vector2(10, -6),
   new THREE.Vector2(0, 12),
 ] as const;
+const BUILDING_RADII = [4.8, 6.2, 5.1] as const;
 
-export const BUILDING_OBSTACLES = [
-  { center: BUILDING_SITES[0], radius: 4.8 },
-  { center: BUILDING_SITES[1], radius: 6.2 },
-  { center: BUILDING_SITES[2], radius: 5.1 },
-] as const;
+function toWorldSite(site: THREE.Vector2, center: THREE.Vector2, rotation: number): THREE.Vector2 {
+  return site.clone().rotateAround(new THREE.Vector2(), rotation).add(center);
+}
+
+export const BUILDING_SITES = CORPORATIONS.flatMap((corporation) =>
+  LOCAL_BUILDING_SITES.map((site) => toWorldSite(site, corporation.center, corporation.rotation)),
+);
+export const BUILDING_OBSTACLES = BUILDING_SITES.map((center, index) => ({
+  center,
+  radius: BUILDING_RADII[index % BUILDING_RADII.length],
+}));
 
 const dark = new THREE.MeshStandardMaterial({
   color: 0x303638,
@@ -101,10 +115,10 @@ function addFoundation(
   }
 }
 
-function createReactor(): THREE.Group {
+function createReactor(accent: number): THREE.Group {
   const building = new THREE.Group();
   building.name = "Reactor";
-  const material = materials(0x54c7e8);
+  const material = materials(accent);
   addFoundation(building, 8.5, 8.5, material.accent);
 
   addMesh(
@@ -155,10 +169,10 @@ function createReactor(): THREE.Group {
   return building;
 }
 
-function createAssemblyBay(): { group: THREE.Group; door: THREE.Group } {
+function createAssemblyBay(accent: number): { group: THREE.Group; door: THREE.Group } {
   const building = new THREE.Group();
   building.name = "Assembly Bay";
-  const material = materials(0xf29a3f);
+  const material = materials(accent);
   addFoundation(building, 11.5, 9, material.accent);
 
   addMesh(
@@ -226,10 +240,10 @@ function createAssemblyBay(): { group: THREE.Group; door: THREE.Group } {
   return { group: building, door };
 }
 
-function createExtractor(): THREE.Group {
+function createExtractor(accent: number): THREE.Group {
   const building = new THREE.Group();
   building.name = "Extractor";
-  const material = materials(0xb7d654);
+  const material = materials(accent);
   addFoundation(building, 9, 9, material.accent);
 
   addMesh(
@@ -295,17 +309,25 @@ function createExtractor(): THREE.Group {
 
 export function createBuildings(
   terrainHeightAt: (x: number, z: number) => number,
-): StarterBase {
-  const buildings = new THREE.Group();
-  buildings.name = "Starter Base";
-
-  const assemblyBay = createAssemblyBay();
-  const instances = [createReactor(), assemblyBay.group, createExtractor()];
-  instances.forEach((building, index) => {
-    const site = BUILDING_SITES[index];
-    building.position.set(site.x, terrainHeightAt(site.x, site.y) + 0.2, site.y);
-    buildings.add(building);
+): StarterBase[] {
+  return CORPORATIONS.map((corporation) => {
+    const base = new THREE.Group();
+    base.name = `${corporation.name} Base`;
+    base.position.set(corporation.center.x, 0, corporation.center.y);
+    base.rotation.y = -corporation.rotation;
+    const assemblyBay = createAssemblyBay(corporation.accent);
+    const instances = [createReactor(corporation.accent), assemblyBay.group, createExtractor(corporation.accent)];
+    instances.forEach((building, index) => {
+      const site = LOCAL_BUILDING_SITES[index];
+      const worldSite = toWorldSite(site, corporation.center, corporation.rotation);
+      building.position.set(site.x, terrainHeightAt(worldSite.x, worldSite.y) + 0.2, site.y);
+      base.add(building);
+    });
+    return {
+      group: base,
+      assemblyDoor: assemblyBay.door,
+      spawnPosition: toWorldSite(new THREE.Vector2(10, -1.8), corporation.center, corporation.rotation),
+      accent: corporation.accent,
+    };
   });
-
-  return { group: buildings, assemblyDoor: assemblyBay.door };
 }

@@ -152,29 +152,37 @@ function createRocks(): THREE.Group {
 }
 
 const terrain = createTerrain();
-const starterBase = createBuildings(terrainHeightAt);
-scene.add(terrain, createRocks(), starterBase.group);
+const corporateBases = createBuildings(terrainHeightAt);
+scene.add(terrain, createRocks(), ...corporateBases.map((base) => base.group));
 
-const rigwalker = createRigwalker(rigwalkerAsset);
-const rigwalkerPosition = new THREE.Vector2(10, 0.5);
-rigwalker.group.position.set(
-  rigwalkerPosition.x,
-  terrainHeightAt(rigwalkerPosition.x, rigwalkerPosition.y) + 0.2,
-  rigwalkerPosition.y,
-);
-scene.add(rigwalker.group);
-const production = new AssemblyBayProduction(
-  scene,
-  starterBase.assemblyDoor,
-  [rigwalker],
-  terrainHeightAt,
-  rigwalkerAsset,
+const units = corporateBases.map((base) => {
+  const rigwalker = createRigwalker(rigwalkerAsset, base.accent);
+  rigwalker.group.position.set(
+    base.spawnPosition.x,
+    terrainHeightAt(base.spawnPosition.x, base.spawnPosition.y) + 0.2,
+    base.spawnPosition.y,
+  );
+  rigwalker.moveTo(new THREE.Vector3(0, 0, 0));
+  scene.add(rigwalker.group);
+  return rigwalker;
+});
+const productions = corporateBases.map((base) =>
+  new AssemblyBayProduction(
+    scene,
+    base.assemblyDoor,
+    units,
+    terrainHeightAt,
+    rigwalkerAsset,
+    base.spawnPosition,
+    new THREE.Vector3(0, 0, 0),
+    base.accent,
+  ),
 );
 const movementMarkers = new MovementMarkers(scene);
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
-let selectedRigwalkers: (typeof production.units)[number][] = [];
+let selectedRigwalkers: (typeof units)[number][] = [];
 let selectionDragStart: THREE.Vector2 | null = null;
 let selectionDragging = false;
 
@@ -199,7 +207,7 @@ if (
 }
 
 function selectRigwalkers(
-  nextSelection: (typeof production.units)[number][],
+  nextSelection: (typeof units)[number][],
 ): void {
   for (const unit of selectedRigwalkers) {
     unit.setSelected(false);
@@ -288,7 +296,7 @@ canvas.addEventListener("pointerup", (event) => {
     const bottom = Math.max(selectionDragStart.y, event.clientY);
     const projected = new THREE.Vector3();
     selectRigwalkers(
-      production.units.filter((unit) => {
+      units.filter((unit) => {
         projected.copy(unit.group.position).project(camera);
         const screenX = bounds.left + ((projected.x + 1) / 2) * bounds.width;
         const screenY = bounds.top + ((1 - projected.y) / 2) * bounds.height;
@@ -304,7 +312,7 @@ canvas.addEventListener("pointerup", (event) => {
     );
   } else {
     updatePointer(event);
-    const selected = production.units.find(
+    const selected = units.find(
       (unit) => raycaster.intersectObject(unit.group, true).length > 0,
     );
     selectRigwalkers(selected ? [selected] : []);
@@ -409,15 +417,17 @@ function updateCamera(delta: number): void {
 }
 
 function updateHud(elapsed: number): void {
-  const productionStatus = production.getStatus();
+  const productionStatuses = productions.map((item) => item.getStatus());
+  const deploying = productionStatuses.some((status) => status.label === "Deploying");
+  const secondsRemaining = Math.min(...productionStatuses.map((status) => status.secondsRemaining));
   powerValue!.textContent = `${120 + Math.floor(elapsed * 0.05)} MWh`;
   resourceValue!.textContent = `${250 + Math.floor(elapsed * 1.6)} t`;
   productionValue!.textContent =
-    productionStatus.label === "Deploying"
+    deploying
       ? "Deploying"
-      : `00:${productionStatus.secondsRemaining.toString().padStart(2, "0")}`;
-  productionBar!.style.width = `${productionStatus.progress * 100}%`;
-  unitValue!.textContent = production.units.length.toString();
+      : `00:${secondsRemaining.toString().padStart(2, "0")}`;
+  productionBar!.style.width = `${Math.max(...productionStatuses.map((status) => status.progress)) * 100}%`;
+  unitValue!.textContent = units.length.toString();
   selectionValue!.textContent =
     selectedRigwalkers.length === 0
       ? "None"
@@ -431,14 +441,16 @@ const clock = new THREE.Clock();
 function animate(): void {
   const delta = Math.min(clock.getDelta(), 0.05);
   updateCamera(delta);
-  production.update(delta);
+  for (const production of productions) {
+    production.update(delta);
+  }
   movementMarkers.update(delta);
-  for (const unit of production.units) {
+  for (const unit of units) {
     unit.update(
       delta,
       clock.elapsedTime,
       terrainHeightAt,
-      production.units,
+      units,
       BUILDING_OBSTACLES,
     );
   }
