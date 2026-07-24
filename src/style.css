@@ -1,0 +1,93 @@
+@import url("https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=Inter:wght@400;600&display=swap");
+
+:root {
+  color: #f7e8d3;
+  background: #160d0a;
+  font-family: Inter, system-ui, sans-serif;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app,
+#game {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+#game {
+  display: block;
+  cursor: default;
+  outline: none;
+}
+
+.title-card {
+  position: fixed;
+  top: 24px;
+  left: 28px;
+  pointer-events: none;
+  text-transform: uppercase;
+  text-shadow: 0 2px 12px rgb(0 0 0 / 75%);
+}
+
+.title-card h1,
+.title-card p {
+  margin: 0;
+}
+
+.title-card h1 {
+  color: #fff1dc;
+  font-family: "Chakra Petch", sans-serif;
+  font-size: clamp(1.7rem, 3vw, 2.7rem);
+  letter-spacing: 0.08em;
+}
+
+.eyebrow {
+  color: #e89155;
+  font-size: 0.67rem;
+  font-weight: 600;
+  letter-spacing: 0.23em;
+}
+
+.controls {
+  position: fixed;
+  right: 20px;
+  bottom: 18px;
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 6px 9px;
+  align-items: center;
+  padding: 11px 13px;
+  border: 1px solid rgb(244 172 114 / 24%);
+  border-radius: 4px;
+  color: #d5bca9;
+  background: rgb(24 12 9 / 72%);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 22%);
+  font-size: 0.68rem;
+  backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+
+kbd {
+  min-width: 54px;
+  padding: 3px 6px;
+  border: 1px solid rgb(255 224 192 / 24%);
+  border-radius: 3px;
+  color: #f6e4d2;
+  background: rgb(255 255 255 / 7%);
+  font: 600 0.62rem "Chakra Petch", sans-serif;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+@media (max-width: 620px) {
+  .controls {
+    display: none;
+  }
+}
