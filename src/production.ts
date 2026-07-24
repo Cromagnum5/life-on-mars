@@ -27,6 +27,7 @@ export class AssemblyBayProduction {
   private readonly spawnPosition: THREE.Vector2;
   private readonly rallyPoint: THREE.Vector3;
   private readonly accent: number;
+  private readonly corporation: string;
   private phase: ProductionPhase = "producing";
   private productionElapsed = 0;
   private phaseElapsed = 0;
@@ -41,6 +42,7 @@ export class AssemblyBayProduction {
     spawnPosition: THREE.Vector2,
     rallyPoint: THREE.Vector3,
     accent: number,
+    corporation: string,
   ) {
     this.scene = scene;
     this.door = door;
@@ -50,6 +52,7 @@ export class AssemblyBayProduction {
     this.spawnPosition = spawnPosition;
     this.rallyPoint = rallyPoint;
     this.accent = accent;
+    this.corporation = corporation;
     this.closedDoorY = door.position.y;
   }
 
@@ -117,7 +120,7 @@ export class AssemblyBayProduction {
   }
 
   private spawnRigwalker(): void {
-    const rigwalker = createRigwalker(this.rigwalkerAsset, this.accent);
+    const rigwalker = createRigwalker(this.rigwalkerAsset, this.accent, this.corporation);
     rigwalker.group.position.set(
       this.spawnPosition.x,
       this.terrainHeightAt(this.spawnPosition.x, this.spawnPosition.y) + 0.2,

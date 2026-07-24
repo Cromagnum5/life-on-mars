@@ -12,6 +12,7 @@ export type StarterBase = {
   assemblyDoor: THREE.Group;
   spawnPosition: THREE.Vector2;
   accent: number;
+  corporation: string;
 };
 
 export const CORPORATIONS = [
@@ -328,6 +329,7 @@ export function createBuildings(
       assemblyDoor: assemblyBay.door,
       spawnPosition: toWorldSite(new THREE.Vector2(10, -1.8), corporation.center, corporation.rotation),
       accent: corporation.accent,
+      corporation: corporation.name,
     };
   });
 }

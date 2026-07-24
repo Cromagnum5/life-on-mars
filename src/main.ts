@@ -156,7 +156,7 @@ const corporateBases = createBuildings(terrainHeightAt);
 scene.add(terrain, createRocks(), ...corporateBases.map((base) => base.group));
 
 const units = corporateBases.map((base) => {
-  const rigwalker = createRigwalker(rigwalkerAsset, base.accent);
+  const rigwalker = createRigwalker(rigwalkerAsset, base.accent, base.corporation);
   rigwalker.group.position.set(
     base.spawnPosition.x,
     terrainHeightAt(base.spawnPosition.x, base.spawnPosition.y) + 0.2,
@@ -176,6 +176,7 @@ const productions = corporateBases.map((base) =>
     base.spawnPosition,
     new THREE.Vector3(0, 0, 0),
     base.accent,
+    base.corporation,
   ),
 );
 const movementMarkers = new MovementMarkers(scene);
@@ -432,7 +433,7 @@ function updateHud(elapsed: number): void {
     selectedRigwalkers.length === 0
       ? "None"
       : selectedRigwalkers.length === 1
-        ? "Rigwalker"
+        ? `Rigwalker · ${Math.ceil(selectedRigwalkers[0].health)} HP · ${selectedRigwalkers[0].attack} ATK`
         : `${selectedRigwalkers.length} Rigwalkers`;
 }
 
@@ -445,7 +446,7 @@ function animate(): void {
     production.update(delta);
   }
   movementMarkers.update(delta);
-  for (const unit of units) {
+  for (const unit of [...units]) {
     unit.update(
       delta,
       clock.elapsedTime,
@@ -454,6 +455,13 @@ function animate(): void {
       BUILDING_OBSTACLES,
     );
   }
+  for (let index = units.length - 1; index >= 0; index -= 1) {
+    if (!units[index].isAlive) {
+      units[index].group.removeFromParent();
+      units.splice(index, 1);
+    }
+  }
+  selectedRigwalkers = selectedRigwalkers.filter((unit) => unit.isAlive);
   updateHud(clock.elapsedTime);
   renderer.render(scene, camera);
 }

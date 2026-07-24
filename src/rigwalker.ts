@@ -3,6 +3,11 @@ import type { RigwalkerAsset } from "./rigwalker-assets";
 
 export type Rigwalker = {
   group: THREE.Group;
+  corporation: string;
+  health: number;
+  attack: number;
+  isAlive: boolean;
+  receiveDamage: (damage: number) => void;
   moveTo: (destination: THREE.Vector3) => void;
   setSelected: (selected: boolean) => void;
   update: (
@@ -24,6 +29,14 @@ const SEPARATION_SPEED = 1.1;
 const SEPARATION_RADIUS = 1.25;
 const OBSTACLE_LOOKAHEAD = 1.4;
 const WALK_CYCLE_SPEED = 8.4;
+const MAX_HEALTH = 100;
+const ATTACK_DAMAGE = 18;
+const AWARENESS_RANGE = 8.5;
+const FIGHT_DISTANCE = 2.1;
+const ATTACK_RANGE = 2.65;
+const ATTACK_DURATION = 0.72;
+const ATTACK_RECOVERY = 0.38;
+const COMBAT_SHUFFLE_SPEED = 2.25;
 
 const armor = new THREE.MeshStandardMaterial({
   color: 0x596266,
@@ -238,6 +251,7 @@ function createFallbackVisual(accentColor: number): {
 export function createRigwalker(
   asset: RigwalkerAsset | null = null,
   accentColor = 0xf29a3f,
+  corporation = "Independent",
 ): Rigwalker {
   const group = new THREE.Group();
   group.name = "Rigwalker";
@@ -272,6 +286,30 @@ export function createRigwalker(
   selectionRing.rotation.x = -Math.PI / 2;
   selectionRing.visible = false;
   group.add(selectionRing);
+
+  const healthBar = new THREE.Group();
+  healthBar.position.y = 4.45;
+  const healthBack = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.45, 0.14),
+    new THREE.MeshBasicMaterial({ color: 0x24100d, depthTest: false }),
+  );
+  const healthFill = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.38, 0.09),
+    new THREE.MeshBasicMaterial({ color: accentColor, depthTest: false }),
+  );
+  healthFill.position.z = 0.01;
+  healthBar.add(healthBack, healthFill);
+  group.add(healthBar);
+
+  const pipePivot = new THREE.Group();
+  const pipe = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.065, 0.085, 2.65, 8),
+    new THREE.MeshStandardMaterial({ color: 0x697277, metalness: 0.88, roughness: 0.3 }),
+  );
+  pipe.position.y = 1.15;
+  pipe.castShadow = true;
+  pipePivot.add(pipe);
+  group.add(pipePivot);
 
   const fallbackVisual = asset ? null : createFallbackVisual(accentColor);
   if (fallbackVisual) {
@@ -309,6 +347,12 @@ export function createRigwalker(
   }
 
   let destination: THREE.Vector3 | null = null;
+  let health = MAX_HEALTH;
+  let combatTarget: Rigwalker | null = null;
+  let attackElapsed = -1;
+  let attackCooldown = 0;
+  let attackVariant = 0;
+  let damageApplied = false;
   const targetRotation = new THREE.Quaternion();
   const upAxis = new THREE.Vector3(0, 1, 0);
   const movement = new THREE.Vector3();
@@ -326,6 +370,16 @@ export function createRigwalker(
     selectionRing.visible = selected;
   }
 
+  function receiveDamage(damage: number): void {
+    if (health <= 0) return;
+    health = Math.max(0, health - damage);
+    healthFill.scale.x = health / MAX_HEALTH;
+    healthFill.position.x = -0.69 * (1 - health / MAX_HEALTH);
+    if (health === 0) {
+      selectionRing.visible = false;
+    }
+  }
+
   function update(
     delta: number,
     elapsed: number,
@@ -333,6 +387,8 @@ export function createRigwalker(
     nearbyUnits: readonly Rigwalker[],
     obstacles: readonly NavigationObstacle[],
   ): void {
+    if (health <= 0) return;
+
     let moving = false;
     let travelSpeed = 0;
     separation.set(0, 0, 0);
@@ -362,7 +418,46 @@ export function createRigwalker(
       }
     }
 
-    if (destination) {
+    if (!combatTarget?.isAlive || combatTarget.corporation === corporation ||
+        group.position.distanceTo(combatTarget.group.position) > AWARENESS_RANGE * 1.35) {
+      combatTarget = null;
+    }
+    if (!combatTarget) {
+      let nearestDistance = AWARENESS_RANGE;
+      for (const other of nearbyUnits) {
+        if (other === rigwalker || !other.isAlive || other.corporation === corporation) continue;
+        const distance = group.position.distanceTo(other.group.position);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          combatTarget = other;
+        }
+      }
+    }
+
+    const enemyDistance = combatTarget
+      ? group.position.distanceTo(combatTarget.group.position)
+      : Number.POSITIVE_INFINITY;
+    if (combatTarget) {
+      radial.set(
+        combatTarget.group.position.x - group.position.x,
+        0,
+        combatTarget.group.position.z - group.position.z,
+      ).normalize();
+      if (enemyDistance > FIGHT_DISTANCE + 0.35) {
+        movement.copy(radial);
+        moving = true;
+      } else if (enemyDistance < FIGHT_DISTANCE - 0.3) {
+        movement.copy(radial).multiplyScalar(-1);
+        moving = true;
+      } else {
+        movement.set(-radial.z, 0, radial.x).multiplyScalar(
+          Math.sin(elapsed * 1.7 + group.id) > 0 ? 1 : -1,
+        );
+        moving = true;
+      }
+      travelSpeed = COMBAT_SHUFFLE_SPEED;
+      desiredMovement.copy(movement);
+    } else if (destination) {
       movement.set(
         destination.x - group.position.x,
         0,
@@ -434,7 +529,7 @@ export function createRigwalker(
         }
       }
 
-      const remainingDistance = destination
+      const remainingDistance = destination && !combatTarget
         ? Math.hypot(
             destination.x - group.position.x,
             destination.z - group.position.z,
@@ -443,9 +538,47 @@ export function createRigwalker(
       const travel = Math.min(remainingDistance, travelSpeed * delta);
       group.position.addScaledVector(movement, travel);
 
-      const targetAngle = Math.atan2(movement.x, movement.z);
+      const targetAngle = combatTarget
+        ? Math.atan2(-radial.x, -radial.z)
+        : Math.atan2(movement.x, movement.z);
       targetRotation.setFromAxisAngle(upAxis, targetAngle);
       group.quaternion.slerp(targetRotation, 1 - Math.exp(-10 * delta));
+    }
+
+    attackCooldown = Math.max(0, attackCooldown - delta);
+    if (combatTarget && enemyDistance <= ATTACK_RANGE && attackElapsed < 0 && attackCooldown <= 0) {
+      attackElapsed = 0;
+      attackVariant = Math.floor(Math.random() * 3);
+      damageApplied = false;
+    }
+    if (attackElapsed >= 0) {
+      attackElapsed += delta;
+      const phase = Math.min(1, attackElapsed / ATTACK_DURATION);
+      const strike = Math.sin(phase * Math.PI);
+      pipePivot.position.set(0.72, 1.65, 0.28);
+      if (attackVariant === 0) {
+        pipePivot.rotation.set(-0.75 + phase * 2.25, 0, -0.95 + strike * 0.35);
+      } else if (attackVariant === 1) {
+        pipePivot.rotation.set(-0.2, -1.25 + phase * 2.5, -0.75);
+      } else {
+        pipePivot.rotation.set(-1.05 + strike * 1.65, 0.5 - phase, -1.2 + phase * 1.8);
+      }
+      if (!damageApplied && phase >= 0.52) {
+        if (combatTarget?.isAlive && group.position.distanceTo(combatTarget.group.position) <= ATTACK_RANGE + 0.25) {
+          combatTarget.receiveDamage(ATTACK_DAMAGE);
+        }
+        damageApplied = true;
+      }
+      if (phase >= 1) {
+        attackElapsed = -1;
+        attackCooldown = ATTACK_RECOVERY;
+      }
+    } else if (combatTarget) {
+      pipePivot.position.set(0.72, 1.65, 0.28);
+      pipePivot.rotation.set(-0.65, 0.1, -0.9);
+    } else {
+      pipePivot.position.set(0.52, 1.45, -0.42);
+      pipePivot.rotation.set(0.12, 0, 0.2);
     }
 
     group.position.y = THREE.MathUtils.damp(
@@ -470,6 +603,16 @@ export function createRigwalker(
     }
   }
 
-  const rigwalker = { group, moveTo, setSelected, update };
+  const rigwalker: Rigwalker = {
+    group,
+    corporation,
+    get health() { return health; },
+    attack: ATTACK_DAMAGE,
+    get isAlive() { return health > 0; },
+    receiveDamage,
+    moveTo,
+    setSelected,
+    update,
+  };
   return rigwalker;
 }
