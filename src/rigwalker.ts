@@ -1,8 +1,5 @@
 import * as THREE from "three";
-import {
-  instantiateRigwalkerAsset,
-  type RigwalkerAsset,
-} from "./rigwalker-assets";
+import type { RigwalkerAsset } from "./rigwalker-assets";
 
 export type Rigwalker = {
   group: THREE.Group;
@@ -173,6 +170,68 @@ function createArm(side: -1 | 1): {
   return { shoulder, elbow };
 }
 
+function createFallbackVisual(): {
+  root: THREE.Group;
+  update: (delta: number, elapsed: number, moving: boolean) => void;
+} {
+  const root = new THREE.Group();
+  root.name = "Primitive Rigwalker fallback";
+  const leftLeg = createLeg(-1);
+  const rightLeg = createLeg(1);
+  root.add(leftLeg.hip, rightLeg.hip);
+
+  addMesh(root, new THREE.BoxGeometry(0.72, 0.38, 0.52), darkMetal, [0, 1.65, 0]);
+  addMesh(root, new THREE.BoxGeometry(1.08, 1.12, 0.62), armor, [0, 2.35, 0]);
+  addMesh(root, new THREE.BoxGeometry(0.92, 0.16, 0.68), orange, [0, 2.68, 0.03]);
+  addMesh(root, new THREE.BoxGeometry(0.62, 0.86, 0.28), darkMetal, [0, 2.28, -0.56]);
+
+  const leftArm = createArm(-1);
+  const rightArm = createArm(1);
+  root.add(leftArm.shoulder, rightArm.shoulder);
+
+  const head = new THREE.Group();
+  head.position.y = 3.15;
+  root.add(head);
+  addMesh(head, new THREE.BoxGeometry(0.58, 0.52, 0.52), darkMetal, [0, 0, 0]);
+  addMesh(head, new THREE.BoxGeometry(0.46, 0.14, 0.07), visor, [0, 0.06, 0.295]);
+  addMesh(head, new THREE.BoxGeometry(0.13, 0.21, 0.15), orange, [0.28, 0.18, -0.04]);
+  addMesh(
+    root,
+    new THREE.CylinderGeometry(0.035, 0.035, 0.75, 6),
+    jointMaterial,
+    [0.38, 3.65, -0.16],
+  );
+  addMesh(root, new THREE.SphereGeometry(0.09, 8, 6), visor, [0.38, 4.03, -0.16]);
+
+  let walkCycle = 0;
+  let walkBlend = 0;
+
+  function update(delta: number, elapsed: number, moving: boolean): void {
+    walkBlend = THREE.MathUtils.damp(walkBlend, moving ? 1 : 0, 10, delta);
+    walkCycle += delta * WALK_CYCLE_SPEED * walkBlend;
+    const stride = Math.sin(walkCycle) * walkBlend;
+    const oppositeStride = -stride;
+    const stepLift = Math.abs(Math.cos(walkCycle)) * walkBlend;
+
+    leftLeg.hip.rotation.x = stride * 0.52;
+    rightLeg.hip.rotation.x = oppositeStride * 0.52;
+    leftLeg.knee.rotation.x = Math.max(0, -stride) * 0.72;
+    rightLeg.knee.rotation.x = Math.max(0, stride) * 0.72;
+    leftLeg.ankle.rotation.x = -leftLeg.hip.rotation.x * 0.35;
+    rightLeg.ankle.rotation.x = -rightLeg.hip.rotation.x * 0.35;
+    leftArm.shoulder.rotation.x = oppositeStride * 0.42;
+    rightArm.shoulder.rotation.x = stride * 0.42;
+    leftArm.elbow.rotation.x = -0.25 - Math.max(0, stride) * 0.3;
+    rightArm.elbow.rotation.x = -0.25 - Math.max(0, -stride) * 0.3;
+    root.position.y =
+      0.07 + stepLift * 0.08 + Math.sin(elapsed * 1.8) * 0.012;
+    root.rotation.z = stride * 0.025;
+    head.rotation.y = Math.sin(elapsed * 1.1) * 0.07;
+  }
+
+  return { root, update };
+}
+
 export function createRigwalker(asset: RigwalkerAsset | null = null): Rigwalker {
   const group = new THREE.Group();
   group.name = "Rigwalker";
@@ -208,78 +267,10 @@ export function createRigwalker(asset: RigwalkerAsset | null = null): Rigwalker 
   selectionRing.visible = false;
   group.add(selectionRing);
 
-  const animatedRoot = new THREE.Group();
-  animatedRoot.name = "Primitive Rigwalker fallback";
-  animatedRoot.visible = !asset;
-  group.add(animatedRoot);
-
-  const leftLeg = createLeg(-1);
-  const rightLeg = createLeg(1);
-  animatedRoot.add(leftLeg.hip, rightLeg.hip);
-
-  addMesh(
-    animatedRoot,
-    new THREE.BoxGeometry(0.72, 0.38, 0.52),
-    darkMetal,
-    [0, 1.65, 0],
-  );
-  addMesh(
-    animatedRoot,
-    new THREE.BoxGeometry(1.08, 1.12, 0.62),
-    armor,
-    [0, 2.35, 0],
-  );
-  addMesh(
-    animatedRoot,
-    new THREE.BoxGeometry(0.92, 0.16, 0.68),
-    orange,
-    [0, 2.68, 0.03],
-  );
-  addMesh(
-    animatedRoot,
-    new THREE.BoxGeometry(0.62, 0.86, 0.28),
-    darkMetal,
-    [0, 2.28, -0.56],
-  );
-
-  const leftArm = createArm(-1);
-  const rightArm = createArm(1);
-  animatedRoot.add(leftArm.shoulder, rightArm.shoulder);
-
-  const head = new THREE.Group();
-  head.position.y = 3.15;
-  animatedRoot.add(head);
-  addMesh(
-    head,
-    new THREE.BoxGeometry(0.58, 0.52, 0.52),
-    darkMetal,
-    [0, 0, 0],
-  );
-  addMesh(
-    head,
-    new THREE.BoxGeometry(0.46, 0.14, 0.07),
-    visor,
-    [0, 0.06, 0.295],
-  );
-  addMesh(
-    head,
-    new THREE.BoxGeometry(0.13, 0.21, 0.15),
-    orange,
-    [0.28, 0.18, -0.04],
-  );
-
-  addMesh(
-    animatedRoot,
-    new THREE.CylinderGeometry(0.035, 0.035, 0.75, 6),
-    jointMaterial,
-    [0.38, 3.65, -0.16],
-  );
-  addMesh(
-    animatedRoot,
-    new THREE.SphereGeometry(0.09, 8, 6),
-    visor,
-    [0.38, 4.03, -0.16],
-  );
+  const fallbackVisual = asset ? null : createFallbackVisual();
+  if (fallbackVisual) {
+    group.add(fallbackVisual.root);
+  }
 
   let mixer: THREE.AnimationMixer | null = null;
   let idleAction: THREE.AnimationAction | null = null;
@@ -287,11 +278,11 @@ export function createRigwalker(asset: RigwalkerAsset | null = null): Rigwalker 
   let activeAction: THREE.AnimationAction | null = null;
 
   if (asset) {
-    const instance = instantiateRigwalkerAsset(asset);
-    group.add(instance.model);
-    mixer = new THREE.AnimationMixer(instance.model);
-    const idleClip = THREE.AnimationClip.findByName(instance.clips, "Idle");
-    const walkClip = THREE.AnimationClip.findByName(instance.clips, "Walk");
+    const model = asset.instantiate();
+    group.add(model);
+    mixer = new THREE.AnimationMixer(model);
+    const idleClip = THREE.AnimationClip.findByName(asset.clips, "Idle");
+    const walkClip = THREE.AnimationClip.findByName(asset.clips, "Walk");
     if (idleClip) {
       idleAction = mixer.clipAction(idleClip);
       idleAction.play();
@@ -304,8 +295,6 @@ export function createRigwalker(asset: RigwalkerAsset | null = null): Rigwalker 
   }
 
   let destination: THREE.Vector3 | null = null;
-  let walkCycle = 0;
-  let walkBlend = 0;
   const targetRotation = new THREE.Quaternion();
   const upAxis = new THREE.Vector3(0, 1, 0);
   const movement = new THREE.Vector3();
@@ -452,28 +441,7 @@ export function createRigwalker(asset: RigwalkerAsset | null = null): Rigwalker 
       delta,
     );
 
-    walkBlend = THREE.MathUtils.damp(walkBlend, moving ? 1 : 0, 10, delta);
-    walkCycle += delta * WALK_CYCLE_SPEED * walkBlend;
-    const stride = Math.sin(walkCycle) * walkBlend;
-    const oppositeStride = -stride;
-    const stepLift = Math.abs(Math.cos(walkCycle)) * walkBlend;
-
-    leftLeg.hip.rotation.x = stride * 0.52;
-    rightLeg.hip.rotation.x = oppositeStride * 0.52;
-    leftLeg.knee.rotation.x = Math.max(0, -stride) * 0.72;
-    rightLeg.knee.rotation.x = Math.max(0, stride) * 0.72;
-    leftLeg.ankle.rotation.x = -leftLeg.hip.rotation.x * 0.35;
-    rightLeg.ankle.rotation.x = -rightLeg.hip.rotation.x * 0.35;
-
-    leftArm.shoulder.rotation.x = oppositeStride * 0.42;
-    rightArm.shoulder.rotation.x = stride * 0.42;
-    leftArm.elbow.rotation.x = -0.25 - Math.max(0, stride) * 0.3;
-    rightArm.elbow.rotation.x = -0.25 - Math.max(0, -stride) * 0.3;
-
-    animatedRoot.position.y =
-      0.07 + stepLift * 0.08 + Math.sin(elapsed * 1.8) * 0.012;
-    animatedRoot.rotation.z = stride * 0.025;
-    head.rotation.y = Math.sin(elapsed * 1.1) * 0.07;
+    fallbackVisual?.update(delta, elapsed, moving);
 
     if (mixer) {
       const nextAction = moving ? walkAction : idleAction;
