@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { BUILDING_SITES, createBuildings } from "./buildings";
 import "./style.css";
 
 const MAP_SIZE = 180;
@@ -55,6 +56,15 @@ function pseudoRandom(index: number): number {
   return value - Math.floor(value);
 }
 
+function terrainHeightAt(x: number, z: number): number {
+  const localY = -z;
+  return (
+    Math.sin(x * 0.075) * 0.7 +
+    Math.cos(localY * 0.064) * 0.55 +
+    Math.sin((x + localY) * 0.035) * 0.85
+  );
+}
+
 function createTerrain(): THREE.Mesh {
   const segments = 128;
   const geometry = new THREE.PlaneGeometry(
@@ -108,13 +118,16 @@ function createRocks(): THREE.Group {
   });
 
   for (let index = 0; index < 70; index += 1) {
-    const rock = new THREE.Mesh(geometry, material);
     const scale = 0.25 + pseudoRandom(index + 300) * 1.6;
-    rock.position.set(
-      (pseudoRandom(index + 100) - 0.5) * (MAP_SIZE - 10),
-      scale * 0.48,
-      (pseudoRandom(index + 200) - 0.5) * (MAP_SIZE - 10),
-    );
+    const x = (pseudoRandom(index + 100) - 0.5) * (MAP_SIZE - 10);
+    const z = (pseudoRandom(index + 200) - 0.5) * (MAP_SIZE - 10);
+
+    if (BUILDING_SITES.some((site) => site.distanceTo(new THREE.Vector2(x, z)) < 8)) {
+      continue;
+    }
+
+    const rock = new THREE.Mesh(geometry, material);
+    rock.position.set(x, terrainHeightAt(x, z) + scale * 0.48, z);
     rock.rotation.set(
       pseudoRandom(index + 400) * Math.PI,
       pseudoRandom(index + 500) * Math.PI,
@@ -129,7 +142,7 @@ function createRocks(): THREE.Group {
   return rocks;
 }
 
-scene.add(createTerrain(), createRocks());
+scene.add(createTerrain(), createRocks(), createBuildings(terrainHeightAt));
 
 const keys = new Set<string>();
 

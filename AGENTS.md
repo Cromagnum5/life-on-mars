@@ -50,8 +50,8 @@ Avoid the name “Optimus” because of its strong association with Transformers
 ## Nine-step roadmap
 
 1. Render the Mars scene and establish the camera. **Complete.**
-2. Add primitive versions of the Reactor, Assembly Bay, and Extractor. **Next.**
-3. Create one primitive animated Rigwalker.
+2. Add primitive versions of the Reactor, Assembly Bay, and Extractor. **Complete.**
+3. Create one primitive animated Rigwalker. **Next.**
 4. Implement selection and click-to-move controls.
 5. Add the Assembly Bay's 30-second production cycle and visible unit exit.
 6. Add selection feedback, movement markers, and the basic HUD.
@@ -86,7 +86,8 @@ movement loop feels good.
 
 ## Current state
 
-Step 1 provides a procedurally varied Mars surface, scattered rocks,
+Steps 1 and 2 provide a procedurally varied Mars surface, scattered rocks,
 atmospheric lighting and fog, responsive rendering, bounded camera movement,
-and a compact control hint. Step 2 should build on this scene without changing
-the established camera feel.
+a compact control hint, and distinct primitive models for the Reactor, Assembly
+Bay, and Extractor. Step 3 should add one primitive animated Rigwalker without
+adding unit interaction yet.
