@@ -11,3 +11,23 @@ blender --background --python tools/create_rigwalker.py
 
 The GLB contains `Idle` and `Walk` animation clips. Keep gameplay and movement
 logic outside the model so future visual replacements remain straightforward.
+
+## Rigwalker animation review
+
+The reusable review renderer imports the browser GLB twice, stages a deterministic
+approach and duel, and renders four combat phases from three orthographic angles.
+It intentionally mirrors the runtime procedural pose values so changes can be
+reviewed at RTS scale against the shipped asset.
+
+```sh
+blender --background --python tools/render_rigwalker_duel.py
+ffmpeg -y -pattern_type glob -i '/tmp/life-on-mars-animation-review/angle_*_frame_*.png' \
+  -vf 'scale=350:197,tile=4x3:padding=4:margin=6' -frames:v 1 \
+  /tmp/life-on-mars-animation-review/contact-sheet.png
+```
+
+The render sequence covers wind-up, contact, follow-through, and recovery. Keep
+the positive local-Z end of `Broadsword` as the authored striking tip; the mesh is
+a symmetric cylinder, so choosing the geometrically farthest end is ambiguous.
+When tuning combat, update the matching pose math in `src/rigwalker.ts` and this
+review tool together, then run `npm run build` and the multi-angle render.

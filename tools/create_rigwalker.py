@@ -307,19 +307,22 @@ def create_animations(armature):
     combat_idle = bpy.data.actions.new("CombatIdle")
     combat_idle.use_fake_user = True
     armature.animation_data.action = combat_idle
-    combat_locations = {
-        "upper_leg.L": (-0.12, 0, 0),
-        "upper_leg.R": (0.12, 0, 0),
+    combat_rotations = {
+        "upper_leg.L": (0.11, 0, 0),
+        "lower_leg.L": (0.22, 0, 0),
+        "foot.L": (-0.33, 0, 0),
+        "upper_leg.R": (-0.11, 0, 0),
+        "lower_leg.R": (0.22, 0, 0),
+        "foot.R": (-0.11, 0, 0),
     }
-    key_pose(armature, 1, locations=combat_locations)
+    key_pose(armature, 1, combat_rotations, root_height=-0.035)
     key_pose(
         armature,
         24,
-        {"head": (0, 0, math.radians(2))},
-        combat_locations,
-        root_height=0.015,
+        {**combat_rotations, "head": (0, 0, math.radians(2))},
+        root_height=-0.02,
     )
-    key_pose(armature, 48, locations=combat_locations)
+    key_pose(armature, 48, combat_rotations, root_height=-0.035)
 
     armature.animation_data.action = walk
     bpy.context.scene.frame_start = 1

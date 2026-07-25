@@ -33,14 +33,15 @@ const WALK_CYCLE_SPEED = 8.4;
 const MAX_HEALTH = 100;
 const ATTACK_DAMAGE = 18;
 const AWARENESS_RANGE = 8.5;
-const FIGHT_DISTANCE = 2.1;
-const ATTACK_RANGE = 2.65;
+const FIGHT_DISTANCE = 2.65;
+const ATTACK_RANGE = 3.15;
 const ATTACK_DURATION = 1.05;
 const ATTACK_RECOVERY = 0.46;
 const ATTACK_RECOVERY_JITTER = 0.22;
 const INITIAL_ATTACK_DELAY = 0.08;
 const INITIAL_ATTACK_STAGGER = 0.55;
 const COMBAT_SHUFFLE_SPEED = 2.25;
+const WALK_ANIMATION_SPEED = 1.72;
 
 type CombatBones = {
   root: THREE.Bone;
@@ -56,10 +57,15 @@ type CombatBones = {
   handR: THREE.Bone;
   upperLegL: THREE.Bone;
   lowerLegL: THREE.Bone;
+  footL: THREE.Bone;
   upperLegR: THREE.Bone;
   lowerLegR: THREE.Bone;
+  footR: THREE.Bone;
   armRest: Record<"upperArmL" | "lowerArmL" | "handL" | "upperArmR" | "lowerArmR" | "handR", THREE.Quaternion>;
-  legRest: Record<"upperLegL" | "lowerLegL" | "upperLegR" | "lowerLegR", THREE.Quaternion>;
+  legRest: Record<
+    "upperLegL" | "lowerLegL" | "footL" | "upperLegR" | "lowerLegR" | "footR",
+    THREE.Quaternion
+  >;
 };
 
 function smoothRange(value: number, start: number, end: number): number {
@@ -79,7 +85,9 @@ function findCombatBones(model: THREE.Object3D): CombatBones | null {
     upperArmR: bone("upper_arm.R"), lowerArmR: bone("lower_arm.R"),
     handR: bone("hand.R"),
     upperLegL: bone("upper_leg.L"), lowerLegL: bone("lower_leg.L"),
+    footL: bone("foot.L"),
     upperLegR: bone("upper_leg.R"), lowerLegR: bone("lower_leg.R"),
+    footR: bone("foot.R"),
   };
   const armRest = {
     upperArmL: result.upperArmL?.quaternion.clone(), lowerArmL: result.lowerArmL?.quaternion.clone(),
@@ -88,7 +96,9 @@ function findCombatBones(model: THREE.Object3D): CombatBones | null {
   };
   const legRest = {
     upperLegL: result.upperLegL?.quaternion.clone(), lowerLegL: result.lowerLegL?.quaternion.clone(),
+    footL: result.footL?.quaternion.clone(),
     upperLegR: result.upperLegR?.quaternion.clone(), lowerLegR: result.lowerLegR?.quaternion.clone(),
+    footR: result.footR?.quaternion.clone(),
   };
   Object.assign(result, { armRest, legRest });
   return Object.values(result).every(Boolean) && Object.values(armRest).every(Boolean) && Object.values(legRest).every(Boolean) ? result as CombatBones : null;
@@ -105,15 +115,17 @@ function setBoneOffset(bone: THREE.Bone, rest: THREE.Quaternion, x: number, y: n
 
 function applyCombatPose(
   bones: CombatBones, attackPhase: number, attackVariant: number,
-  defensePhase: number, defenseSide: number, hitPhase: number,
+  defensePhase: number, defenseSide: number, hitPhase: number, combatStep: number,
 ): void {
   const attacking = attackPhase >= 0;
   const winding = attacking ? smoothRange(attackPhase, 0, 0.28) * (1 - smoothRange(attackPhase, 0.28, 0.58)) : 0;
-  const cutting = attacking ? smoothRange(attackPhase, 0.28, 0.58) * (1 - smoothRange(attackPhase, 0.58, 1)) : 0;
+  const cutting = attacking ? smoothRange(attackPhase, 0.28, 0.56) * (1 - smoothRange(attackPhase, 0.68, 1)) : 0;
+  const impact = attacking ? smoothRange(attackPhase, 0.38, 0.54) * (1 - smoothRange(attackPhase, 0.62, 0.82)) : 0;
+  const followThrough = attacking ? smoothRange(attackPhase, 0.54, 0.7) * (1 - smoothRange(attackPhase, 0.82, 1)) : 0;
   const attackSide = attackVariant === 1 ? -1 : 1;
   const guarding = defensePhase >= 0 ? smoothRange(defensePhase, 0, 0.22) * (1 - smoothRange(defensePhase, 0.68, 1)) : 0;
   const hitShock = hitPhase >= 0 ? Math.sin(Math.min(1, hitPhase) * Math.PI) : 0;
-  const torsoTwist = attackSide * (winding * -0.42 + cutting * 0.52) + defenseSide * guarding * 0.2;
+  const torsoTwist = attackSide * (winding * -0.58 + impact * 0.76 + followThrough * 0.28) + defenseSide * guarding * 0.2;
 
   bones.root.rotation.set(0, torsoTwist * 0.28, 0);
   bones.spine.rotation.set(0.04 + cutting * 0.1 - hitShock * 0.12, torsoTwist * 0.52, attackSide * (winding - cutting) * 0.08);
@@ -121,46 +133,59 @@ function applyCombatPose(
   bones.neck.rotation.set(0.08 + cutting * 0.08 - hitShock * 0.12, -torsoTwist * 0.46, defenseSide * guarding * 0.08);
   bones.head.rotation.set(-0.03 + hitShock * 0.1, -torsoTwist * 0.34, -defenseSide * guarding * 0.1);
 
-  const rightShoulderForward = -0.28 + winding * 0.34 - cutting * 0.4 - guarding * 0.2;
-  const rightElbowBend = -0.38 - winding * 0.34 + cutting * 0.26 - guarding * 0.22;
+  // One-handed compass cut: the hilt loads near the sword-side ear, the
+  // elbow stays bent, and the shoulder carries the blade through a compact arc.
+  const rightShoulderForward = -0.3 - winding * 0.72 - impact * 0.2 + followThrough * 0.16 - guarding * 0.22;
+  const rightElbowBend = -0.5 - winding * 0.68 + impact * 0.3 + followThrough * 0.16 - guarding * 0.24;
   setBoneOffset(bones.upperArmR, bones.armRest.upperArmR,
     rightShoulderForward + hitShock * 0.08,
-    attackSide * (0.1 + winding * 0.24 - cutting * 0.2) - defenseSide * guarding * 0.16,
-    attackSide * (-0.05 - winding * 0.2 + cutting * 0.18),
+    attackSide * (0.1 + winding * 0.22 - impact * 0.38 - followThrough * 0.22) - defenseSide * guarding * 0.18,
+    attackSide * (-0.05 - winding * 0.18 + impact * 0.26 + followThrough * 0.14),
   );
   setBoneOffset(bones.lowerArmR, bones.armRest.lowerArmR,
-    rightElbowBend + hitShock * 0.1,
-    attackSide * (winding * 0.18 - cutting * 0.14),
-    attackSide * (0.05 + guarding * 0.08),
+    rightElbowBend + hitShock * 0.08,
+    attackSide * (winding * 0.18 - impact * 0.28 - followThrough * 0.14),
+    attackSide * (0.04 + winding * 0.08 - impact * 0.1 + guarding * 0.08),
   );
   setBoneOffset(bones.handR, bones.armRest.handR,
-    -0.08 - winding * 0.2 + cutting * 0.22,
-    attackSide * (-0.1 - winding * 0.2 + cutting * 0.2),
-    attackSide * (0.05 + winding * 0.06 - cutting * 0.08),
+    -0.1 - winding * 0.22 + impact * 0.98 + followThrough * 0.38,
+    attackSide * (-0.12 - winding * 0.26 - impact * 0.72 - followThrough * 0.3),
+    attackSide * (0.12 + winding * 0.18 + impact * 0.28 + followThrough * 0.12),
   );
 
+  // The free arm remains relaxed and separate from the one-handed grip. It
+  // counterbalances the torso slightly but never flies across the weapon line.
   setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
-    -0.25 - cutting * 0.2 - guarding * 0.26 + hitShock * 0.1,
-    -attackSide * (0.12 + winding * 0.18 - cutting * 0.14) + defenseSide * guarding * 0.24,
-    -attackSide * (0.05 + cutting * 0.08),
+    -0.24 - guarding * 0.28 + hitShock * 0.1,
+    -attackSide * (0.08 + winding * 0.1 - impact * 0.08) + defenseSide * guarding * 0.24,
+    -attackSide * (0.04 + winding * 0.06),
   );
   setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
-    -0.34 - guarding * 0.26 + cutting * 0.14 + hitShock * 0.1,
-    -attackSide * (0.08 + winding * 0.1) + defenseSide * guarding * 0.16,
-    -attackSide * (0.04 + guarding * 0.06),
+    -0.38 - guarding * 0.26 + hitShock * 0.1,
+    -attackSide * (0.06 + winding * 0.08 - impact * 0.06) + defenseSide * guarding * 0.14,
+    -attackSide * (0.03 + guarding * 0.05),
   );
   setBoneOffset(bones.handL, bones.armRest.handL,
-    -0.06 + guarding * 0.14,
-    -attackSide * (0.08 + cutting * 0.08),
-    -attackSide * (0.08 + winding * 0.08) + defenseSide * guarding * 0.12,
+    -0.06 + guarding * 0.12,
+    -attackSide * 0.06,
+    -attackSide * 0.06 + defenseSide * guarding * 0.1,
   );
 
-  const legDrive = cutting * 0.17 - winding * 0.12 + guarding * 0.08 - hitShock * 0.04;
+  // Keep a low, mechanically braced stance and counter-rotate each ankle.
+  const stance = 0.11;
+  const kneeBend = 0.22;
+  const legDrive = impact * 0.24 + followThrough * 0.08 - winding * 0.16 + guarding * 0.08 - hitShock * 0.04;
   const lead = attackSide * legDrive;
-  setBoneOffset(bones.upperLegL, bones.legRest.upperLegL, -lead, 0, guarding * 0.025);
-  setBoneOffset(bones.lowerLegL, bones.legRest.lowerLegL, lead, 0, 0);
-  setBoneOffset(bones.upperLegR, bones.legRest.upperLegR, lead, 0, -guarding * 0.025);
-  setBoneOffset(bones.lowerLegR, bones.legRest.lowerLegR, -lead, 0, 0);
+  const upperL = stance - lead + combatStep;
+  const lowerL = kneeBend + lead + Math.max(0, -combatStep) * 0.65;
+  const upperR = -stance + lead - combatStep;
+  const lowerR = kneeBend - lead + Math.max(0, combatStep) * 0.65;
+  setBoneOffset(bones.upperLegL, bones.legRest.upperLegL, upperL, 0, guarding * 0.025);
+  setBoneOffset(bones.lowerLegL, bones.legRest.lowerLegL, lowerL, 0, 0);
+  setBoneOffset(bones.footL, bones.legRest.footL, -(upperL + lowerL), 0, -guarding * 0.025);
+  setBoneOffset(bones.upperLegR, bones.legRest.upperLegR, upperR, 0, -guarding * 0.025);
+  setBoneOffset(bones.lowerLegR, bones.legRest.lowerLegR, lowerR, 0, 0);
+  setBoneOffset(bones.footR, bones.legRest.footR, -(upperR + lowerR), 0, guarding * 0.025);
 }
 
 function resetCombatPose(bones: CombatBones): void {
@@ -177,8 +202,10 @@ function resetCombatPose(bones: CombatBones): void {
   bones.handR.quaternion.copy(bones.armRest.handR);
   bones.upperLegL.quaternion.copy(bones.legRest.upperLegL);
   bones.lowerLegL.quaternion.copy(bones.legRest.lowerLegL);
+  bones.footL.quaternion.copy(bones.legRest.footL);
   bones.upperLegR.quaternion.copy(bones.legRest.upperLegR);
   bones.lowerLegR.quaternion.copy(bones.legRest.lowerLegR);
+  bones.footR.quaternion.copy(bones.legRest.footR);
 }
 
 const armor = new THREE.MeshStandardMaterial({
@@ -495,7 +522,7 @@ export function createRigwalker(
     }
     if (walkClip) {
       walkAction = mixer.clipAction(walkClip);
-      walkAction.setEffectiveTimeScale(1.3);
+      walkAction.setEffectiveTimeScale(WALK_ANIMATION_SPEED);
     }
     if (combatClip) {
       combatAction = mixer.clipAction(combatClip);
@@ -645,10 +672,8 @@ export function createRigwalker(
         movement.copy(combatDirection).multiplyScalar(-1);
         moving = true;
       } else {
-        movement.set(-combatDirection.z, 0, combatDirection.x).multiplyScalar(
-          Math.sin(elapsed * 1.7 + group.id) > 0 ? 1 : -1,
-        );
-        moving = true;
+        // Hold ground once in striking distance instead of sliding in a stationary pose.
+        movement.set(0, 0, 0);
       }
       travelSpeed = COMBAT_SHUFFLE_SPEED;
       desiredMovement.copy(movement);
@@ -760,7 +785,7 @@ export function createRigwalker(
       } else {
         pipePivot.rotation.set(0.8 - strike * 0.18, -1.2 + swing * 2.4, -0.55);
       }
-      if (!damageApplied && phase >= 0.52) {
+      if (!damageApplied && phase >= 0.54) {
         if (combatTarget?.isAlive && group.position.distanceTo(combatTarget.group.position) <= ATTACK_RANGE + 0.25) {
           combatTarget.receiveDamage(ATTACK_DAMAGE);
         }
@@ -813,6 +838,7 @@ export function createRigwalker(
           defenseElapsed >= 0 ? Math.min(1, defenseElapsed / ATTACK_DURATION) : -1,
           defenseSide,
           hitReactionElapsed >= 0 ? Math.min(1, hitReactionElapsed / 0.42) : -1,
+          moving ? Math.sin(elapsed * 5.8 + group.id * 0.7) * 0.24 : 0,
         );
       }
     }
