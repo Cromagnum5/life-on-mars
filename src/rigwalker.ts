@@ -8,6 +8,7 @@ export type Rigwalker = {
   attack: number;
   isAlive: boolean;
   receiveDamage: (damage: number) => void;
+  prepareDefense: (attackVariant: number) => void;
   moveTo: (destination: THREE.Vector3) => void;
   setSelected: (selected: boolean) => void;
   update: (
@@ -34,9 +35,151 @@ const ATTACK_DAMAGE = 18;
 const AWARENESS_RANGE = 8.5;
 const FIGHT_DISTANCE = 2.1;
 const ATTACK_RANGE = 2.65;
-const ATTACK_DURATION = 0.72;
-const ATTACK_RECOVERY = 0.38;
+const ATTACK_DURATION = 1.05;
+const ATTACK_RECOVERY = 0.46;
+const ATTACK_RECOVERY_JITTER = 0.22;
+const INITIAL_ATTACK_DELAY = 0.08;
+const INITIAL_ATTACK_STAGGER = 0.55;
 const COMBAT_SHUFFLE_SPEED = 2.25;
+
+type CombatBones = {
+  root: THREE.Bone;
+  spine: THREE.Bone;
+  chest: THREE.Bone;
+  neck: THREE.Bone;
+  head: THREE.Bone;
+  upperArmL: THREE.Bone;
+  lowerArmL: THREE.Bone;
+  handL: THREE.Bone;
+  upperArmR: THREE.Bone;
+  lowerArmR: THREE.Bone;
+  handR: THREE.Bone;
+  upperLegL: THREE.Bone;
+  lowerLegL: THREE.Bone;
+  upperLegR: THREE.Bone;
+  lowerLegR: THREE.Bone;
+  armRest: Record<"upperArmL" | "lowerArmL" | "handL" | "upperArmR" | "lowerArmR" | "handR", THREE.Quaternion>;
+  legRest: Record<"upperLegL" | "lowerLegL" | "upperLegR" | "lowerLegR", THREE.Quaternion>;
+};
+
+function smoothRange(value: number, start: number, end: number): number {
+  return THREE.MathUtils.smoothstep(value, start, end);
+}
+
+function findCombatBones(model: THREE.Object3D): CombatBones | null {
+  const bone = (name: string) =>
+    (model.getObjectByName(name) ?? model.getObjectByName(name.replaceAll(".", ""))) as
+      | THREE.Bone
+      | undefined;
+  const result = {
+    root: bone("root"), spine: bone("spine"), chest: bone("chest"),
+    neck: bone("neck"), head: bone("head"),
+    upperArmL: bone("upper_arm.L"), lowerArmL: bone("lower_arm.L"),
+    handL: bone("hand.L"),
+    upperArmR: bone("upper_arm.R"), lowerArmR: bone("lower_arm.R"),
+    handR: bone("hand.R"),
+    upperLegL: bone("upper_leg.L"), lowerLegL: bone("lower_leg.L"),
+    upperLegR: bone("upper_leg.R"), lowerLegR: bone("lower_leg.R"),
+  };
+  const armRest = {
+    upperArmL: result.upperArmL?.quaternion.clone(), lowerArmL: result.lowerArmL?.quaternion.clone(),
+    handL: result.handL?.quaternion.clone(), upperArmR: result.upperArmR?.quaternion.clone(),
+    lowerArmR: result.lowerArmR?.quaternion.clone(), handR: result.handR?.quaternion.clone(),
+  };
+  const legRest = {
+    upperLegL: result.upperLegL?.quaternion.clone(), lowerLegL: result.lowerLegL?.quaternion.clone(),
+    upperLegR: result.upperLegR?.quaternion.clone(), lowerLegR: result.lowerLegR?.quaternion.clone(),
+  };
+  Object.assign(result, { armRest, legRest });
+  return Object.values(result).every(Boolean) && Object.values(armRest).every(Boolean) && Object.values(legRest).every(Boolean) ? result as CombatBones : null;
+}
+
+const boneOffsetEuler = new THREE.Euler();
+const boneOffsetQuaternion = new THREE.Quaternion();
+
+function setBoneOffset(bone: THREE.Bone, rest: THREE.Quaternion, x: number, y: number, z: number): void {
+  boneOffsetEuler.set(x, y, z);
+  boneOffsetQuaternion.setFromEuler(boneOffsetEuler);
+  bone.quaternion.copy(rest).multiply(boneOffsetQuaternion);
+}
+
+function applyCombatPose(
+  bones: CombatBones, attackPhase: number, attackVariant: number,
+  defensePhase: number, defenseSide: number, hitPhase: number,
+): void {
+  const attacking = attackPhase >= 0;
+  const winding = attacking ? smoothRange(attackPhase, 0, 0.28) * (1 - smoothRange(attackPhase, 0.28, 0.58)) : 0;
+  const cutting = attacking ? smoothRange(attackPhase, 0.28, 0.58) * (1 - smoothRange(attackPhase, 0.58, 1)) : 0;
+  const attackSide = attackVariant === 1 ? -1 : 1;
+  const guarding = defensePhase >= 0 ? smoothRange(defensePhase, 0, 0.22) * (1 - smoothRange(defensePhase, 0.68, 1)) : 0;
+  const hitShock = hitPhase >= 0 ? Math.sin(Math.min(1, hitPhase) * Math.PI) : 0;
+  const torsoTwist = attackSide * (winding * -0.42 + cutting * 0.52) + defenseSide * guarding * 0.2;
+
+  bones.root.rotation.set(0, torsoTwist * 0.28, 0);
+  bones.spine.rotation.set(0.04 + cutting * 0.1 - hitShock * 0.12, torsoTwist * 0.52, attackSide * (winding - cutting) * 0.08);
+  bones.chest.rotation.set(0.03 + cutting * 0.12 - hitShock * 0.14, torsoTwist * 0.72, attackSide * (winding - cutting) * 0.13);
+  bones.neck.rotation.set(0.08 + cutting * 0.08 - hitShock * 0.12, -torsoTwist * 0.46, defenseSide * guarding * 0.08);
+  bones.head.rotation.set(-0.03 + hitShock * 0.1, -torsoTwist * 0.34, -defenseSide * guarding * 0.1);
+
+  const rightShoulderForward = -0.28 + winding * 0.34 - cutting * 0.4 - guarding * 0.2;
+  const rightElbowBend = -0.38 - winding * 0.34 + cutting * 0.26 - guarding * 0.22;
+  setBoneOffset(bones.upperArmR, bones.armRest.upperArmR,
+    rightShoulderForward + hitShock * 0.08,
+    attackSide * (0.1 + winding * 0.24 - cutting * 0.2) - defenseSide * guarding * 0.16,
+    attackSide * (-0.05 - winding * 0.2 + cutting * 0.18),
+  );
+  setBoneOffset(bones.lowerArmR, bones.armRest.lowerArmR,
+    rightElbowBend + hitShock * 0.1,
+    attackSide * (winding * 0.18 - cutting * 0.14),
+    attackSide * (0.05 + guarding * 0.08),
+  );
+  setBoneOffset(bones.handR, bones.armRest.handR,
+    -0.08 - winding * 0.2 + cutting * 0.22,
+    attackSide * (-0.1 - winding * 0.2 + cutting * 0.2),
+    attackSide * (0.05 + winding * 0.06 - cutting * 0.08),
+  );
+
+  setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
+    -0.25 - cutting * 0.2 - guarding * 0.26 + hitShock * 0.1,
+    -attackSide * (0.12 + winding * 0.18 - cutting * 0.14) + defenseSide * guarding * 0.24,
+    -attackSide * (0.05 + cutting * 0.08),
+  );
+  setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
+    -0.34 - guarding * 0.26 + cutting * 0.14 + hitShock * 0.1,
+    -attackSide * (0.08 + winding * 0.1) + defenseSide * guarding * 0.16,
+    -attackSide * (0.04 + guarding * 0.06),
+  );
+  setBoneOffset(bones.handL, bones.armRest.handL,
+    -0.06 + guarding * 0.14,
+    -attackSide * (0.08 + cutting * 0.08),
+    -attackSide * (0.08 + winding * 0.08) + defenseSide * guarding * 0.12,
+  );
+
+  const legDrive = cutting * 0.17 - winding * 0.12 + guarding * 0.08 - hitShock * 0.04;
+  const lead = attackSide * legDrive;
+  setBoneOffset(bones.upperLegL, bones.legRest.upperLegL, -lead, 0, guarding * 0.025);
+  setBoneOffset(bones.lowerLegL, bones.legRest.lowerLegL, lead, 0, 0);
+  setBoneOffset(bones.upperLegR, bones.legRest.upperLegR, lead, 0, -guarding * 0.025);
+  setBoneOffset(bones.lowerLegR, bones.legRest.lowerLegR, -lead, 0, 0);
+}
+
+function resetCombatPose(bones: CombatBones): void {
+  bones.root.rotation.set(0, 0, 0);
+  bones.spine.rotation.set(0, 0, 0);
+  bones.chest.rotation.set(0, 0, 0);
+  bones.neck.rotation.set(0, 0, 0);
+  bones.head.rotation.set(0, 0, 0);
+  bones.upperArmL.quaternion.copy(bones.armRest.upperArmL);
+  bones.lowerArmL.quaternion.copy(bones.armRest.lowerArmL);
+  bones.handL.quaternion.copy(bones.armRest.handL);
+  bones.upperArmR.quaternion.copy(bones.armRest.upperArmR);
+  bones.lowerArmR.quaternion.copy(bones.armRest.lowerArmR);
+  bones.handR.quaternion.copy(bones.armRest.handR);
+  bones.upperLegL.quaternion.copy(bones.legRest.upperLegL);
+  bones.lowerLegL.quaternion.copy(bones.legRest.lowerLegL);
+  bones.upperLegR.quaternion.copy(bones.legRest.upperLegR);
+  bones.lowerLegR.quaternion.copy(bones.legRest.lowerLegR);
+}
 
 const armor = new THREE.MeshStandardMaterial({
   color: 0x596266,
@@ -302,13 +445,16 @@ export function createRigwalker(
   group.add(healthBar);
 
   const pipePivot = new THREE.Group();
+  pipePivot.name = "Rigwalker weapon pivot";
   const pipe = new THREE.Mesh(
     new THREE.CylinderGeometry(0.065, 0.085, 2.65, 8),
     new THREE.MeshStandardMaterial({ color: 0x697277, metalness: 0.88, roughness: 0.3 }),
   );
+  pipe.name = "Rigwalker weapon";
   pipe.position.y = 1.15;
   pipe.castShadow = true;
   pipePivot.add(pipe);
+  pipePivot.visible = !asset;
   group.add(pipePivot);
 
   const fallbackVisual = asset ? null : createFallbackVisual(accentColor);
@@ -317,8 +463,11 @@ export function createRigwalker(
   }
 
   let mixer: THREE.AnimationMixer | null = null;
+  let combatBones: CombatBones | null = null;
+  let weaponVisual: THREE.Object3D | null = null;
   let idleAction: THREE.AnimationAction | null = null;
   let walkAction: THREE.AnimationAction | null = null;
+  let combatAction: THREE.AnimationAction | null = null;
   let activeAction: THREE.AnimationAction | null = null;
 
   if (asset) {
@@ -332,9 +481,13 @@ export function createRigwalker(
       }
     });
     group.add(model);
+    combatBones = findCombatBones(model);
+    weaponVisual = model.getObjectByName("Broadsword") ?? null;
+    if (weaponVisual) weaponVisual.visible = false;
     mixer = new THREE.AnimationMixer(model);
     const idleClip = THREE.AnimationClip.findByName(asset.clips, "Idle");
     const walkClip = THREE.AnimationClip.findByName(asset.clips, "Walk");
+    const combatClip = THREE.AnimationClip.findByName(asset.clips, "CombatIdle");
     if (idleClip) {
       idleAction = mixer.clipAction(idleClip);
       idleAction.play();
@@ -344,6 +497,9 @@ export function createRigwalker(
       walkAction = mixer.clipAction(walkClip);
       walkAction.setEffectiveTimeScale(1.3);
     }
+    if (combatClip) {
+      combatAction = mixer.clipAction(combatClip);
+    }
   }
 
   let destination: THREE.Vector3 | null = null;
@@ -351,12 +507,18 @@ export function createRigwalker(
   let combatTarget: Rigwalker | null = null;
   let attackElapsed = -1;
   let attackCooldown = 0;
+  const attackTimingOffset = Math.random();
   let attackVariant = 0;
   let damageApplied = false;
+  let defenseElapsed = -1;
+  let defenseSide = 1;
+  let hitReactionElapsed = -1;
+  let wasInCombat = false;
   const targetRotation = new THREE.Quaternion();
   const upAxis = new THREE.Vector3(0, 1, 0);
   const movement = new THREE.Vector3();
   const desiredMovement = new THREE.Vector3();
+  const combatDirection = new THREE.Vector3();
   const separation = new THREE.Vector3();
   const radial = new THREE.Vector3();
   const proposedPosition = new THREE.Vector3();
@@ -370,8 +532,16 @@ export function createRigwalker(
     selectionRing.visible = selected;
   }
 
+  function prepareDefense(incomingVariant: number): void {
+    if (health <= 0 || attackElapsed >= 0) return;
+    defenseElapsed = 0;
+    defenseSide = incomingVariant === 1 ? -1 : 1;
+    attackCooldown = Math.min(attackCooldown, ATTACK_DURATION * 0.72 + attackTimingOffset * 0.12);
+  }
+
   function receiveDamage(damage: number): void {
     if (health <= 0) return;
+    hitReactionElapsed = 0;
     health = Math.max(0, health - damage);
     healthFill.scale.x = health / MAX_HEALTH;
     healthFill.position.x = -0.69 * (1 - health / MAX_HEALTH);
@@ -388,6 +558,15 @@ export function createRigwalker(
     obstacles: readonly NavigationObstacle[],
   ): void {
     if (health <= 0) return;
+
+    if (defenseElapsed >= 0) {
+      defenseElapsed += delta;
+      if (defenseElapsed >= ATTACK_DURATION) defenseElapsed = -1;
+    }
+    if (hitReactionElapsed >= 0) {
+      hitReactionElapsed += delta;
+      if (hitReactionElapsed >= 0.42) hitReactionElapsed = -1;
+    }
 
     let moving = false;
     let travelSpeed = 0;
@@ -432,25 +611,41 @@ export function createRigwalker(
           combatTarget = other;
         }
       }
+      if (combatTarget) {
+        attackCooldown = Math.max(
+          attackCooldown,
+          INITIAL_ATTACK_DELAY + attackTimingOffset * INITIAL_ATTACK_STAGGER,
+        );
+      }
     }
+
+    const inCombat = combatTarget !== null;
+    if (!inCombat) {
+      attackElapsed = -1;
+      defenseElapsed = -1;
+      hitReactionElapsed = -1;
+      if (wasInCombat && combatBones) resetCombatPose(combatBones);
+    }
+    wasInCombat = inCombat;
+    if (weaponVisual) weaponVisual.visible = inCombat;
 
     const enemyDistance = combatTarget
       ? group.position.distanceTo(combatTarget.group.position)
       : Number.POSITIVE_INFINITY;
     if (combatTarget) {
-      radial.set(
+      combatDirection.set(
         combatTarget.group.position.x - group.position.x,
         0,
         combatTarget.group.position.z - group.position.z,
       ).normalize();
       if (enemyDistance > FIGHT_DISTANCE + 0.35) {
-        movement.copy(radial);
+        movement.copy(combatDirection);
         moving = true;
       } else if (enemyDistance < FIGHT_DISTANCE - 0.3) {
-        movement.copy(radial).multiplyScalar(-1);
+        movement.copy(combatDirection).multiplyScalar(-1);
         moving = true;
       } else {
-        movement.set(-radial.z, 0, radial.x).multiplyScalar(
+        movement.set(-combatDirection.z, 0, combatDirection.x).multiplyScalar(
           Math.sin(elapsed * 1.7 + group.id) > 0 ? 1 : -1,
         );
         moving = true;
@@ -539,7 +734,7 @@ export function createRigwalker(
       group.position.addScaledVector(movement, travel);
 
       const targetAngle = combatTarget
-        ? Math.atan2(-radial.x, -radial.z)
+        ? Math.atan2(combatDirection.x, combatDirection.z)
         : Math.atan2(movement.x, movement.z);
       targetRotation.setFromAxisAngle(upAxis, targetAngle);
       group.quaternion.slerp(targetRotation, 1 - Math.exp(-10 * delta));
@@ -550,18 +745,20 @@ export function createRigwalker(
       attackElapsed = 0;
       attackVariant = Math.floor(Math.random() * 3);
       damageApplied = false;
+      combatTarget.prepareDefense(attackVariant);
     }
-    if (attackElapsed >= 0) {
+    if (attackElapsed >= 0 && combatTarget) {
       attackElapsed += delta;
       const phase = Math.min(1, attackElapsed / ATTACK_DURATION);
       const strike = Math.sin(phase * Math.PI);
+      const swing = smoothRange(phase, 0.18, 0.62);
       pipePivot.position.set(0.72, 1.65, 0.28);
       if (attackVariant === 0) {
-        pipePivot.rotation.set(-0.75 + phase * 2.25, 0, -0.95 + strike * 0.35);
+        pipePivot.rotation.set(1.25 - swing * 0.65, 0.15, -1.05 + swing * 1.6);
       } else if (attackVariant === 1) {
-        pipePivot.rotation.set(-0.2, -1.25 + phase * 2.5, -0.75);
+        pipePivot.rotation.set(1.15 - swing * 0.55, -0.8 + swing * 1.6, 0.85 - swing * 1.4);
       } else {
-        pipePivot.rotation.set(-1.05 + strike * 1.65, 0.5 - phase, -1.2 + phase * 1.8);
+        pipePivot.rotation.set(0.8 - strike * 0.18, -1.2 + swing * 2.4, -0.55);
       }
       if (!damageApplied && phase >= 0.52) {
         if (combatTarget?.isAlive && group.position.distanceTo(combatTarget.group.position) <= ATTACK_RANGE + 0.25) {
@@ -571,11 +768,19 @@ export function createRigwalker(
       }
       if (phase >= 1) {
         attackElapsed = -1;
-        attackCooldown = ATTACK_RECOVERY;
+        attackCooldown =
+          ATTACK_RECOVERY +
+          (attackTimingOffset - 0.5) * ATTACK_RECOVERY_JITTER +
+          Math.random() * ATTACK_RECOVERY_JITTER;
       }
     } else if (combatTarget) {
       pipePivot.position.set(0.72, 1.65, 0.28);
-      pipePivot.rotation.set(-0.65, 0.1, -0.9);
+      if (defenseElapsed >= 0) {
+        const guard = Math.sin(Math.min(1, defenseElapsed / ATTACK_DURATION) * Math.PI);
+        pipePivot.rotation.set(1.25, defenseSide * 0.55, -0.45 + defenseSide * guard * 0.55);
+      } else {
+        pipePivot.rotation.set(0.65, 0.1, -0.9);
+      }
     } else {
       pipePivot.position.set(0.52, 1.45, -0.42);
       pipePivot.rotation.set(0.12, 0, 0.2);
@@ -591,7 +796,7 @@ export function createRigwalker(
     fallbackVisual?.update(delta, elapsed, moving);
 
     if (mixer) {
-      const nextAction = moving ? walkAction : idleAction;
+      const nextAction = combatTarget ? combatAction ?? idleAction : moving ? walkAction : idleAction;
       if (nextAction && nextAction !== activeAction) {
         nextAction.reset().play();
         if (activeAction) {
@@ -600,6 +805,16 @@ export function createRigwalker(
         activeAction = nextAction;
       }
       mixer.update(delta);
+      if (combatBones && combatTarget) {
+        applyCombatPose(
+          combatBones,
+          attackElapsed >= 0 ? Math.min(1, attackElapsed / ATTACK_DURATION) : -1,
+          attackVariant,
+          defenseElapsed >= 0 ? Math.min(1, defenseElapsed / ATTACK_DURATION) : -1,
+          defenseSide,
+          hitReactionElapsed >= 0 ? Math.min(1, hitReactionElapsed / 0.42) : -1,
+        );
+      }
     }
   }
 
@@ -610,6 +825,7 @@ export function createRigwalker(
     attack: ATTACK_DAMAGE,
     get isAlive() { return health > 0; },
     receiveDamage,
+    prepareDefense,
     moveTo,
     setSelected,
     update,

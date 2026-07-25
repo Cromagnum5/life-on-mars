@@ -140,3 +140,27 @@ The production build has a non-blocking Vite warning because the core Three.js
 chunk exceeds 500 kB. GLTF loading and skeleton cloning are already split into
 lazy chunks. Treat the remaining warning as informational until load-time data
 shows it is worth further bundling work.
+
+## Combat animation validation
+
+Treat combat animation as a rendered, time-varying result rather than validating
+only code or one pose.
+
+- Imported Blender bones may have non-zero or pi-valued rest rotations after GLB
+  conversion. Capture each imported bone’s rest quaternion and apply procedural
+  combat rotations as local quaternion offsets. Do not reset imported arm or leg
+  bones to zero Euler rotations.
+- Validate at least five representative phases: ready, wind-up, cut/contact,
+  guard/reaction, and recovery. Render them as a contact sheet at approximately
+  the gameplay camera angle; a single attractive frame is insufficient.
+- Run a duel simulation across the whole fight and sample the actual imported
+  GLB, not a substitute primitive rig. Check opponent facing, attack staggering,
+  weapon visibility, hand-to-grip separation, arm height, foot-height drift, and
+  clean return to the normal post-combat pose.
+- Coordinate shoulders, elbows, wrists, torso twist, hips, and knees. Use
+  opposing hip/knee offsets for visible weight transfer while keeping foot
+  height nearly constant. Keep the weapon parented to the hand and let it inherit
+  the wrist chain instead of independently positioning it each frame.
+- Judge motion at RTS viewing scale. If consecutive rendered phases are barely
+  distinguishable, increase the motion envelope and rerun both geometry and
+  multi-frame visual checks.

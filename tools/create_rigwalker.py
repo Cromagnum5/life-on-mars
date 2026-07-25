@@ -100,8 +100,10 @@ def create_armature():
         bones[name] = item
 
     bone("root", (0, 0, 0), (0, 0, 0.3))
-    bone("spine", (0, 0, 1.55), (0, 0, 2.8), "root")
-    bone("head", (0, 0, 2.8), (0, 0, 3.35), "spine")
+    bone("spine", (0, 0, 1.55), (0, 0, 2.2), "root")
+    bone("chest", (0, 0, 2.2), (0, 0, 2.78), "spine")
+    bone("neck", (0, 0, 2.78), (0, 0, 3.0), "chest")
+    bone("head", (0, 0, 3.0), (0, 0, 3.35), "neck")
 
     for side, x in (("L", -0.27), ("R", 0.27)):
         bone(f"upper_leg.{side}", (x, 0, 1.55), (x, 0, 0.76), "root")
@@ -113,7 +115,7 @@ def create_armature():
             f"upper_arm.{side}",
             (shoulder_x, 0, 2.68),
             (shoulder_x, 0, 1.9),
-            "spine",
+            "chest",
         )
         bone(
             f"lower_arm.{side}",
@@ -121,6 +123,19 @@ def create_armature():
             (shoulder_x, 0, 1.25),
             f"upper_arm.{side}",
         )
+        bone(
+            f"hand.{side}",
+            (shoulder_x, 0, 1.25),
+            (shoulder_x, -0.28, 1.25),
+            f"lower_arm.{side}",
+        )
+        if side == "R":
+            bone(
+                "weapon.R",
+                (shoulder_x, 0, 1.25),
+                (shoulder_x, -0.82, 1.824),
+                "hand.R",
+            )
 
     bpy.ops.object.mode_set(mode="POSE")
     for pose_bone in armature.pose.bones:
@@ -164,10 +179,10 @@ def create_model(armature):
         parts.append(obj)
 
     attach(cube("Pelvis", (0, 0, 1.58), (0.37, 0.27, 0.2), dark), "root")
-    attach(cube("Torso", (0, 0, 2.25), (0.53, 0.3, 0.58), armor, 0.06), "spine")
-    attach(cube("ChestStripe", (0, -0.315, 2.48), (0.45, 0.035, 0.08), orange, 0.015), "spine")
-    attach(cube("Backpack", (0, 0.38, 2.2), (0.3, 0.17, 0.42), dark), "spine")
-    attach(cylinder("Neck", (0, 0, 2.88), 0.13, 0.22, joint, 8), "spine")
+    attach(cube("Torso", (0, 0, 2.25), (0.53, 0.3, 0.58), armor, 0.06), "chest")
+    attach(cube("ChestStripe", (0, -0.315, 2.48), (0.45, 0.035, 0.08), orange, 0.015), "chest")
+    attach(cube("Backpack", (0, 0.38, 2.2), (0.3, 0.17, 0.42), dark), "chest")
+    attach(cylinder("Neck", (0, 0, 2.88), 0.13, 0.22, joint, 8), "neck")
     attach(cube("Head", (0, 0, 3.16), (0.29, 0.26, 0.26), dark, 0.035), "head")
     attach(cube("Visor", (0, -0.275, 3.2), (0.23, 0.025, 0.065), cyan, 0.01), "head")
     attach(cube("HeadAccent", (0.29, 0, 3.26), (0.055, 0.08, 0.11), orange, 0.015), "head")
@@ -214,16 +229,36 @@ def create_model(armature):
             ),
             f"lower_arm.{side}",
         )
-        attach(cube(f"Hand.{side}", (shoulder_x, -0.01, 1.24), (0.14, 0.15, 0.12), armor), f"lower_arm.{side}")
+        attach(cube(f"Hand.{side}", (shoulder_x, -0.01, 1.24), (0.14, 0.15, 0.12), armor), f"hand.{side}")
+
+    # The weapon is authored at the grip and follows the wrist bone. Its local
+    # forward-up alignment cannot drift away from the hand at runtime.
+    weapon_angle = math.radians(55)
+    attach(
+        cylinder(
+            "Broadsword",
+            (0.67, -1.085, 2.0),
+            0.075,
+            2.65,
+            joint,
+            10,
+            (weapon_angle, 0, 0),
+        ),
+        "weapon.R",
+    )
 
     return parts
 
 
-def key_pose(armature, frame, rotations=None, root_height=0):
+def key_pose(armature, frame, rotations=None, locations=None, root_height=0):
     rotations = rotations or {}
+    locations = locations or {}
     for bone in armature.pose.bones:
         bone.rotation_euler = rotations.get(bone.name, (0, 0, 0))
         bone.keyframe_insert("rotation_euler", frame=frame, group=bone.name)
+        if bone.name != "root":
+            bone.location = locations.get(bone.name, (0, 0, 0))
+            bone.keyframe_insert("location", frame=frame, group=bone.name)
     root = armature.pose.bones["root"]
     root.location = (0, 0, root_height)
     root.keyframe_insert("location", frame=frame, group="root")
@@ -263,11 +298,28 @@ def create_animations(armature):
             "lower_arm.R": (-0.22 - max(0, -phase) * 0.25, 0, 0),
             "spine": (0, phase * 0.025, phase * 0.02),
         }
-        key_pose(armature, frame, rotations, 0.05 + abs(phase) * 0.07)
+        key_pose(armature, frame, rotations, root_height=0.05 + abs(phase) * 0.07)
 
     for curve in walk.fcurves:
         for keyframe in curve.keyframe_points:
             keyframe.interpolation = "LINEAR"
+
+    combat_idle = bpy.data.actions.new("CombatIdle")
+    combat_idle.use_fake_user = True
+    armature.animation_data.action = combat_idle
+    combat_locations = {
+        "upper_leg.L": (-0.12, 0, 0),
+        "upper_leg.R": (0.12, 0, 0),
+    }
+    key_pose(armature, 1, locations=combat_locations)
+    key_pose(
+        armature,
+        24,
+        {"head": (0, 0, math.radians(2))},
+        combat_locations,
+        root_height=0.015,
+    )
+    key_pose(armature, 48, locations=combat_locations)
 
     armature.animation_data.action = walk
     bpy.context.scene.frame_start = 1
