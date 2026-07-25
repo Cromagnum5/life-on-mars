@@ -17,6 +17,7 @@ export type Rigwalker = {
     terrainHeightAt: (x: number, z: number) => number,
     nearbyUnits: readonly Rigwalker[],
     obstacles: readonly NavigationObstacle[],
+    cameraQuaternion: THREE.Quaternion,
   ) => void;
 };
 
@@ -585,6 +586,7 @@ export function createRigwalker(
     terrainHeightAt: (x: number, z: number) => number,
     nearbyUnits: readonly Rigwalker[],
     obstacles: readonly NavigationObstacle[],
+    cameraQuaternion: THREE.Quaternion,
   ): void {
     if (health <= 0) return;
 
@@ -819,6 +821,8 @@ export function createRigwalker(
       12,
       delta,
     );
+
+    healthBar.quaternion.copy(group.quaternion).invert().multiply(cameraQuaternion);
 
     fallbackVisual?.update(delta, elapsed, moving);
 

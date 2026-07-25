@@ -511,6 +511,7 @@ function animate(): void {
       terrainHeightAt,
       units,
       BUILDING_OBSTACLES,
+      camera.quaternion,
     );
   }
   for (let index = units.length - 1; index >= 0; index -= 1) {
