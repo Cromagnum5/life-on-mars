@@ -18,8 +18,8 @@ export type StarterBase = {
 };
 
 export const CORPORATIONS = [
-  { name: "Helios", accent: 0x32b9ff, center: new THREE.Vector2(-58, 38), rotation: -Math.PI / 4 },
-  { name: "Vanguard", accent: 0xff4f57, center: new THREE.Vector2(58, -38), rotation: (3 * Math.PI) / 4 },
+  { name: "Helios", accent: 0x32b9ff, center: new THREE.Vector2(-27.84, 18.24), rotation: -Math.PI / 4 },
+  { name: "Vanguard", accent: 0xff4f57, center: new THREE.Vector2(27.84, -18.24), rotation: (3 * Math.PI) / 4 },
 ] as const;
 
 const LOCAL_BUILDING_SITES = [
