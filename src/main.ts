@@ -180,10 +180,27 @@ const productions = corporateBases.map((base) =>
   ),
 );
 const movementMarkers = new MovementMarkers(scene);
+const rallyMarkers = corporateBases.map((base) => {
+  const marker = new THREE.Mesh(
+    new THREE.RingGeometry(0.65, 0.82, 32),
+    new THREE.MeshBasicMaterial({
+      color: base.accent,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  marker.rotation.x = -Math.PI / 2;
+  marker.visible = false;
+  scene.add(marker);
+  return marker;
+});
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let selectedRigwalkers: (typeof units)[number][] = [];
+let selectedAssemblyIndex: number | null = null;
 let selectionDragStart: THREE.Vector2 | null = null;
 let selectionDragging = false;
 
@@ -214,8 +231,21 @@ function selectRigwalkers(
     unit.setSelected(false);
   }
   selectedRigwalkers = nextSelection;
+  if (nextSelection.length > 0) {
+    selectAssembly(null);
+  }
   for (const unit of selectedRigwalkers) {
     unit.setSelected(true);
+  }
+}
+
+function selectAssembly(index: number | null): void {
+  selectedAssemblyIndex = index;
+  corporateBases.forEach((base, baseIndex) => {
+    base.assemblySelectionRing.visible = baseIndex === index;
+  });
+  if (index !== null) {
+    selectRigwalkers([]);
   }
 }
 
@@ -296,6 +326,7 @@ canvas.addEventListener("pointerup", (event) => {
     const top = Math.min(selectionDragStart.y, event.clientY);
     const bottom = Math.max(selectionDragStart.y, event.clientY);
     const projected = new THREE.Vector3();
+    selectAssembly(null);
     selectRigwalkers(
       units.filter((unit) => {
         projected.copy(unit.group.position).project(camera);
@@ -316,7 +347,21 @@ canvas.addEventListener("pointerup", (event) => {
     const selected = units.find(
       (unit) => raycaster.intersectObject(unit.group, true).length > 0,
     );
-    selectRigwalkers(selected ? [selected] : []);
+    if (selected) {
+      selectRigwalkers([selected]);
+    } else {
+      const assemblyIndex = corporateBases.findIndex((base) =>
+        raycaster
+          .intersectObject(base.assemblyBay, true)
+          .some((hit) => hit.object !== base.assemblySelectionRing),
+      );
+      if (assemblyIndex >= 0) {
+        selectAssembly(assemblyIndex);
+      } else {
+        selectAssembly(null);
+        selectRigwalkers([]);
+      }
+    }
   }
 
   selectionDragStart = null;
@@ -328,13 +373,24 @@ canvas.addEventListener("pointerup", (event) => {
 canvas.addEventListener("contextmenu", (event) => {
   event.preventDefault();
 
-  if (selectedRigwalkers.length === 0) {
-    return;
-  }
-
   updatePointer(event);
   const terrainHit = raycaster.intersectObject(terrain, false)[0];
   if (terrainHit) {
+    if (selectedRigwalkers.length === 0 && selectedAssemblyIndex !== null) {
+      const destination = clearBuildingFootprints(terrainHit.point);
+      productions[selectedAssemblyIndex].setRallyPoint(destination);
+      const marker = rallyMarkers[selectedAssemblyIndex];
+      marker.position.copy(destination);
+      marker.position.y += 0.1;
+      marker.visible = true;
+      movementMarkers.add(destination);
+      return;
+    }
+
+    if (selectedRigwalkers.length === 0) {
+      return;
+    }
+
     const columns = Math.ceil(Math.sqrt(selectedRigwalkers.length));
     const rows = Math.ceil(selectedRigwalkers.length / columns);
     const spacing = 1.55;
@@ -430,8 +486,10 @@ function updateHud(elapsed: number): void {
   productionBar!.style.width = `${Math.max(...productionStatuses.map((status) => status.progress)) * 100}%`;
   unitValue!.textContent = units.length.toString();
   selectionValue!.textContent =
-    selectedRigwalkers.length === 0
-      ? "None"
+    selectedAssemblyIndex !== null
+      ? `${corporateBases[selectedAssemblyIndex].corporation} Assembly Bay · Set rally with right click`
+      : selectedRigwalkers.length === 0
+        ? "None"
       : selectedRigwalkers.length === 1
         ? `Rigwalker · ${Math.ceil(selectedRigwalkers[0].health)} HP · ${selectedRigwalkers[0].attack} ATK`
         : `${selectedRigwalkers.length} Rigwalkers`;

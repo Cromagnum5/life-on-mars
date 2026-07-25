@@ -9,7 +9,9 @@ type MaterialSet = {
 
 export type StarterBase = {
   group: THREE.Group;
+  assemblyBay: THREE.Group;
   assemblyDoor: THREE.Group;
+  assemblySelectionRing: THREE.Mesh;
   spawnPosition: THREE.Vector2;
   accent: number;
   corporation: string;
@@ -170,11 +172,31 @@ function createReactor(accent: number): THREE.Group {
   return building;
 }
 
-function createAssemblyBay(accent: number): { group: THREE.Group; door: THREE.Group } {
+function createAssemblyBay(accent: number): {
+  group: THREE.Group;
+  door: THREE.Group;
+  selectionRing: THREE.Mesh;
+} {
   const building = new THREE.Group();
   building.name = "Assembly Bay";
   const material = materials(accent);
   addFoundation(building, 11.5, 9, material.accent);
+
+  const selectionRing = new THREE.Mesh(
+    new THREE.RingGeometry(6.1, 6.3, 48),
+    new THREE.MeshBasicMaterial({
+      color: 0xffb35d,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  selectionRing.name = "Assembly Bay selection ring";
+  selectionRing.position.y = 0.08;
+  selectionRing.rotation.x = -Math.PI / 2;
+  selectionRing.visible = false;
+  building.add(selectionRing);
 
   addMesh(
     building,
@@ -238,7 +260,7 @@ function createAssemblyBay(accent: number): { group: THREE.Group; door: THREE.Gr
     material.accent,
     [3.2, 7.15, -1.6],
   );
-  return { group: building, door };
+  return { group: building, door, selectionRing };
 }
 
 function createExtractor(accent: number): THREE.Group {
@@ -326,7 +348,9 @@ export function createBuildings(
     });
     return {
       group: base,
+      assemblyBay: assemblyBay.group,
       assemblyDoor: assemblyBay.door,
+      assemblySelectionRing: assemblyBay.selectionRing,
       spawnPosition: toWorldSite(new THREE.Vector2(10, -1.8), corporation.center, corporation.rotation),
       accent: corporation.accent,
       corporation: corporation.name,
