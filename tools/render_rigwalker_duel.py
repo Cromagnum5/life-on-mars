@@ -53,7 +53,7 @@ def pose_combat(rig, phase, side=1, guarding=0, hit=0):
     # Enlarged runtime-like weapon arc for readable RTS silhouettes.
     offset(rig,'upper_arm.R',(-.3-winding*.72-impact*.2+follow*.16-guarding*.22,side*(.1+winding*.22-impact*.38-follow*.22),side*(-.05-winding*.18+impact*.26+follow*.14)))
     offset(rig,'lower_arm.R',(-.5-winding*.68+impact*.3+follow*.16-guarding*.24,side*(winding*.18-impact*.28-follow*.14),side*(.04+winding*.08-impact*.1+guarding*.08)))
-    offset(rig,'hand.R',(-.1-winding*.22+impact*.98+follow*.38,side*(-.12-winding*.26-impact*.72-follow*.3),side*(.12+winding*.18+impact*.28+follow*.12)))
+    offset(rig,'hand.R',(-.1-winding*.22+impact*.98+follow*.38,side*(-.12-winding*.26+impact*.12-follow*.12),side*(.12+winding*.18+impact*.28+follow*.12)))
     offset(rig,'upper_arm.L',(-.24-guarding*.28,-side*(.08+winding*.1-impact*.08),-side*(.04+winding*.06)))
     offset(rig,'lower_arm.L',(-.38-guarding*.26,-side*(.06+winding*.08-impact*.06),-side*(.03+guarding*.05)))
     offset(rig,'hand.L',(-.06+guarding*.12,-side*.06,-side*.06))

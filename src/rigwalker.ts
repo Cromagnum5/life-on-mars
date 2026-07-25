@@ -149,7 +149,9 @@ function applyCombatPose(
   );
   setBoneOffset(bones.handR, bones.armRest.handR,
     -0.1 - winding * 0.22 + impact * 0.98 + followThrough * 0.38,
-    attackSide * (-0.12 - winding * 0.26 - impact * 0.72 - followThrough * 0.3),
+    // Uncock the wrist across the center line at contact. Continuing the
+    // wind-up side tilt here makes the long blade flare away from the target.
+    attackSide * (-0.12 - winding * 0.26 + impact * 0.12 - followThrough * 0.12),
     attackSide * (0.12 + winding * 0.18 + impact * 0.28 + followThrough * 0.12),
   );
 
