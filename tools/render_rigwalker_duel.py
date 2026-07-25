@@ -53,7 +53,8 @@ def pose_combat(rig, phase, side=1, guarding=0, hit=0):
     # Enlarged runtime-like weapon arc for readable RTS silhouettes.
     offset(rig,'upper_arm.R',(-.3-winding*.72-impact*.2+follow*.16-guarding*.22,side*(.1+winding*.22-impact*.38-follow*.22),side*(-.05-winding*.18+impact*.26+follow*.14)))
     offset(rig,'lower_arm.R',(-.5-winding*.68+impact*.3+follow*.16-guarding*.24,side*(winding*.18-impact*.28-follow*.14),side*(.04+winding*.08-impact*.1+guarding*.08)))
-    offset(rig,'hand.R',(-.1-winding*.22+impact*.98+follow*.38,side*(-.12-winding*.26+impact*.12-follow*.12),side*(.12+winding*.18+impact*.28+follow*.12)))
+    contact_x=.8 if side>0 else -1.2; contact_y=.25 if side>0 else 0; contact_z=2 if side>0 else 1.5
+    offset(rig,'hand.R',((-.1-winding*.22)*(1-impact)+contact_x*impact+follow*.2,side*(-.12-winding*.26)*(1-impact)+contact_y*impact-side*follow*.12,side*(.12+winding*.18)*(1-impact)+contact_z*impact+side*follow*.3))
     offset(rig,'upper_arm.L',(-.24-guarding*.28,-side*(.08+winding*.1-impact*.08),-side*(.04+winding*.06)))
     offset(rig,'lower_arm.L',(-.38-guarding*.26,-side*(.06+winding*.08-impact*.06),-side*(.03+guarding*.05)))
     offset(rig,'hand.L',(-.06+guarding*.12,-side*.06,-side*.06))
@@ -107,7 +108,7 @@ angles=((8,-10,7),(-8,-10,7),(8,8,6))
 for angle_index,location in enumerate(angles):
     cam.location=location
     cam.rotation_euler=(Vector((0,0,1.6))-cam.location).to_track_quat('-Z','Y').to_euler()
-    for frame in (65,77,83,95):
+    for frame in (59,68,77,83,93):
         scene.frame_set(frame)
         scene.render.filepath=str(OUTPUT / f'angle_{angle_index}_frame_{frame:04d}.png')
         bpy.ops.render.render(write_still=True)
