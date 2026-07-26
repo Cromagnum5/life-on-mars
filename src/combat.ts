@@ -36,6 +36,7 @@ export type CombatCue = {
   side: -1 | 1;
   intensity: number;
   outcome: CombatOutcome;
+  preferredDistance: number;
 };
 
 export type CombatantSnapshot = {
@@ -82,6 +83,7 @@ type Exchange = {
   outcome: CombatOutcome;
   damageApplied: boolean;
   chainDepth: number;
+  preferredDistance: number;
 };
 
 type Encounter = {
@@ -93,6 +95,8 @@ type Encounter = {
 
 const AWARENESS_RANGE = 8.5;
 const ATTACK_RANGE = 3.25;
+const MIN_FIGHT_DISTANCE = 2.15;
+const MAX_FIGHT_DISTANCE = 3.15;
 const MAX_SUPPORTERS_PER_TARGET = 2;
 const LINES: readonly AttackLine[] = ["overhead", "forehand", "backhand", "flank", "rising"];
 const EMPTY_CUE: CombatCue = {
@@ -107,6 +111,7 @@ const EMPTY_CUE: CombatCue = {
   side: 1,
   intensity: 0,
   outcome: "pending",
+  preferredDistance: 2.65,
 };
 
 function clamp01(value: number): number {
@@ -342,6 +347,14 @@ export class CombatDirector {
       strategy === "distance-trap" ? 0.7 + this.random() * 0.7 :
       strategy === "riposte" ? 0.12 + this.random() * 0.12 :
       0.35 + this.random() * 0.45;
+    const rangeBias =
+      strategy === "rush" || strategy === "riposte" ? -0.25 :
+      strategy === "distance-trap" || strategy === "react" ? 0.275 :
+      0;
+    const preferredDistance = Math.max(
+      MIN_FIGHT_DISTANCE,
+      Math.min(MAX_FIGHT_DISTANCE, 2.65 + rangeBias + (this.random() - 0.5) * 0.6875),
+    );
     return {
       plannerId: attacker.id,
       attackerId: actualAttacker.id,
@@ -357,6 +370,7 @@ export class CombatDirector {
       outcome: "pending",
       damageApplied: false,
       chainDepth,
+      preferredDistance,
     };
   }
 
@@ -539,6 +553,7 @@ export class CombatDirector {
         action === "block" ? 0.78 :
         exchange.strategy === "rush" ? 1 : exchange.strategy === "riposte" ? 0.88 : 0.72,
       outcome: exchange.outcome,
+      preferredDistance: exchange.preferredDistance,
     };
   }
 

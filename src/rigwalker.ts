@@ -44,7 +44,8 @@ const OBSTACLE_LOOKAHEAD = 1.4;
 const WALK_CYCLE_SPEED = 8.4;
 const MAX_HEALTH = 100;
 const ATTACK_DAMAGE = 24;
-const FIGHT_DISTANCE = 2.65;
+const DEFAULT_FIGHT_DISTANCE = 2.65;
+const COMBAT_DISTANCE_DEAD_ZONE = 0.16;
 const ATTACK_DURATION = 1.05;
 const COMBAT_SHUFFLE_SPEED = 2.25;
 const WALK_ANIMATION_SPEED = 1.72;
@@ -624,6 +625,11 @@ export function createRigwalker(
   let hitReactionSide: -1 | 1 = 1;
   let defeatElapsed = -1;
   let wasInCombat = false;
+  let observedCombatTargetId: number | null = null;
+  let observedEnemyDistance = Number.POSITIVE_INFINITY;
+  let observedFightDistance = DEFAULT_FIGHT_DISTANCE;
+  let distanceObservationElapsed = 0;
+  let distanceObservationCount = 0;
   const balance = new BalanceController();
   let pendingBalanceImpactX = 0;
   let pendingBalanceImpactZ = 0;
@@ -750,15 +756,36 @@ export function createRigwalker(
       ? group.position.distanceTo(combatTarget.group.position)
       : Number.POSITIVE_INFINITY;
     if (combatTarget) {
+      const fightDistance = combatCue?.preferredDistance ?? DEFAULT_FIGHT_DISTANCE;
+      if (observedCombatTargetId !== combatTarget.combatId) {
+        observedCombatTargetId = combatTarget.combatId;
+        observedEnemyDistance = enemyDistance;
+        observedFightDistance = fightDistance;
+        distanceObservationElapsed = 0.16 + ((group.id * 37) % 17) / 100;
+        distanceObservationCount = 0;
+      } else {
+        distanceObservationElapsed -= delta;
+        if (distanceObservationElapsed <= 0) {
+          observedEnemyDistance = enemyDistance;
+          observedFightDistance = fightDistance;
+          distanceObservationCount += 1;
+          const variation = ((group.id * 37 + distanceObservationCount * 61) % 100) / 100;
+          distanceObservationElapsed = 0.18 + variation * 0.24;
+        }
+      }
       combatDirection.set(
         combatTarget.group.position.x - group.position.x, 0,
         combatTarget.group.position.z - group.position.z,
       ).normalize();
       const movementIntent = combatCue?.movement ?? "hold";
-      if (enemyDistance > FIGHT_DISTANCE + 0.45 || movementIntent === "close") {
+      const wantsToClose = movementIntent === "close" &&
+        enemyDistance > observedFightDistance - COMBAT_DISTANCE_DEAD_ZONE;
+      const wantsToRetreat = movementIntent === "retreat" &&
+        enemyDistance < observedFightDistance + COMBAT_DISTANCE_DEAD_ZONE;
+      if (observedEnemyDistance > observedFightDistance + COMBAT_DISTANCE_DEAD_ZONE || wantsToClose) {
         movement.copy(combatDirection);
         moving = true;
-      } else if (enemyDistance < FIGHT_DISTANCE - 0.28 || movementIntent === "retreat") {
+      } else if (observedEnemyDistance < observedFightDistance - COMBAT_DISTANCE_DEAD_ZONE || wantsToRetreat) {
         movement.copy(combatDirection).multiplyScalar(-1);
         moving = true;
       } else if (movementIntent === "angle-left" || movementIntent === "angle-right") {
@@ -770,7 +797,13 @@ export function createRigwalker(
       }
       travelSpeed = COMBAT_SHUFFLE_SPEED;
       desiredMovement.copy(movement);
-    } else if (destination) {
+    } else {
+      observedCombatTargetId = null;
+      observedEnemyDistance = Number.POSITIVE_INFINITY;
+      observedFightDistance = DEFAULT_FIGHT_DISTANCE;
+    }
+
+    if (!combatTarget && destination) {
       movement.set(
         destination.x - group.position.x,
         0,

@@ -131,6 +131,18 @@ describe("CombatDirector", () => {
     for (let seed = 1; seed <= 40; seed += 1) expect(simulate(seed).blockedDamage).toBe(0);
   });
 
+  it("varies the preferred distance between exchanges while keeping attacks in reach", () => {
+    const distances = new Set<number>();
+    for (let seed = 1; seed <= 32; seed += 1) {
+      for (const cue of simulate(seed).cues) {
+        distances.add(Math.round(cue.preferredDistance * 100));
+        expect(cue.preferredDistance).toBeGreaterThanOrEqual(2.15);
+        expect(cue.preferredDistance).toBeLessThanOrEqual(3.15);
+      }
+    }
+    expect(distances.size).toBeGreaterThan(20);
+  });
+
   it("creates all persistent temperaments with distinct dominant traits", () => {
     const temperamentRandom = seededRandom(1000);
     const profiles = Array.from({ length: 256 }, () =>
