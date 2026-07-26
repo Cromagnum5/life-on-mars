@@ -3,6 +3,7 @@ import {
   CombatDirector,
   createCombatProfile,
   type CombatCue,
+  type CombatEvent,
   type CombatantSnapshot,
 } from "./combat";
 
@@ -36,27 +37,33 @@ function simulate(seed: number): {
   seconds: number;
   blockedDamage: number;
   cues: CombatCue[];
+  events: CombatEvent[];
+  damageCount: number;
 } {
   const random = seededRandom(seed);
   const director = new CombatDirector(random);
   const fighters = [fighter(1, "A", 0, random), fighter(2, "B", 2.7, random)];
   const cues: CombatCue[] = [];
+  const events: CombatEvent[] = [];
   let blockedDamage = 0;
+  let damageCount = 0;
   let seconds = 0;
   while (fighters.filter((item) => item.isAlive).length > 1 && seconds < 120) {
     const frame = director.update(1 / 30, fighters);
     for (const cue of frame.cues.values()) {
       if (cue.targetId !== null) cues.push(cue);
     }
+    events.push(...frame.events);
     for (const event of frame.damage) {
       const target = fighters.find((item) => item.id === event.targetId)!;
       if (frame.cues.get(target.id)?.outcome === "blocked") blockedDamage += event.amount;
       target.health = Math.max(0, target.health - event.amount);
       target.isAlive = target.health > 0;
+      damageCount += 1;
     }
     seconds += 1 / 30;
   }
-  return { seconds, blockedDamage, cues };
+  return { seconds, blockedDamage, cues, events, damageCount };
 }
 
 describe("CombatDirector", () => {
@@ -261,6 +268,73 @@ describe("CombatDirector", () => {
       expect(new Set(fighters.filter((item) => item.isAlive).map((item) => item.corporation)).size)
         .toBeLessThanOrEqual(1);
     }
+  });
+
+  it("announces every swing exactly once so effects never double-fire", () => {
+    const contactTypes = new Set(["block", "glance", "hit", "whiff"]);
+    for (let seed = 1; seed <= 48; seed += 1) {
+      const { events } = simulate(seed);
+      const swings = events.filter((event) => event.type === "swing").length;
+      const contacts = events.filter((event) => contactTypes.has(event.type)).length;
+      expect(swings).toBeGreaterThan(0);
+      // Every resolution follows a swing; the duel can end mid-swing, so the
+      // sole permitted surplus is the final unresolved one.
+      expect(swings - contacts).toBeGreaterThanOrEqual(0);
+      expect(swings - contacts).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("emits one damaging event per damage entry", () => {
+    for (let seed = 1; seed <= 48; seed += 1) {
+      const { events, damageCount } = simulate(seed);
+      const damaging = events.filter(
+        (event) => event.type === "hit" || event.type === "glance",
+      ).length;
+      expect(damaging - damageCount).toBeGreaterThanOrEqual(0);
+      expect(damaging - damageCount).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("reports every combat event type across seeded duels", () => {
+    const seen = new Set<string>();
+    for (let seed = 1; seed <= 220; seed += 1) {
+      for (const event of simulate(seed).events) seen.add(event.type);
+    }
+    expect([...seen].sort()).toEqual(
+      ["block", "glance", "hit", "riposte", "swing", "whiff"],
+    );
+  });
+
+  it("gives feints a false line that differs from the delivered one", () => {
+    let sawFeint = false;
+    for (let seed = 1; seed <= 120; seed += 1) {
+      for (const cue of simulate(seed).cues) {
+        if (cue.strategy === "feint") {
+          sawFeint = true;
+          expect(cue.feintLine).not.toBeNull();
+          expect(cue.feintLine).not.toBe(cue.line);
+        } else {
+          expect(cue.feintLine).toBeNull();
+        }
+      }
+    }
+    expect(sawFeint).toBe(true);
+  });
+
+  it("follows a riposte announcement with a riposte attack from the defender", () => {
+    let checked = 0;
+    for (let seed = 1; seed <= 120; seed += 1) {
+      const { events } = simulate(seed);
+      events.forEach((event, index) => {
+        if (event.type !== "riposte") return;
+        const nextSwing = events.slice(index + 1).find((item) => item.type === "swing");
+        if (!nextSwing) return;
+        expect(nextSwing.strategy).toBe("riposte");
+        expect(nextSwing.attackerId).toBe(event.attackerId);
+        checked += 1;
+      });
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 
   it("exposes only cut-and-block action vocabulary", () => {

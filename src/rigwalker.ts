@@ -6,6 +6,7 @@ import {
   type AttackLine,
   type CombatCue,
   type CombatProfile,
+  type CombatStrategy,
 } from "./combat";
 
 export type Rigwalker = {
@@ -15,9 +16,18 @@ export type Rigwalker = {
   combatProfile: CombatProfile;
   health: number;
   maxHealth: number;
-  attack: number;
   isAlive: boolean;
+  /** The plan currently being executed, for HUD readout. Null when idle. */
+  strategy: CombatStrategy | null;
   canRemove: boolean;
+  /** True while a swing is in flight, so the blade is worth trailing. */
+  isSwinging: boolean;
+  /** World-space point on the blade where a strike lands. */
+  getContactPoint: (out: THREE.Vector3) => THREE.Vector3;
+  /** World-space direction the blade is travelling this frame. */
+  getBladeVelocity: (out: THREE.Vector3) => THREE.Vector3;
+  /** Writes the blade's hilt and tip in world space; false when it has no weapon. */
+  sampleBlade: (hilt: THREE.Vector3, tip: THREE.Vector3) => boolean;
   applyCombatDamage: (damage: number, side: -1 | 1) => void;
   moveTo: (destination: THREE.Vector3) => void;
   setSelected: (selected: boolean) => void;
@@ -43,12 +53,12 @@ const SEPARATION_RADIUS = 1.25;
 const OBSTACLE_LOOKAHEAD = 1.4;
 const WALK_CYCLE_SPEED = 8.4;
 const MAX_HEALTH = 100;
-const ATTACK_DAMAGE = 24;
 const DEFAULT_FIGHT_DISTANCE = 2.65;
 const COMBAT_DISTANCE_DEAD_ZONE = 0.16;
-const ATTACK_DURATION = 1.05;
 const COMBAT_SHUFFLE_SPEED = 2.25;
 const WALK_ANIMATION_SPEED = 1.72;
+/** Fraction of an attack during which a feint shows its false line. */
+const FEINT_REVEAL_PHASE = 0.3;
 
 type CombatBones = {
   root: THREE.Bone;
@@ -83,10 +93,6 @@ type CombatLineMotion = {
   hitPitch: number;
   hitRoll: number;
 };
-
-const ATTACK_VARIANT_LINES: readonly AttackLine[] = [
-  "overhead", "forehand", "backhand", "flank", "rising",
-];
 
 const COMBAT_LINE_MOTION: Record<AttackLine, CombatLineMotion> = {
   overhead: { attackSide: 1, guardLift: 1, guardCross: 0.25, hitPitch: 0.22, hitRoll: 0 },
@@ -172,18 +178,36 @@ function applyBalancePose(bones: CombatBones, pose: BalancePose, inCombat: boole
   addBoneOffset(bones.footR, -crouch * 1.15 - rightStep * 0.2, 0, stance * 0.8);
 }
 
-function applyCombatPose(
-  bones: CombatBones, attackPhase: number, attackVariant: number,
-  defensePhase: number, defenseSide: number, hitPhase: number, line: AttackLine,
-  intensity: number, deflected: boolean, combatStep: number,
-): void {
+/**
+ * Phases are normalized 0..1 progress through their own beat, or -1 when that
+ * beat is not running. They come straight from the director's cue, so the
+ * pose stays in step with a swing whose real duration varies by strategy.
+ */
+type CombatPoseInput = {
+  attackPhase: number;
+  /** The line the body is currently selling, which a feint changes mid-swing. */
+  presentedLine: AttackLine;
+  defensePhase: number;
+  defenseSide: number;
+  hitPhase: number;
+  /** The line being received, used for guard and hit-reaction shaping. */
+  line: AttackLine;
+  intensity: number;
+  deflected: boolean;
+  combatStep: number;
+};
+
+function applyCombatPose(bones: CombatBones, input: CombatPoseInput): void {
+  const {
+    attackPhase, presentedLine, defensePhase, defenseSide, hitPhase,
+    line, intensity, deflected, combatStep,
+  } = input;
   const attacking = attackPhase >= 0;
   const winding = attacking ? smoothRange(attackPhase, 0, 0.28) * (1 - smoothRange(attackPhase, 0.28, 0.58)) : 0;
   const cutting = attacking ? smoothRange(attackPhase, 0.28, 0.56) * (1 - smoothRange(attackPhase, 0.68, 1)) : 0;
   const impact = attacking ? smoothRange(attackPhase, 0.38, 0.54) * (1 - smoothRange(attackPhase, 0.62, 0.82)) : 0;
   const followThrough = attacking ? smoothRange(attackPhase, 0.54, 0.7) * (1 - smoothRange(attackPhase, 0.82, 1)) : 0;
-  const presentedLine = attacking ? ATTACK_VARIANT_LINES[attackVariant] ?? line : line;
-  const lineMotion = COMBAT_LINE_MOTION[presentedLine];
+  const lineMotion = COMBAT_LINE_MOTION[attacking ? presentedLine : line];
   const attackSide = lineMotion.attackSide;
   const guarding = defensePhase >= 0 ? smoothRange(defensePhase, 0, 0.22) * (1 - smoothRange(defensePhase, 0.68, 1)) : 0;
   const hitShock = hitPhase >= 0 ? Math.sin(Math.min(1, hitPhase) * Math.PI) * intensity : 0;
@@ -547,14 +571,6 @@ export function createRigwalker(
   healthBar.add(healthBack, healthFill);
   group.add(healthBar);
 
-  const impactMaterial = new THREE.MeshBasicMaterial({
-    color: 0xffd28a, transparent: true, opacity: 0, depthWrite: false,
-  });
-  const impactFlash = new THREE.Mesh(new THREE.IcosahedronGeometry(0.18, 1), impactMaterial);
-  impactFlash.position.set(0, 2.75, 0.72);
-  impactFlash.visible = false;
-  group.add(impactFlash);
-
   const pipePivot = new THREE.Group();
   pipePivot.name = "Rigwalker weapon pivot";
   const pipe = new THREE.Mesh(
@@ -613,15 +629,36 @@ export function createRigwalker(
     }
   }
 
+  // Locate the blade's two ends from geometry rather than assuming an axis:
+  // the Blender cylinder is authored along local Z, but the glTF Z-up to Y-up
+  // conversion moves it, so we read the bounding box and let the body decide
+  // which end is the tip.
+  const bladeEndA = new THREE.Vector3();
+  const bladeEndB = new THREE.Vector3();
+  let bladeEndsFound = false;
+  if (weaponVisual instanceof THREE.Mesh) {
+    const geometry = weaponVisual.geometry as THREE.BufferGeometry;
+    geometry.computeBoundingBox();
+    const box = geometry.boundingBox;
+    if (box) {
+      const size = box.getSize(new THREE.Vector3());
+      const axis: "x" | "y" | "z" =
+        size.x >= size.y && size.x >= size.z ? "x" : size.y >= size.z ? "y" : "z";
+      box.getCenter(bladeEndA);
+      bladeEndB.copy(bladeEndA);
+      bladeEndA[axis] = box.min[axis];
+      bladeEndB[axis] = box.max[axis];
+      bladeEndsFound = true;
+    }
+  }
+
   let destination: THREE.Vector3 | null = null;
   let health = MAX_HEALTH;
   const combatProfile = createCombatProfile();
   let combatTarget: Rigwalker | null = null;
-  let attackElapsed = -1;
-  let attackVariant = 0;
-  let defenseElapsed = -1;
+  let activeStrategy: CombatStrategy | null = null;
+  let swinging = false;
   let defenseSide = 1;
-  let hitReactionElapsed = -1;
   let hitReactionSide: -1 | 1 = 1;
   let defeatElapsed = -1;
   const defeatStartRotation = new THREE.Quaternion();
@@ -648,6 +685,43 @@ export function createRigwalker(
   const worldVelocity = new THREE.Vector3();
   const localVelocity = new THREE.Vector3();
   const inverseFacing = new THREE.Quaternion();
+  const bladeEndScratch = new THREE.Vector3();
+  const bladeTipScratch = new THREE.Vector3();
+  const hiltScratch = new THREE.Vector3();
+  const tipScratch = new THREE.Vector3();
+  const contactScratch = new THREE.Vector3();
+  const previousContact = new THREE.Vector3();
+  const bladeVelocity = new THREE.Vector3();
+  let hasPreviousContact = false;
+
+  function sampleBlade(hilt: THREE.Vector3, tip: THREE.Vector3): boolean {
+    if (!weaponVisual || !bladeEndsFound) return false;
+    weaponVisual.updateWorldMatrix(true, false);
+    bladeEndScratch.copy(bladeEndA).applyMatrix4(weaponVisual.matrixWorld);
+    bladeTipScratch.copy(bladeEndB).applyMatrix4(weaponVisual.matrixWorld);
+    // Whichever end sits farther from the body is the tip; the bounding box
+    // alone cannot say which way the blade points.
+    const aIsTip = bladeEndScratch.distanceToSquared(group.position) >
+      bladeTipScratch.distanceToSquared(group.position);
+    hilt.copy(aIsTip ? bladeTipScratch : bladeEndScratch);
+    tip.copy(aIsTip ? bladeEndScratch : bladeTipScratch);
+    return true;
+  }
+
+  /**
+   * Strikes land around the percussion point, not the very tip, so sparks fly
+   * from where the blade would actually bite.
+   */
+  function getContactPoint(out: THREE.Vector3): THREE.Vector3 {
+    if (sampleBlade(hiltScratch, tipScratch)) {
+      return out.copy(hiltScratch).lerp(tipScratch, 0.72);
+    }
+    return out.set(0, 2.4, 1.05).applyQuaternion(group.quaternion).add(group.position);
+  }
+
+  function getBladeVelocity(out: THREE.Vector3): THREE.Vector3 {
+    return out.copy(bladeVelocity);
+  }
 
   function moveTo(nextDestination: THREE.Vector3): void {
     destination = nextDestination.clone();
@@ -658,9 +732,59 @@ export function createRigwalker(
     selectionRing.visible = selected;
   }
 
+  /** Swings the primitive fallback's pipe, which has no skeleton to drive it. */
+  function poseFallbackWeapon(
+    attackPhase: number,
+    defensePhase: number,
+    beatPreparation: boolean,
+    presentedLine: AttackLine,
+  ): void {
+    if (!combatTarget) {
+      pipePivot.position.set(0.52, 1.45, -0.42);
+      pipePivot.rotation.set(0.12, 0, 0.2);
+      return;
+    }
+
+    pipePivot.position.set(0.72, 1.65, 0.28);
+    if (attackPhase < 0) {
+      if (defensePhase >= 0) {
+        const guard = Math.sin(defensePhase * Math.PI);
+        pipePivot.rotation.set(1.22, defenseSide * 0.62, -0.48 + defenseSide * guard * 0.68);
+      } else {
+        pipePivot.rotation.set(0.65, 0.1, -0.9);
+      }
+      return;
+    }
+
+    const strike = Math.sin(attackPhase * Math.PI);
+    const swing = smoothRange(attackPhase, 0.14, 0.64);
+    if (beatPreparation) {
+      const beat = Math.sin((attackPhase / 0.35) * Math.PI);
+      pipePivot.rotation.set(1.05, defenseSide * (0.45 + beat * 0.5), -0.3);
+      return;
+    }
+    switch (presentedLine) {
+      case "overhead":
+        pipePivot.rotation.set(1.35 - swing * 0.78, 0.1, -1.15 + swing * 1.75);
+        break;
+      case "forehand":
+        pipePivot.rotation.set(1.15 - swing * 0.62, -0.9 + swing * 1.8, 0.9 - swing * 1.55);
+        break;
+      case "backhand":
+        pipePivot.rotation.set(0.82 - strike * 0.22, -1.3 + swing * 2.6, -0.58);
+        break;
+      case "flank":
+        pipePivot.rotation.set(0.45, 1.3 - swing * 2.6, -0.35 + strike * 0.3);
+        break;
+      default:
+        pipePivot.rotation.set(1.45 - swing * 1.15, -0.55 + swing * 1.1, 0.55);
+    }
+  }
+
   function applyCombatDamage(damage: number, side: -1 | 1): void {
     if (health <= 0) return;
-    hitReactionElapsed = 0;
+    // The visible reaction is driven by the cue each frame; this only records
+    // the impulse the balance controller needs and the side to topple toward.
     hitReactionSide = side;
     pendingBalanceImpactX += side * Math.min(0.38, 0.16 + damage / MAX_HEALTH * 0.55);
     pendingBalanceImpactZ -= Math.min(0.24, damage / MAX_HEALTH * 0.4);
@@ -704,24 +828,17 @@ export function createRigwalker(
       return;
     }
 
-    const contactPulse = combatCue &&
-      (combatCue.action === "block" || combatCue.action === "hit") &&
-      combatCue.phase >= 0.48 && combatCue.phase <= 0.68;
-    impactFlash.visible = Boolean(contactPulse);
-    impactMaterial.opacity = contactPulse ? Math.sin((combatCue!.phase - 0.48) / 0.2 * Math.PI) * 0.9 : 0;
-    impactFlash.scale.setScalar(0.75 + (combatCue?.intensity ?? 0) * 1.4);
-
-    attackElapsed = combatCue?.action === "attack" ? combatCue.phase * ATTACK_DURATION : -1;
-    attackVariant = combatCue?.variant ?? attackVariant;
-    const presentedAttackVariant = combatCue?.strategy === "feint" && attackElapsed >= 0 &&
-      attackElapsed / ATTACK_DURATION < 0.3 ? (attackVariant + 2) % 5 : attackVariant;
+    const attackPhase = combatCue?.action === "attack" ? combatCue.phase : -1;
+    const line = combatCue?.line ?? "overhead";
+    const presentedLine = combatCue?.feintLine && attackPhase >= 0 &&
+      attackPhase < FEINT_REVEAL_PHASE ? combatCue.feintLine : line;
     const beatPreparation = combatCue?.strategy === "beat" && combatCue.action === "attack" &&
       combatCue.phase < 0.35;
-    defenseElapsed = combatCue?.action === "block" || combatCue?.action === "size-up"
-      ? combatCue.phase * ATTACK_DURATION
-      : beatPreparation ? (combatCue!.phase / 0.35) * ATTACK_DURATION : -1;
+    const defensePhase = combatCue?.action === "block" || combatCue?.action === "size-up"
+      ? combatCue.phase
+      : beatPreparation ? combatCue!.phase / 0.35 : -1;
     defenseSide = combatCue?.side ?? defenseSide;
-    hitReactionElapsed = combatCue?.action === "hit" ? combatCue.phase * 0.42 : -1;
+    const hitPhase = combatCue?.action === "hit" ? combatCue.phase : -1;
 
     let moving = false;
     let travelSpeed = 0;
@@ -757,11 +874,10 @@ export function createRigwalker(
       : nearbyUnits.find((other) => other.combatId === combatCue.targetId && other.isAlive) ?? null;
 
     const inCombat = combatTarget !== null;
-    if (!inCombat) {
-      attackElapsed = -1;
-      defenseElapsed = -1;
-      hitReactionElapsed = -1;
-      if (wasInCombat && combatBones) resetCombatPose(combatBones);
+    activeStrategy = inCombat ? combatCue?.strategy ?? null : null;
+    swinging = inCombat && attackPhase >= 0;
+    if (!inCombat && wasInCombat && combatBones) {
+      resetCombatPose(combatBones);
     }
     wasInCombat = inCombat;
     if (weaponVisual) weaponVisual.visible = inCombat;
@@ -905,36 +1021,11 @@ export function createRigwalker(
       group.quaternion.slerp(targetRotation, 1 - Math.exp(-10 * delta));
     }
 
-    if (attackElapsed >= 0 && combatTarget) {
-      const phase = Math.min(1, attackElapsed / ATTACK_DURATION);
-      const strike = Math.sin(phase * Math.PI);
-      const swing = smoothRange(phase, 0.14, 0.64);
-      pipePivot.position.set(0.72, 1.65, 0.28);
-      if (beatPreparation) {
-        const beat = Math.sin(phase / 0.35 * Math.PI);
-        pipePivot.rotation.set(1.05, defenseSide * (0.45 + beat * 0.5), -0.3);
-      } else if (presentedAttackVariant === 0) {
-        pipePivot.rotation.set(1.35 - swing * 0.78, 0.1, -1.15 + swing * 1.75);
-      } else if (presentedAttackVariant === 1) {
-        pipePivot.rotation.set(1.15 - swing * 0.62, -0.9 + swing * 1.8, 0.9 - swing * 1.55);
-      } else if (presentedAttackVariant === 2) {
-        pipePivot.rotation.set(0.82 - strike * 0.22, -1.3 + swing * 2.6, -0.58);
-      } else if (presentedAttackVariant === 3) {
-        pipePivot.rotation.set(0.45, 1.3 - swing * 2.6, -0.35 + strike * 0.3);
-      } else {
-        pipePivot.rotation.set(1.45 - swing * 1.15, -0.55 + swing * 1.1, 0.55);
-      }
-    } else if (combatTarget) {
-      pipePivot.position.set(0.72, 1.65, 0.28);
-      if (defenseElapsed >= 0) {
-        const guard = Math.sin(Math.min(1, defenseElapsed / ATTACK_DURATION) * Math.PI);
-        pipePivot.rotation.set(1.22, defenseSide * 0.62, -0.48 + defenseSide * guard * 0.68);
-      } else {
-        pipePivot.rotation.set(0.65, 0.1, -0.9);
-      }
-    } else {
-      pipePivot.position.set(0.52, 1.45, -0.42);
-      pipePivot.rotation.set(0.12, 0, 0.2);
+    // Only the primitive fallback shows this pipe. The Blender model carries a
+    // Broadsword bone-parented to hand.R, which inherits the wrist chain from
+    // applyCombatPose and needs no separate choreography.
+    if (pipePivot.visible) {
+      poseFallbackWeapon(attackPhase, defensePhase, beatPreparation, presentedLine);
     }
 
     group.position.y = THREE.MathUtils.damp(
@@ -948,10 +1039,9 @@ export function createRigwalker(
     if (delta > 0) worldVelocity.divideScalar(delta);
     inverseFacing.copy(group.quaternion).invert();
     localVelocity.copy(worldVelocity).applyQuaternion(inverseFacing);
-    const balanceAttackPhase = attackElapsed >= 0 ? Math.min(1, attackElapsed / ATTACK_DURATION) : -1;
-    const attackLine = COMBAT_LINE_MOTION[combatCue?.line ?? "overhead"];
-    const strikeLoad = balanceAttackPhase >= 0
-      ? Math.sin(balanceAttackPhase * Math.PI) * (combatCue?.intensity ?? 0.72)
+    const attackLine = COMBAT_LINE_MOTION[line];
+    const strikeLoad = attackPhase >= 0
+      ? Math.sin(attackPhase * Math.PI) * (combatCue?.intensity ?? 0.72)
       : 0;
     const balancePose = balance.update({
       delta,
@@ -980,20 +1070,35 @@ export function createRigwalker(
       }
       mixer.update(delta);
       if (combatBones && combatTarget) {
-        applyCombatPose(
-          combatBones,
-          attackElapsed >= 0 ? Math.min(1, attackElapsed / ATTACK_DURATION) : -1,
-          presentedAttackVariant,
-          defenseElapsed >= 0 ? Math.min(1, defenseElapsed / ATTACK_DURATION) : -1,
+        applyCombatPose(combatBones, {
+          attackPhase,
+          presentedLine,
+          defensePhase,
           defenseSide,
-          hitReactionElapsed >= 0 ? Math.min(1, hitReactionElapsed / 0.42) : -1,
-          combatCue?.line ?? "overhead",
-          combatCue?.intensity ?? 0.72,
-          combatCue?.action === "attack" && combatCue.outcome === "blocked",
-          moving ? Math.sin(elapsed * 5.8 + group.id * 0.7) * 0.24 : 0,
-        );
+          hitPhase,
+          line,
+          intensity: combatCue?.intensity ?? 0.72,
+          deflected: combatCue?.action === "attack" && combatCue.outcome === "blocked",
+          combatStep: moving ? Math.sin(elapsed * 5.8 + group.id * 0.7) * 0.24 : 0,
+        });
       }
       if (combatBones) applyBalancePose(combatBones, balancePose, inCombat);
+    }
+
+    // Sampled after the pose is applied so the direction reflects this frame's
+    // arc. Effects use it to trail the shower along the cut.
+    if (inCombat) {
+      getContactPoint(contactScratch);
+      if (hasPreviousContact && delta > 0) {
+        bladeVelocity.copy(contactScratch).sub(previousContact).divideScalar(delta);
+      } else {
+        bladeVelocity.set(0, 0, 0);
+      }
+      previousContact.copy(contactScratch);
+      hasPreviousContact = true;
+    } else {
+      hasPreviousContact = false;
+      bladeVelocity.set(0, 0, 0);
     }
   }
 
@@ -1004,9 +1109,13 @@ export function createRigwalker(
     combatProfile,
     get health() { return health; },
     maxHealth: MAX_HEALTH,
-    attack: ATTACK_DAMAGE,
     get isAlive() { return health > 0; },
+    get strategy() { return activeStrategy; },
     get canRemove() { return defeatElapsed >= 2.5; },
+    get isSwinging() { return swinging; },
+    getContactPoint,
+    getBladeVelocity,
+    sampleBlade,
     applyCombatDamage,
     moveTo,
     setSelected,

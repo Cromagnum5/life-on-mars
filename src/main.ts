@@ -5,7 +5,9 @@ import {
   createBuildings,
 } from "./buildings";
 import { MovementMarkers } from "./feedback";
-import { CombatDirector } from "./combat";
+import { CombatAudio } from "./audio";
+import { CombatDirector, type CombatEvent } from "./combat";
+import { CombatEffects } from "./effects";
 import { AssemblyBayProduction } from "./production";
 import { createRigwalker } from "./rigwalker";
 import { loadRigwalkerAsset } from "./rigwalker-assets";
@@ -181,6 +183,9 @@ const productions = corporateBases.map((base) =>
   ),
 );
 const combatDirector = new CombatDirector();
+const combatEffects = new CombatEffects(scene);
+const combatAudio = new CombatAudio();
+combatAudio.installUnlockHandlers();
 const movementMarkers = new MovementMarkers(scene);
 const rallyMarkers = corporateBases.map((base) => {
   const marker = new THREE.Mesh(
@@ -475,6 +480,24 @@ function updateCamera(delta: number): void {
   camera.lookAt(cameraTarget);
 }
 
+const STRATEGY_LABELS: Record<string, string> = {
+  rush: "Rushing",
+  react: "Waiting to counter",
+  "size-up": "Sizing up",
+  feint: "Feinting",
+  "distance-trap": "Baiting range",
+  beat: "Beating the guard",
+  riposte: "Riposting",
+};
+
+/** Surfaces the fighter's persistent temperament and its current plan. */
+function describeRigwalker(unit: (typeof units)[number]): string {
+  const temperament = unit.combatProfile.temperament;
+  const readable = temperament[0].toUpperCase() + temperament.slice(1);
+  const plan = unit.strategy ? ` · ${STRATEGY_LABELS[unit.strategy] ?? unit.strategy}` : "";
+  return `Rigwalker · ${Math.ceil(unit.health)} HP · ${readable}${plan}`;
+}
+
 function updateHud(elapsed: number): void {
   const productionStatuses = productions.map((item) => item.getStatus());
   const deploying = productionStatuses.some((status) => status.label === "Deploying");
@@ -493,8 +516,74 @@ function updateHud(elapsed: number): void {
       : selectedRigwalkers.length === 0
         ? "None"
       : selectedRigwalkers.length === 1
-        ? `Rigwalker · ${Math.ceil(selectedRigwalkers[0].health)} HP · ${selectedRigwalkers[0].attack} ATK`
+        ? describeRigwalker(selectedRigwalkers[0])
         : `${selectedRigwalkers.length} Rigwalkers`;
+}
+
+const accentByCorporation = new Map(
+  corporateBases.map((base) => [base.corporation, base.accent]),
+);
+const cameraRight = new THREE.Vector3();
+const cameraUp = new THREE.Vector3();
+const cameraForward = new THREE.Vector3();
+const contactPoint = new THREE.Vector3();
+const bladeDirection = new THREE.Vector3();
+const trailHilt = new THREE.Vector3();
+const trailTip = new THREE.Vector3();
+const defeated = new Set<number>();
+
+// Contacts are what the player needs to hear. Swings are atmosphere, so they
+// yield to a clang when a crowded frame exceeds the voice budget.
+const EVENT_AUDIO_PRIORITY: Record<CombatEvent["type"], number> = {
+  hit: 0, block: 1, glance: 2, riposte: 3, whiff: 4, swing: 5,
+};
+
+/**
+ * Turns the director's discrete events into sparks and sound at the place the
+ * blade actually is, so a block reads differently from a landed cut.
+ */
+function presentCombatEvents(
+  events: readonly CombatEvent[],
+  byId: Map<number, (typeof units)[number]>,
+): void {
+  const ordered = [...events].sort(
+    (left, right) => EVENT_AUDIO_PRIORITY[left.type] - EVENT_AUDIO_PRIORITY[right.type],
+  );
+  for (const event of ordered) {
+    const attacker = byId.get(event.attackerId);
+    if (!attacker) continue;
+    attacker.getContactPoint(contactPoint);
+    attacker.getBladeVelocity(bladeDirection);
+    if (bladeDirection.lengthSq() < 0.0001) {
+      bladeDirection.set(0, 0.4, 0);
+    }
+    bladeDirection.normalize();
+    combatAudio.play(event.type, contactPoint.x, contactPoint.z, event.intensity);
+
+    switch (event.type) {
+      case "block":
+        // A parry throws the brightest, widest shower: it is the moment most
+        // worth noticing, and nothing else in the fight looks like it.
+        combatEffects.sparkBurst(contactPoint, bladeDirection, 26, 7.5, 0xdbe7ff, 1.15);
+        combatEffects.flash(contactPoint, 1.5, 0xcfe0ff);
+        break;
+      case "glance":
+        combatEffects.sparkBurst(contactPoint, bladeDirection, 12, 5.5, 0xffcf95, 0.85);
+        combatEffects.flash(contactPoint, 0.85, 0xffc98a);
+        break;
+      case "hit":
+        combatEffects.sparkBurst(contactPoint, bladeDirection, 18, 4.4, 0xffa060, 0.7);
+        combatEffects.flash(contactPoint, 1.25, 0xffb066);
+        break;
+      case "riposte":
+        // Telegraph the counter under the fighter turning it around.
+        combatEffects.ring(
+          attacker.group.position, 2.1,
+          accentByCorporation.get(attacker.corporation) ?? 0xffb35d, 0.55,
+        );
+        break;
+    }
+  }
 }
 
 const clock = new THREE.Clock();
@@ -502,6 +591,14 @@ const clock = new THREE.Clock();
 function animate(): void {
   const delta = Math.min(clock.getDelta(), 0.05);
   updateCamera(delta);
+  combatAudio.beginFrame();
+  camera.updateMatrixWorld();
+  camera.matrixWorld.extractBasis(cameraRight, cameraUp, cameraForward);
+  combatAudio.setListener(
+    cameraTarget.x, cameraTarget.z,
+    cameraRight.x, cameraRight.z,
+    (camera.top - camera.bottom) / camera.zoom,
+  );
   for (const production of productions) {
     production.update(delta);
   }
@@ -514,9 +611,22 @@ function animate(): void {
       x: unit.group.position.x, z: unit.group.position.z, profile: unit.combatProfile,
     })),
   );
+  const unitsById = new Map(units.map((unit) => [unit.combatId, unit]));
+  presentCombatEvents(combatFrame.events, unitsById);
   for (const event of combatFrame.damage) {
-    units.find((unit) => unit.combatId === event.targetId)
-      ?.applyCombatDamage(event.amount, event.side);
+    unitsById.get(event.targetId)?.applyCombatDamage(event.amount, event.side);
+  }
+  for (const unit of units) {
+    if (unit.isAlive || defeated.has(unit.combatId)) continue;
+    defeated.add(unit.combatId);
+    combatAudio.play("defeat", unit.group.position.x, unit.group.position.z, 1);
+    combatEffects.flash(
+      unit.group.position.clone().setY(unit.group.position.y + 2.2), 2.4, 0xff8a4c,
+    );
+    combatEffects.ring(
+      unit.group.position, 3.2,
+      accentByCorporation.get(unit.corporation) ?? 0xffb35d, 0.9,
+    );
   }
   for (const unit of [...units]) {
     unit.update(
@@ -529,9 +639,20 @@ function animate(): void {
       combatFrame.cues.get(unit.combatId),
     );
   }
+  // Fed after unit.update so the ribbon samples this frame's pose. A trail
+  // that stops being fed fades itself out and releases its pool slot.
+  for (const unit of units) {
+    if (!unit.isSwinging || !unit.sampleBlade(trailHilt, trailTip)) continue;
+    combatEffects.trail(
+      unit.combatId, trailHilt, trailTip,
+      accentByCorporation.get(unit.corporation) ?? 0xffb35d,
+    );
+  }
+  combatEffects.update(delta, camera, renderer.domElement.height);
   for (let index = units.length - 1; index >= 0; index -= 1) {
     if (units[index].canRemove) {
       units[index].group.removeFromParent();
+      defeated.delete(units[index].combatId);
       units.splice(index, 1);
     }
   }

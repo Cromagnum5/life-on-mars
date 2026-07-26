@@ -32,7 +32,8 @@ export type CombatCue = {
   phase: number;
   strategy: CombatStrategy | null;
   line: AttackLine;
-  variant: number;
+  /** The line a feint shows before switching to `line`; null when honest. */
+  feintLine: AttackLine | null;
   side: -1 | 1;
   intensity: number;
   outcome: CombatOutcome;
@@ -50,9 +51,27 @@ export type CombatantSnapshot = {
   profile: CombatProfile;
 };
 
+/**
+ * A discrete moment worth seeing or hearing. Presentation reads these instead
+ * of edge-detecting per-frame cues, so a swing that starts and resolves inside
+ * one frame still produces exactly one spark and one sound.
+ */
+export type CombatEventType = "swing" | "block" | "glance" | "hit" | "whiff" | "riposte";
+
+export type CombatEvent = {
+  type: CombatEventType;
+  attackerId: number;
+  defenderId: number;
+  line: AttackLine;
+  strategy: CombatStrategy;
+  side: -1 | 1;
+  intensity: number;
+};
+
 export type CombatFrame = {
   cues: Map<number, CombatCue>;
   damage: Array<{ targetId: number; amount: number; outcome: "glancing" | "hit"; side: -1 | 1 }>;
+  events: CombatEvent[];
 };
 
 type Memory = {
@@ -74,7 +93,7 @@ type Exchange = {
   defenderId: number;
   strategy: CombatStrategy;
   line: AttackLine;
-  variant: number;
+  feintLine: AttackLine | null;
   side: -1 | 1;
   measureDuration: number;
   attackDuration: number;
@@ -82,6 +101,7 @@ type Exchange = {
   elapsed: number;
   outcome: CombatOutcome;
   damageApplied: boolean;
+  swingAnnounced: boolean;
   chainDepth: number;
   preferredDistance: number;
 };
@@ -94,7 +114,9 @@ type Encounter = {
 };
 
 const AWARENESS_RANGE = 8.5;
-const ATTACK_RANGE = 3.25;
+// Kept clear of MAX_FIGHT_DISTANCE so a pair drifting around its preferred
+// spacing cannot cross the range check and rewind the exchange every frame.
+const ATTACK_RANGE = 3.7;
 const MIN_FIGHT_DISTANCE = 2.15;
 const MAX_FIGHT_DISTANCE = 3.15;
 const MAX_SUPPORTERS_PER_TARGET = 2;
@@ -107,7 +129,7 @@ const EMPTY_CUE: CombatCue = {
   phase: 0,
   strategy: null,
   line: "overhead",
-  variant: 0,
+  feintLine: null,
   side: 1,
   intensity: 0,
   outcome: "pending",
@@ -174,6 +196,7 @@ export class CombatDirector {
     const byId = new Map(living.map((fighter) => [fighter.id, fighter]));
     const cues = new Map<number, CombatCue>();
     const damage: CombatFrame["damage"] = [];
+    const events: CombatEvent[] = [];
     for (const fighter of snapshots) cues.set(fighter.id, { ...EMPTY_CUE });
 
     for (const [key, encounter] of this.encounters) {
@@ -267,10 +290,10 @@ export class CombatDirector {
       const a = byId.get(encounter.a);
       const b = byId.get(encounter.b);
       if (!a || !b) continue;
-      this.advanceEncounter(encounter, a, b, delta, cues, damage);
+      this.advanceEncounter(encounter, a, b, delta, cues, damage, events);
     }
 
-    return { cues, damage };
+    return { cues, damage, events };
   }
 
   private createEncounter(a: CombatantSnapshot, b: CombatantSnapshot): Encounter {
@@ -338,7 +361,12 @@ export class CombatDirector {
       return 1 + p.adaptability * Math.max(0, defenderMemory.exchanges * 0.45 - seen);
     });
     const line = weightedChoice(LINES, lineWeights, this.random);
-    const variant = LINES.indexOf(line);
+    // A feint opens on a line the defender is not about to receive, then
+    // switches. Offsetting by two keeps the shown and delivered lines on
+    // visibly different arcs rather than neighbouring ones.
+    const feintLine = strategy === "feint"
+      ? LINES[(LINES.indexOf(line) + 2) % LINES.length]
+      : null;
     const side: -1 | 1 = line === "backhand" || line === "rising" ? -1 : 1;
     const measureDuration =
       strategy === "rush" ? 0.1 + this.random() * 0.25 :
@@ -361,7 +389,7 @@ export class CombatDirector {
       defenderId: actualDefender.id,
       strategy,
       line,
-      variant,
+      feintLine,
       side,
       measureDuration,
       attackDuration: strategy === "riposte" ? 0.82 : strategy === "rush" ? 0.95 : 1.08,
@@ -369,6 +397,7 @@ export class CombatDirector {
       elapsed: 0,
       outcome: "pending",
       damageApplied: false,
+      swingAnnounced: false,
       chainDepth,
       preferredDistance,
     };
@@ -381,6 +410,7 @@ export class CombatDirector {
     delta: number,
     cues: Map<number, CombatCue>,
     damage: CombatFrame["damage"],
+    events: CombatEvent[],
   ): void {
     const exchange = encounter.exchange;
     const attacker = exchange.attackerId === a.id ? a : b;
@@ -427,8 +457,20 @@ export class CombatDirector {
     const attackElapsed = exchange.elapsed - exchange.measureDuration;
     if (attackElapsed <= exchange.attackDuration) {
       const phase = clamp01(attackElapsed / exchange.attackDuration);
+      if (!exchange.swingAnnounced) {
+        exchange.swingAnnounced = true;
+        events.push(this.event(exchange, "swing"));
+      }
       if (exchange.outcome === "pending" && phase >= 0.46) {
         exchange.outcome = this.resolveOutcome(exchange, attacker, defender);
+        if (exchange.outcome !== "pending") {
+          events.push(this.event(
+            exchange,
+            exchange.outcome === "blocked" ? "block" :
+            exchange.outcome === "glancing" ? "glance" :
+            exchange.outcome === "whiff" ? "whiff" : "hit",
+          ));
+        }
       }
       const defenderAction: CombatAction =
         phase < 0.34 ? "size-up" :
@@ -480,6 +522,9 @@ export class CombatDirector {
     if ((exchange.outcome === "blocked" || exchange.outcome === "whiff") &&
         exchange.chainDepth < 2 && this.random() < (exchange.outcome === "whiff" ? 0.9 : 0.78)) {
       encounter.exchange = this.planExchange(defender, attacker, exchange.chainDepth + 1, "riposte");
+      // The defender just turned a failed attack around: worth announcing so
+      // presentation can telegraph the counter before it lands.
+      events.push(this.event(encounter.exchange, "riposte"));
     } else {
       const nextAttacker =
         exchange.outcome === "hit" && this.random() < 0.58 ? attacker :
@@ -547,13 +592,34 @@ export class CombatDirector {
       phase: clamp01(phase),
       strategy: exchange.strategy,
       line: exchange.line,
-      variant: exchange.variant,
+      feintLine: exchange.feintLine,
       side: exchange.side,
       intensity: action === "hit" && exchange.outcome === "glancing" ? 0.42 :
         action === "block" ? 0.78 :
-        exchange.strategy === "rush" ? 1 : exchange.strategy === "riposte" ? 0.88 : 0.72,
+        this.swingWeight(exchange),
       outcome: exchange.outcome,
       preferredDistance: exchange.preferredDistance,
+    };
+  }
+
+  private swingWeight(exchange: Exchange): number {
+    return exchange.strategy === "rush" ? 1 : exchange.strategy === "riposte" ? 0.88 : 0.72;
+  }
+
+  private event(exchange: Exchange, type: CombatEventType): CombatEvent {
+    return {
+      type,
+      attackerId: exchange.attackerId,
+      defenderId: exchange.defenderId,
+      line: exchange.line,
+      strategy: exchange.strategy,
+      side: exchange.side,
+      intensity:
+        type === "block" ? 0.78 :
+        type === "glance" ? 0.42 :
+        type === "whiff" ? 0.3 :
+        type === "riposte" ? 0.9 :
+        this.swingWeight(exchange),
     };
   }
 
