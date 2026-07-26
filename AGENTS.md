@@ -231,10 +231,12 @@ renders them at gameplay scale under the real camera.
 - Combat presentation reads `CombatFrame.events`, never per-frame cue diffs, so
   a swing resolving inside one frame produces exactly one spark and one sound.
 - A fighter committing to a plan is a `plan` event on the same stream as the
-  contacts, never a cue diff. It draws a small accent ring and chirps the
-  telephone keypad tone for that strategy: `rush` is key 1 through `riposte` at
-  key 7, each a real DTMF row/column pair, so the plans driving a fight are
-  audible. `src/audio.test.ts` pins the frequencies.
+  contacts, never a cue diff. It draws a small accent ring and makes no sound:
+  the ring flashing as a fighter changes its mind reads well, but a tone on
+  every plan buried the contacts it was supposed to sit under.
+- `audio.ts` keeps telephone keypad tones (`playKey`, `STRATEGY_KEYS`,
+  `keyTones`, pinned by `src/audio.test.ts`) for interface sounds. Nothing on
+  the battlefield plays them; that was tried and it was too much.
 - Additive effects over bright Martian ground blow out fast. A weapon trail at
   full accent strength reads as an opaque wedge covering the fighter rather
   than a swept smear of light; keep its leading edge well under 1.

@@ -192,9 +192,11 @@ export class BattleRuntime {
         this.bladeDirection.set(0, 0.4, 0);
       }
       this.bladeDirection.normalize();
-      this.audio.play(
-        event.type, this.contactPoint.x, this.contactPoint.z, event.intensity, event.strategy,
-      );
+      // A plan is seen, not heard: the ring carries it, and a tone on every
+      // plan buried the contacts it is supposed to sit under.
+      if (event.type !== "plan") {
+        this.audio.play(event.type, this.contactPoint.x, this.contactPoint.z, event.intensity);
+      }
 
       switch (event.type) {
         case "block":

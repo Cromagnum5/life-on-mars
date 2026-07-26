@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { STRATEGY_KEYS, keyTones } from "./audio";
 import { STRATEGY_LABELS } from "./combat";
 
+// Kept for interface sounds rather than the battlefield; the grid still has to
+// be right the day a menu reaches for it.
 describe("keypad tones", () => {
   it("matches the touch-tone frequency pairs", () => {
     // The published DTMF grid. A keypad tone only sounds right if both

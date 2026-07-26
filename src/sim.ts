@@ -1,6 +1,5 @@
 import * as THREE from "three";
 import { BattleRuntime } from "./battle";
-import { STRATEGY_KEYS } from "./audio";
 import { STRATEGY_LABELS, type CombatCue } from "./combat";
 import { createSeededRandom } from "./random";
 import { createRigwalker, type Rigwalker } from "./rigwalker";
@@ -214,7 +213,7 @@ function advance(delta: number): void {
       event.type === "swing"
         ? `${attacker} → ${defender} · ${event.line} · ${event.strategy}`
         : event.type === "plan"
-          ? `${attacker} commits to ${event.strategy} · key ${STRATEGY_KEYS[event.strategy] ?? "?"}`
+          ? `${attacker} commits to ${event.strategy}`
         : event.type === "riposte"
           ? `${attacker} turns it around on ${defender}`
           : `${defender} ${event.type === "whiff" ? "slips" : "takes it"} from ${attacker}`,
