@@ -54,6 +54,7 @@ const EVENT_AUDIO_PRIORITY: Record<CombatEvent["type"], number> = {
   hit: 0, block: 1, glance: 2, riposte: 3, whiff: 4, plan: 5, swing: 6,
 };
 
+
 export class BattleRuntime {
   /** Live and recently defeated units. Producers may push directly. */
   readonly units: Rigwalker[] = [];
@@ -192,9 +193,10 @@ export class BattleRuntime {
         this.bladeDirection.set(0, 0.4, 0);
       }
       this.bladeDirection.normalize();
-      // A plan is seen, not heard: the ring carries it, and a tone on every
-      // plan buried the contacts it is supposed to sit under.
-      if (event.type !== "plan") {
+      // Plans and ripostes are seen and not heard. Both draw a ring, and both
+      // were playtested with a tone: announcing a decision as often as fighters
+      // make them buries the contacts the sound is meant to punctuate.
+      if (event.type !== "plan" && event.type !== "riposte") {
         this.audio.play(event.type, this.contactPoint.x, this.contactPoint.z, event.intensity);
       }
 

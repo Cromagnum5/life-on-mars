@@ -9,19 +9,19 @@
 const MAX_VOICES_PER_FRAME = 5;
 const HEARING_RANGE = 46;
 
-type SoundName =
-  | "swing" | "block" | "glance" | "hit" | "whiff" | "riposte" | "defeat";
+type SoundName = "swing" | "block" | "glance" | "hit" | "whiff" | "defeat";
 
 /**
  * Telephone keypad tones. Touch-tone keys are dual frequency: one from the row
  * group and one from the column group, sounded together at equal strength.
  *
- * A riposte is the only one the battlefield plays. A tone on every plan was too
- * much under fighting, and the ring under the fighter carries that moment on
- * its own; a counter is rare enough to stay punctuation. The rest are kept for
- * interface sounds, where one press per press is the point; reach them through
- * `playKey`. The strategy mapping is shared, so a menu built on these keys
- * speaks the same vocabulary as the fighting.
+ * Nothing on the battlefield plays these. Tones on plans and then on ripostes
+ * were both tried and both lost to playtesting: a fight wants its sound spent
+ * on contact, and the rings carry those moments on their own.
+ *
+ * They are kept for interface sounds, where one press per press is the point;
+ * reach them through `playKey`. The strategy mapping is kept with them so a
+ * menu built on these keys can speak the same vocabulary as the fighting.
  */
 const DTMF_ROWS = [697, 770, 852, 941] as const;
 const DTMF_COLUMNS = [1209, 1336, 1477] as const;
@@ -149,11 +149,6 @@ export class CombatAudio {
         this.tone(output, now, { frequency: 168, duration: 0.3, gain: gain * 0.72, type: "sine", drop: 68 });
         this.tone(output, now, { frequency: 96, duration: 0.24, gain: gain * 0.52, type: "square", drop: 40 });
         this.noise(output, now, { duration: 0.11, gain: gain * 0.39, filter: 1700, sweep: -1100 });
-        break;
-      case "riposte":
-        // The one keypad press on the battlefield. A counter is rare enough
-        // that it stays a punctuation mark rather than a texture.
-        this.keypad(output, now, STRATEGY_KEYS.riposte, gain * 0.21);
         break;
       case "defeat":
         this.tone(output, now, { frequency: 122, duration: 0.85, gain: gain * 0.6, type: "sine", drop: 62 });
