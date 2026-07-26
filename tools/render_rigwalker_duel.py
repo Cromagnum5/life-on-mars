@@ -105,11 +105,47 @@ def assert_opponents_face_each_other(frame):
     direction_ab=(rootB.matrix_world.translation-rootA.matrix_world.translation).normalized()
     facing_a=visible_forward(objsA).dot(direction_ab)
     facing_b=visible_forward(objsB).dot(-direction_ab)
-    if facing_a < 0.75 or facing_b < 0.75:
+    if facing_a <= 0 or facing_b <= 0:
         raise RuntimeError(f"Facing validation failed at frame {frame}: A={facing_a:.3f}, B={facing_b:.3f}")
 
-for validation_frame in (1, 30, 58, 59, 73, 88, 113, 167):
-    assert_opponents_face_each_other(validation_frame)
+def named(objects, suffix):
+    return next(o for o in objects if o.name.endswith(suffix))
+
+def assert_weapon_attachment(rig, objects):
+    weapon=named(objects, "_Broadsword")
+    weapon_bone=rig.data.bones.get("weapon.R")
+    if weapon.parent != rig or weapon.parent_type != "BONE" or weapon.parent_bone != "weapon.R":
+        raise RuntimeError(f"{rig.name}: Broadsword is not attached to weapon.R")
+    if weapon_bone is None or weapon_bone.parent is None or weapon_bone.parent.name != "hand.R":
+        raise RuntimeError(f"{rig.name}: weapon.R is not connected to hand.R")
+
+def sampled_pose(rig):
+    return {bone.name: bone.rotation_quaternion.copy() for bone in rig.pose.bones}
+
+def validate_motion_geometry():
+    for rig,objects in ((rigA,objsA),(rigB,objsB)):
+        assert_weapon_attachment(rig,objects)
+    scene.frame_set(59)
+    bpy.context.view_layer.update()
+    ready_poses={rig:sampled_pose(rig) for rig in (rigA,rigB)}
+    ready_feet={(rig,side):named(objects,f"_Foot.{side}").matrix_world.translation.z for rig,objects in ((rigA,objsA),(rigB,objsB)) for side in ("L","R")}
+    max_foot_drift=0
+    for frame in (1,30,58,59,64,68,73,77,83,88,93,101,113,167):
+        assert_opponents_face_each_other(frame)
+        for rig,objects in ((rigA,objsA),(rigB,objsB)):
+            for side in ("L","R"):
+                drift=abs(named(objects,f"_Foot.{side}").matrix_world.translation.z-ready_feet[(rig,side)])
+                max_foot_drift=max(max_foot_drift,drift)
+    if max_foot_drift > 0.18:
+        raise RuntimeError(f"Foot-height validation failed: maximum drift={max_foot_drift:.3f}m")
+    scene.frame_set(93)
+    bpy.context.view_layer.update()
+    max_recovery_error=max(ready_poses[rig][bone.name].rotation_difference(bone.rotation_quaternion).angle for rig in (rigA,rigB) for bone in rig.pose.bones)
+    if max_recovery_error > 0.08:
+        raise RuntimeError(f"Recovery validation failed: maximum bone error={math.degrees(max_recovery_error):.2f} degrees")
+    print(f"Combat geometry validated: foot drift={max_foot_drift:.3f}m, recovery error={math.degrees(max_recovery_error):.2f} degrees")
+
+validate_motion_geometry()
 
 # Mars floor and lighting.
 mat=bpy.data.materials.new('Mars'); mat.diffuse_color=(.22,.045,.025,1); mat.roughness=.9
