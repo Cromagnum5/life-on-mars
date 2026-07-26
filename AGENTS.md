@@ -164,3 +164,18 @@ only code or one pose.
 - Judge motion at RTS viewing scale. If consecutive rendered phases are barely
   distinguishable, increase the motion envelope and rerun both geometry and
   multi-frame visual checks.
+
+## Combat effects validation
+
+Sparks, flashes, trails, and rings are not covered by the Blender duel tool,
+which validates skeleton poses only. They must be judged in the running game.
+
+- Size particles in world units against the orthographic camera. There is no
+  perspective divide, so `gl_PointSize` needs an explicit world-to-pixel
+  uniform computed from the framebuffer height and `camera.zoom`.
+- Never derive pixel sizes from `window.innerHeight`; a device pixel ratio
+  above one will halve them.
+- With `vertexColors`, leave `material.color` white. Tinting both squares the
+  channels.
+- Combat presentation reads `CombatFrame.events`, never per-frame cue diffs, so
+  a swing resolving inside one frame produces exactly one spark and one sound.
