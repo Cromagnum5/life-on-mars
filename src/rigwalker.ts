@@ -1,6 +1,11 @@
 import * as THREE from "three";
 import type { RigwalkerAsset } from "./rigwalker-assets";
-import { createCombatProfile, type CombatCue, type CombatProfile } from "./combat";
+import {
+  createCombatProfile,
+  type AttackLine,
+  type CombatCue,
+  type CombatProfile,
+} from "./combat";
 
 export type Rigwalker = {
   group: THREE.Group;
@@ -69,6 +74,26 @@ type CombatBones = {
   >;
 };
 
+type CombatLineMotion = {
+  attackSide: -1 | 1;
+  guardLift: number;
+  guardCross: number;
+  hitPitch: number;
+  hitRoll: number;
+};
+
+const ATTACK_VARIANT_LINES: readonly AttackLine[] = [
+  "overhead", "forehand", "backhand", "flank", "rising",
+];
+
+const COMBAT_LINE_MOTION: Record<AttackLine, CombatLineMotion> = {
+  overhead: { attackSide: 1, guardLift: 1, guardCross: 0.25, hitPitch: 0.22, hitRoll: 0 },
+  forehand: { attackSide: 1, guardLift: 0.45, guardCross: 0.8, hitPitch: 0.06, hitRoll: 0.2 },
+  backhand: { attackSide: -1, guardLift: 0.5, guardCross: -0.8, hitPitch: 0.05, hitRoll: -0.22 },
+  flank: { attackSide: 1, guardLift: 0.18, guardCross: 1, hitPitch: 0.02, hitRoll: 0.32 },
+  rising: { attackSide: -1, guardLift: 0.65, guardCross: -0.45, hitPitch: -0.2, hitRoll: -0.12 },
+};
+
 function smoothRange(value: number, start: number, end: number): number {
   return THREE.MathUtils.smoothstep(value, start, end);
 }
@@ -121,32 +146,40 @@ function setBoneOffset(bone: THREE.Bone, rest: THREE.Quaternion, x: number, y: n
 
 function applyCombatPose(
   bones: CombatBones, attackPhase: number, attackVariant: number,
-  defensePhase: number, defenseSide: number, hitPhase: number, combatStep: number,
+  defensePhase: number, defenseSide: number, hitPhase: number, line: AttackLine,
+  intensity: number, deflected: boolean, combatStep: number,
 ): void {
   const attacking = attackPhase >= 0;
   const winding = attacking ? smoothRange(attackPhase, 0, 0.28) * (1 - smoothRange(attackPhase, 0.28, 0.58)) : 0;
   const cutting = attacking ? smoothRange(attackPhase, 0.28, 0.56) * (1 - smoothRange(attackPhase, 0.68, 1)) : 0;
   const impact = attacking ? smoothRange(attackPhase, 0.38, 0.54) * (1 - smoothRange(attackPhase, 0.62, 0.82)) : 0;
   const followThrough = attacking ? smoothRange(attackPhase, 0.54, 0.7) * (1 - smoothRange(attackPhase, 0.82, 1)) : 0;
-  const attackSide = attackVariant === 2 || attackVariant === 4 ? -1 : 1;
+  const presentedLine = attacking ? ATTACK_VARIANT_LINES[attackVariant] ?? line : line;
+  const lineMotion = COMBAT_LINE_MOTION[presentedLine];
+  const attackSide = lineMotion.attackSide;
   const guarding = defensePhase >= 0 ? smoothRange(defensePhase, 0, 0.22) * (1 - smoothRange(defensePhase, 0.68, 1)) : 0;
-  const hitShock = hitPhase >= 0 ? Math.sin(Math.min(1, hitPhase) * Math.PI) : 0;
+  const hitShock = hitPhase >= 0 ? Math.sin(Math.min(1, hitPhase) * Math.PI) * intensity : 0;
+  const deflection = deflected && attacking
+    ? smoothRange(attackPhase, 0.46, 0.6) * (1 - smoothRange(attackPhase, 0.72, 0.96))
+    : 0;
   const torsoTwist = attackSide * (winding * -0.58 + impact * 0.76 + followThrough * 0.28) +
-    defenseSide * guarding * 0.2 + defenseSide * hitShock * 0.24;
+    defenseSide * guarding * 0.2 + defenseSide * hitShock * 0.24 -
+    attackSide * deflection * 0.34;
 
   setBoneOffset(bones.root, bones.bodyRest.root, 0, torsoTwist * 0.28, 0);
-  setBoneOffset(bones.spine, bones.bodyRest.spine, 0.04 + cutting * 0.1 - hitShock * 0.12, torsoTwist * 0.52, attackSide * (winding - cutting) * 0.08);
-  setBoneOffset(bones.chest, bones.bodyRest.chest, 0.03 + cutting * 0.12 - hitShock * 0.14, torsoTwist * 0.72, attackSide * (winding - cutting) * 0.13);
+  setBoneOffset(bones.spine, bones.bodyRest.spine, 0.04 + cutting * 0.1 - hitShock * lineMotion.hitPitch, torsoTwist * 0.52, attackSide * (winding - cutting) * 0.08 + hitShock * lineMotion.hitRoll * 0.45);
+  setBoneOffset(bones.chest, bones.bodyRest.chest, 0.03 + cutting * 0.12 - hitShock * lineMotion.hitPitch * 1.15, torsoTwist * 0.72, attackSide * (winding - cutting) * 0.13 + hitShock * lineMotion.hitRoll);
   setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08 + cutting * 0.08 - hitShock * 0.12, -torsoTwist * 0.46, defenseSide * guarding * 0.08);
-  setBoneOffset(bones.head, bones.bodyRest.head, -0.03 + hitShock * 0.1, -torsoTwist * 0.34, -defenseSide * guarding * 0.1);
+  setBoneOffset(bones.head, bones.bodyRest.head, -0.03 + hitShock * (0.08 + lineMotion.hitPitch * 0.6), -torsoTwist * 0.34, -defenseSide * guarding * 0.1 + hitShock * lineMotion.hitRoll * 0.7);
 
   // One-handed compass cut: the hilt loads near the sword-side ear, the
   // elbow stays bent, and the shoulder carries the blade through a compact arc.
-  const rightShoulderForward = -0.3 - winding * 0.72 - impact * 0.2 + followThrough * 0.16 - guarding * 0.22;
+  const rightShoulderForward = -0.3 - winding * 0.72 - impact * 0.2 + followThrough * 0.16 -
+    guarding * (0.12 + lineMotion.guardLift * 0.24);
   const rightElbowBend = -0.5 - winding * 0.68 + impact * 0.3 + followThrough * 0.16 - guarding * 0.24;
   setBoneOffset(bones.upperArmR, bones.armRest.upperArmR,
     rightShoulderForward + hitShock * 0.08,
-    attackSide * (0.1 + winding * 0.22 - impact * 0.38 - followThrough * 0.22) - defenseSide * guarding * 0.18,
+    attackSide * (0.1 + winding * 0.22 - impact * 0.38 - followThrough * 0.22) - defenseSide * guarding * (0.08 + Math.abs(lineMotion.guardCross) * 0.18) + attackSide * deflection * 0.28,
     attackSide * (-0.05 - winding * 0.18 + impact * 0.26 + followThrough * 0.14),
   );
   setBoneOffset(bones.lowerArmR, bones.armRest.lowerArmR,
@@ -158,9 +191,9 @@ function applyCombatPose(
   const contactWristY = attackSide > 0 ? 0.25 : 0;
   const contactWristZ = attackSide > 0 ? 2 : 1.5;
   setBoneOffset(bones.handR, bones.armRest.handR,
-    (-0.1 - winding * 0.22) * (1 - impact) + contactWristX * impact + followThrough * 0.2,
+    (-0.1 - winding * 0.22) * (1 - impact)  + contactWristX * impact + followThrough * 0.2 - deflection * 0.5,
     attackSide * (-0.12 - winding * 0.26) * (1 - impact) + contactWristY * impact - attackSide * followThrough * 0.12,
-    attackSide * (0.12 + winding * 0.18) * (1 - impact) + contactWristZ * impact + attackSide * followThrough * 0.3,
+    attackSide * (0.12 + winding * 0.18) * (1 - impact)  + contactWristZ * impact + attackSide * followThrough * 0.3 - attackSide * deflection * 0.85,
   );
 
   // The free arm remains relaxed and separate from the one-handed grip. It
@@ -844,6 +877,9 @@ export function createRigwalker(
           defenseElapsed >= 0 ? Math.min(1, defenseElapsed / ATTACK_DURATION) : -1,
           defenseSide,
           hitReactionElapsed >= 0 ? Math.min(1, hitReactionElapsed / 0.42) : -1,
+          combatCue?.line ?? "overhead",
+          combatCue?.intensity ?? 0.72,
+          combatCue?.action === "attack" && combatCue.outcome === "blocked",
           moving ? Math.sin(elapsed * 5.8 + group.id * 0.7) * 0.24 : 0,
         );
       }

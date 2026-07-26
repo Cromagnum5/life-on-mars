@@ -531,7 +531,9 @@ export class CombatDirector {
       line: exchange.line,
       variant: exchange.variant,
       side: exchange.side,
-      intensity: exchange.strategy === "rush" ? 1 : exchange.strategy === "riposte" ? 0.88 : 0.72,
+      intensity: action === "hit" && exchange.outcome === "glancing" ? 0.42 :
+        action === "block" ? 0.78 :
+        exchange.strategy === "rush" ? 1 : exchange.strategy === "riposte" ? 0.88 : 0.72,
       outcome: exchange.outcome,
     };
   }

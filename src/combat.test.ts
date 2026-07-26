@@ -193,6 +193,32 @@ describe("CombatDirector", () => {
     expect(median).toBeLessThanOrEqual(25);
   });
 
+  it("drives all five line profiles with contact-specific intensity", () => {
+    const lines = new Set<string>();
+    let sawBlock = false;
+    let sawGlancing = false;
+    let sawCleanHit = false;
+    for (let seed = 1; seed <= 120; seed += 1) {
+      for (const cue of simulate(seed).cues) {
+        if (cue.action === "attack") lines.add(cue.line);
+        if (cue.action === "block") {
+          sawBlock = true;
+          expect(cue.intensity).toBe(0.78);
+        }
+        if (cue.action === "hit" && cue.outcome === "glancing") {
+          sawGlancing = true;
+          expect(cue.intensity).toBe(0.42);
+        }
+        if (cue.action === "hit" && cue.outcome === "hit") {
+          sawCleanHit = true;
+          expect(cue.intensity).toBeGreaterThan(0.7);
+        }
+      }
+    }
+    expect([...lines].sort()).toEqual(["backhand", "flank", "forehand", "overhead", "rising"]);
+    expect(sawBlock && sawGlancing && sawCleanHit).toBe(true);
+  });
+
   it("exposes only cut-and-block action vocabulary", () => {
     const actions = ["idle", "size-up", "attack", "block", "hit", "recover", "defeated"];
     expect(actions).not.toContain("thrust");
