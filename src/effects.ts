@@ -14,7 +14,15 @@ const MAX_FLASHES = 24;
 const MAX_RINGS = 12;
 const MAX_TRAILS = 16;
 /** Blade samples held in a ribbon; longer smears the arc, shorter tightens it. */
-const TRAIL_SAMPLES = 12;
+const TRAIL_SAMPLES = 7;
+/**
+ * Peak brightness of a ribbon's leading edge. Additive over bright Martian
+ * ground, a full-strength accent reads as an opaque wedge rather than a smear
+ * of light, so the ribbon sits well under 1.
+ */
+export const TRAIL_BRIGHTNESS = 0.42;
+/** How much dimmer the inner edge is than the leading edge. */
+const TRAIL_INNER_FALLOFF = 0.22;
 const TRAIL_FADE = 0.18;
 
 const SPARK_VERTEX = /* glsl */ `
@@ -124,13 +132,16 @@ export function writeTrailColors(
 ): void {
   for (let sample = 0; sample < maxSamples; sample += 1) {
     const age = maxSamples <= 1 ? 1 : sample / (maxSamples - 1);
+    // Squared so the tail drops away quickly and the ribbon reads as a smear
+    // trailing the edge rather than a solid sheet behind the whole arc.
+    const strength = age * age * TRAIL_BRIGHTNESS;
     const base = sample * 6;
-    colors[base] = tint.r * age * 0.35;
-    colors[base + 1] = tint.g * age * 0.35;
-    colors[base + 2] = tint.b * age * 0.35;
-    colors[base + 3] = tint.r * age;
-    colors[base + 4] = tint.g * age;
-    colors[base + 5] = tint.b * age;
+    colors[base] = tint.r * strength * TRAIL_INNER_FALLOFF;
+    colors[base + 1] = tint.g * strength * TRAIL_INNER_FALLOFF;
+    colors[base + 2] = tint.b * strength * TRAIL_INNER_FALLOFF;
+    colors[base + 3] = tint.r * strength;
+    colors[base + 4] = tint.g * strength;
+    colors[base + 5] = tint.b * strength;
   }
 }
 
@@ -326,9 +337,10 @@ export class CombatEffects {
       this.sparkColors[base] = tint.r * heat;
       this.sparkColors[base + 1] = tint.g * heat;
       this.sparkColors[base + 2] = tint.b * heat;
-      // World units. At the default zoom roughly 26 px cover one unit, so this
-      // lands sparks in the 2-6 px range where they read without blooming.
-      this.sparkSizes[slot] = 0.09 + Math.random() * 0.14;
+      // World units. At the game's default zoom roughly 26 px cover one unit,
+      // which lands sparks in the 4-9 px range: visible at RTS scale without
+      // blooming into a smear.
+      this.sparkSizes[slot] = 0.15 + Math.random() * 0.2;
       this.sparkAlphas[slot] = 1;
     }
   }
@@ -362,6 +374,29 @@ export class CombatEffects {
     ring.mesh.position.copy(position);
     ring.mesh.position.y += 0.06;
     ring.mesh.visible = true;
+  }
+
+  /** Retires every live particle at once, so a restarted fight starts clean. */
+  clear(): void {
+    for (let slot = 0; slot < MAX_SPARKS; slot += 1) {
+      this.sparks[slot].life = 0;
+      this.sparkAlphas[slot] = 0;
+    }
+    this.sparkGeometry.attributes.aAlpha.needsUpdate = true;
+    for (const flash of this.flashes) {
+      flash.life = 0;
+      flash.sprite.visible = false;
+    }
+    for (const ring of this.rings) {
+      ring.life = 0;
+      ring.mesh.visible = false;
+    }
+    for (const trail of this.trails) {
+      trail.owner = null;
+      trail.samples = 0;
+      trail.mesh.visible = false;
+      trail.material.opacity = 0;
+    }
   }
 
   /**

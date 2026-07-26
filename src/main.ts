@@ -1,16 +1,25 @@
 import * as THREE from "three";
+import { BattleRuntime } from "./battle";
 import {
   BUILDING_OBSTACLES,
   BUILDING_SITES,
   createBuildings,
 } from "./buildings";
 import { MovementMarkers } from "./feedback";
-import { CombatAudio } from "./audio";
-import { CombatDirector, type CombatEvent } from "./combat";
-import { CombatEffects } from "./effects";
+import { STRATEGY_LABELS } from "./combat";
 import { AssemblyBayProduction } from "./production";
 import { createRigwalker } from "./rigwalker";
 import { loadRigwalkerAsset } from "./rigwalker-assets";
+import {
+  addMarsLighting,
+  applyMarsAtmosphere,
+  createMarsRenderer,
+  createRocks,
+  createTabletopCamera,
+  createTerrain,
+  fitCameraToViewport,
+  terrainHeightAt,
+} from "./world";
 import "./style.css";
 
 const MAP_SIZE = 180;
@@ -25,140 +34,30 @@ if (!canvas) {
 }
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x1b0e0a);
-scene.fog = new THREE.FogExp2(0x3b1710, 0.008);
+applyMarsAtmosphere(scene);
+addMarsLighting(scene);
 
-const renderer = new THREE.WebGLRenderer({
-  canvas,
-  antialias: true,
-  powerPreference: "high-performance",
-});
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-renderer.outputColorSpace = THREE.SRGBColorSpace;
-renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.1;
-
-const camera = new THREE.OrthographicCamera();
-camera.position.set(36, 42, 36);
-camera.zoom = 1.35;
-camera.updateProjectionMatrix();
-
+const renderer = createMarsRenderer(canvas);
+const camera = createTabletopCamera();
 const cameraTarget = new THREE.Vector3(0, 0, 0);
 const cameraOffset = camera.position.clone().sub(cameraTarget);
 
-const hemisphereLight = new THREE.HemisphereLight(0xffc899, 0x32100b, 1.8);
-scene.add(hemisphereLight);
-
-const sun = new THREE.DirectionalLight(0xffd3a4, 3.2);
-sun.position.set(-45, 70, 25);
-sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.left = -70;
-sun.shadow.camera.right = 70;
-sun.shadow.camera.top = 70;
-sun.shadow.camera.bottom = -70;
-sun.shadow.camera.near = 1;
-sun.shadow.camera.far = 180;
-scene.add(sun);
-
-function pseudoRandom(index: number): number {
-  const value = Math.sin(index * 91.3458) * 47453.5453;
-  return value - Math.floor(value);
-}
-
-function terrainHeightAt(x: number, z: number): number {
-  const localY = -z;
-  return (
-    Math.sin(x * 0.075) * 0.7 +
-    Math.cos(localY * 0.064) * 0.55 +
-    Math.sin((x + localY) * 0.035) * 0.85
-  );
-}
-
-function createTerrain(): THREE.Mesh {
-  const segments = 128;
-  const geometry = new THREE.PlaneGeometry(
-    MAP_SIZE,
-    MAP_SIZE,
-    segments,
-    segments,
-  );
-  const positions = geometry.attributes.position;
-  const colors: number[] = [];
-  const low = new THREE.Color(0x7f2919);
-  const high = new THREE.Color(0xb94d2c);
-  const color = new THREE.Color();
-
-  for (let index = 0; index < positions.count; index += 1) {
-    const x = positions.getX(index);
-    const y = positions.getY(index);
-    const broad =
-      Math.sin(x * 0.075) * 0.7 +
-      Math.cos(y * 0.064) * 0.55 +
-      Math.sin((x + y) * 0.035) * 0.85;
-    const grit = (pseudoRandom(index) - 0.5) * 0.34;
-    const height = broad + grit;
-
-    positions.setZ(index, height);
-    color.lerpColors(low, high, THREE.MathUtils.clamp((height + 2) / 4, 0, 1));
-    color.offsetHSL(0, 0, (pseudoRandom(index + 517) - 0.5) * 0.045);
-    colors.push(color.r, color.g, color.b);
-  }
-
-  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-  geometry.computeVertexNormals();
-
-  const material = new THREE.MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 1,
-    metalness: 0,
-  });
-  const terrain = new THREE.Mesh(geometry, material);
-  terrain.rotation.x = -Math.PI / 2;
-  terrain.receiveShadow = true;
-  return terrain;
-}
-
-function createRocks(): THREE.Group {
-  const rocks = new THREE.Group();
-  const geometry = new THREE.DodecahedronGeometry(1, 0);
-  const material = new THREE.MeshStandardMaterial({
-    color: 0x542017,
-    roughness: 0.94,
-  });
-
-  for (let index = 0; index < 70; index += 1) {
-    const scale = 0.25 + pseudoRandom(index + 300) * 1.6;
-    const x = (pseudoRandom(index + 100) - 0.5) * (MAP_SIZE - 10);
-    const z = (pseudoRandom(index + 200) - 0.5) * (MAP_SIZE - 10);
-
-    if (BUILDING_SITES.some((site) => site.distanceTo(new THREE.Vector2(x, z)) < 8)) {
-      continue;
-    }
-
-    const rock = new THREE.Mesh(geometry, material);
-    rock.position.set(x, terrainHeightAt(x, z) + scale * 0.48, z);
-    rock.rotation.set(
-      pseudoRandom(index + 400) * Math.PI,
-      pseudoRandom(index + 500) * Math.PI,
-      pseudoRandom(index + 600) * Math.PI,
-    );
-    rock.scale.set(scale, scale * (0.55 + pseudoRandom(index + 700)), scale);
-    rock.castShadow = true;
-    rock.receiveShadow = true;
-    rocks.add(rock);
-  }
-
-  return rocks;
-}
-
-const terrain = createTerrain();
+const terrain = createTerrain(MAP_SIZE);
 const corporateBases = createBuildings(terrainHeightAt);
-scene.add(terrain, createRocks(), ...corporateBases.map((base) => base.group));
+scene.add(
+  terrain,
+  createRocks(MAP_SIZE, 70, BUILDING_SITES),
+  ...corporateBases.map((base) => base.group),
+);
 
-const units = corporateBases.map((base) => {
+const accentByCorporation = new Map(
+  corporateBases.map((base) => [base.corporation, base.accent]),
+);
+const battle = new BattleRuntime(scene, {
+  accentOf: (corporation) => accentByCorporation.get(corporation) ?? 0xffb35d,
+});
+const units = battle.units;
+for (const base of corporateBases) {
   const rigwalker = createRigwalker(rigwalkerAsset, base.accent, base.corporation);
   rigwalker.group.position.set(
     base.spawnPosition.x,
@@ -166,9 +65,8 @@ const units = corporateBases.map((base) => {
     base.spawnPosition.y,
   );
   rigwalker.moveTo(new THREE.Vector3(0, 0, 0));
-  scene.add(rigwalker.group);
-  return rigwalker;
-});
+  battle.spawn(rigwalker);
+}
 const productions = corporateBases.map((base) =>
   new AssemblyBayProduction(
     scene,
@@ -182,10 +80,7 @@ const productions = corporateBases.map((base) =>
     base.corporation,
   ),
 );
-const combatDirector = new CombatDirector();
-const combatEffects = new CombatEffects(scene);
-const combatAudio = new CombatAudio();
-combatAudio.installUnlockHandlers();
+battle.audio.installUnlockHandlers();
 const movementMarkers = new MovementMarkers(scene);
 const rallyMarkers = corporateBases.map((base) => {
   const marker = new THREE.Mesh(
@@ -434,17 +329,7 @@ canvas.addEventListener(
 );
 
 function resize(): void {
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-  const viewHeight = 52;
-  const viewWidth = viewHeight * (width / height);
-
-  camera.left = -viewWidth / 2;
-  camera.right = viewWidth / 2;
-  camera.top = viewHeight / 2;
-  camera.bottom = -viewHeight / 2;
-  camera.updateProjectionMatrix();
-  renderer.setSize(width, height, false);
+  fitCameraToViewport(camera, renderer, window.innerWidth, window.innerHeight);
 }
 
 window.addEventListener("resize", resize);
@@ -480,16 +365,6 @@ function updateCamera(delta: number): void {
   camera.lookAt(cameraTarget);
 }
 
-const STRATEGY_LABELS: Record<string, string> = {
-  rush: "Rushing",
-  react: "Waiting to counter",
-  "size-up": "Sizing up",
-  feint: "Feinting",
-  "distance-trap": "Baiting range",
-  beat: "Beating the guard",
-  riposte: "Riposting",
-};
-
 /** Surfaces the fighter's persistent temperament and its current plan. */
 function describeRigwalker(unit: (typeof units)[number]): string {
   const temperament = unit.combatProfile.temperament;
@@ -520,142 +395,22 @@ function updateHud(elapsed: number): void {
         : `${selectedRigwalkers.length} Rigwalkers`;
 }
 
-const accentByCorporation = new Map(
-  corporateBases.map((base) => [base.corporation, base.accent]),
-);
-const cameraRight = new THREE.Vector3();
-const cameraUp = new THREE.Vector3();
-const cameraForward = new THREE.Vector3();
-const contactPoint = new THREE.Vector3();
-const bladeDirection = new THREE.Vector3();
-const trailHilt = new THREE.Vector3();
-const trailTip = new THREE.Vector3();
-const defeated = new Set<number>();
-
-// Contacts are what the player needs to hear. Swings are atmosphere, so they
-// yield to a clang when a crowded frame exceeds the voice budget.
-const EVENT_AUDIO_PRIORITY: Record<CombatEvent["type"], number> = {
-  hit: 0, block: 1, glance: 2, riposte: 3, whiff: 4, swing: 5,
-};
-
-/**
- * Turns the director's discrete events into sparks and sound at the place the
- * blade actually is, so a block reads differently from a landed cut.
- */
-function presentCombatEvents(
-  events: readonly CombatEvent[],
-  byId: Map<number, (typeof units)[number]>,
-): void {
-  const ordered = [...events].sort(
-    (left, right) => EVENT_AUDIO_PRIORITY[left.type] - EVENT_AUDIO_PRIORITY[right.type],
-  );
-  for (const event of ordered) {
-    const attacker = byId.get(event.attackerId);
-    if (!attacker) continue;
-    attacker.getContactPoint(contactPoint);
-    attacker.getBladeVelocity(bladeDirection);
-    if (bladeDirection.lengthSq() < 0.0001) {
-      bladeDirection.set(0, 0.4, 0);
-    }
-    bladeDirection.normalize();
-    combatAudio.play(event.type, contactPoint.x, contactPoint.z, event.intensity);
-
-    switch (event.type) {
-      case "block":
-        // A parry throws the brightest, widest shower: it is the moment most
-        // worth noticing, and nothing else in the fight looks like it.
-        combatEffects.sparkBurst(contactPoint, bladeDirection, 26, 7.5, 0xdbe7ff, 1.15);
-        combatEffects.flash(contactPoint, 1.5, 0xcfe0ff);
-        break;
-      case "glance":
-        combatEffects.sparkBurst(contactPoint, bladeDirection, 12, 5.5, 0xffcf95, 0.85);
-        combatEffects.flash(contactPoint, 0.85, 0xffc98a);
-        break;
-      case "hit":
-        combatEffects.sparkBurst(contactPoint, bladeDirection, 18, 4.4, 0xffa060, 0.7);
-        combatEffects.flash(contactPoint, 1.25, 0xffb066);
-        break;
-      case "riposte":
-        // Telegraph the counter under the fighter turning it around.
-        combatEffects.ring(
-          attacker.group.position, 2.1,
-          accentByCorporation.get(attacker.corporation) ?? 0xffb35d, 0.55,
-        );
-        break;
-    }
-  }
-}
-
 const clock = new THREE.Clock();
 
 function animate(): void {
   const delta = Math.min(clock.getDelta(), 0.05);
   updateCamera(delta);
-  combatAudio.beginFrame();
-  camera.updateMatrixWorld();
-  camera.matrixWorld.extractBasis(cameraRight, cameraUp, cameraForward);
-  combatAudio.setListener(
-    cameraTarget.x, cameraTarget.z,
-    cameraRight.x, cameraRight.z,
-    (camera.top - camera.bottom) / camera.zoom,
-  );
   for (const production of productions) {
     production.update(delta);
   }
   movementMarkers.update(delta);
-  const combatFrame = combatDirector.update(
-    delta,
-    units.map((unit) => ({
-      id: unit.combatId, corporation: unit.corporation,
-      health: unit.health, maxHealth: unit.maxHealth, isAlive: unit.isAlive,
-      x: unit.group.position.x, z: unit.group.position.z, profile: unit.combatProfile,
-    })),
-  );
-  const unitsById = new Map(units.map((unit) => [unit.combatId, unit]));
-  presentCombatEvents(combatFrame.events, unitsById);
-  for (const event of combatFrame.damage) {
-    unitsById.get(event.targetId)?.applyCombatDamage(event.amount, event.side);
-  }
-  for (const unit of units) {
-    if (unit.isAlive || defeated.has(unit.combatId)) continue;
-    defeated.add(unit.combatId);
-    combatAudio.play("defeat", unit.group.position.x, unit.group.position.z, 1);
-    combatEffects.flash(
-      unit.group.position.clone().setY(unit.group.position.y + 2.2), 2.4, 0xff8a4c,
-    );
-    combatEffects.ring(
-      unit.group.position, 3.2,
-      accentByCorporation.get(unit.corporation) ?? 0xffb35d, 0.9,
-    );
-  }
-  for (const unit of [...units]) {
-    unit.update(
-      delta,
-      clock.elapsedTime,
-      terrainHeightAt,
-      units,
-      BUILDING_OBSTACLES,
-      camera.quaternion,
-      combatFrame.cues.get(unit.combatId),
-    );
-  }
-  // Fed after unit.update so the ribbon samples this frame's pose. A trail
-  // that stops being fed fades itself out and releases its pool slot.
-  for (const unit of units) {
-    if (!unit.isSwinging || !unit.sampleBlade(trailHilt, trailTip)) continue;
-    combatEffects.trail(
-      unit.combatId, trailHilt, trailTip,
-      accentByCorporation.get(unit.corporation) ?? 0xffb35d,
-    );
-  }
-  combatEffects.update(delta, camera, renderer.domElement.height);
-  for (let index = units.length - 1; index >= 0; index -= 1) {
-    if (units[index].canRemove) {
-      units[index].group.removeFromParent();
-      defeated.delete(units[index].combatId);
-      units.splice(index, 1);
-    }
-  }
+  battle.update(delta, clock.elapsedTime, {
+    camera,
+    focus: cameraTarget,
+    drawingBufferHeight: renderer.domElement.height,
+    terrainHeightAt,
+    obstacles: BUILDING_OBSTACLES,
+  });
   selectedRigwalkers = selectedRigwalkers.filter((unit) => unit.isAlive);
   updateHud(clock.elapsedTime);
   renderer.render(scene, camera);

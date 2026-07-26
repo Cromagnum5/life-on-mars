@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Combat sandbox for Life on Mars: staged Rigwalker duels and skirmishes."
+    />
+    <title>Life on Mars — Combat sim</title>
+  </head>
+  <body>
+    <div id="sim">
+      <canvas id="arena" aria-label="Combat sim view"></canvas>
+
+      <header class="sim-bar">
+        <span class="sim-title">Combat sim</span>
+        <div class="sim-group" role="group" aria-label="Matchup">
+          <button type="button" data-matchup="1v1">1v1</button>
+          <button type="button" data-matchup="2v2">2v2</button>
+          <button type="button" data-matchup="3v2">3v2</button>
+          <button type="button" data-matchup="3v3">3v3</button>
+          <button type="button" data-matchup="5v5">5v5</button>
+        </div>
+        <div class="sim-group">
+          <label for="seed">Seed</label>
+          <input id="seed" type="number" min="0" step="1" value="1" />
+          <button type="button" id="reseed">New</button>
+          <button type="button" id="restart">Restart</button>
+        </div>
+        <div class="sim-group">
+          <button type="button" id="pause">Pause</button>
+          <button type="button" id="step">Step</button>
+          <label for="speed">Speed</label>
+          <input id="speed" type="range" min="0.05" max="2" step="0.05" value="1" />
+          <output id="speed-value">1.00×</output>
+        </div>
+        <div class="sim-group">
+          <label><input id="follow" type="checkbox" checked /> Follow</label>
+          <label><input id="loop" type="checkbox" checked /> Auto-restart</label>
+          <label><input id="mute" type="checkbox" /> Mute</label>
+        </div>
+      </header>
+
+      <aside class="sim-readout" aria-label="Fighter state">
+        <div class="sim-status">
+          <span id="clock">0.00 s</span>
+          <span id="verdict">—</span>
+        </div>
+        <div id="fighters" class="sim-fighters"></div>
+        <dl id="tally" class="sim-tally"></dl>
+      </aside>
+
+      <section class="sim-log" aria-label="Combat events">
+        <ol id="log"></ol>
+      </section>
+
+      <footer class="sim-help">
+        <kbd>Space</kbd> pause <kbd>.</kbd> step <kbd>R</kbd> restart
+        <kbd>1–5</kbd> matchup <kbd>WASD</kbd> pan <kbd>Wheel</kbd> zoom
+      </footer>
+    </div>
+    <script type="module" src="/src/sim.ts"></script>
+  </body>
+</html>

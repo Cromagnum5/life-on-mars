@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { writeTrailColors, writeTrailSample } from "./effects";
+import { TRAIL_BRIGHTNESS, writeTrailColors, writeTrailSample } from "./effects";
 
 const MAX = 4;
 
@@ -59,11 +59,13 @@ describe("writeTrailSample", () => {
 });
 
 describe("writeTrailColors", () => {
-  it("fades the tail to nothing and leaves the newest sample at full accent", () => {
+  it("fades the tail to nothing and leaves the newest sample brightest", () => {
     const colors = new Float32Array(MAX * 6);
     writeTrailColors(colors, new THREE.Color(1, 1, 1), MAX);
     expect(colors[3]).toBe(0);
-    expect(colors[(MAX - 1) * 6 + 3]).toBeCloseTo(1);
+    // Additive over bright ground, so the leading edge stays under full white.
+    expect(colors[(MAX - 1) * 6 + 3]).toBeCloseTo(TRAIL_BRIGHTNESS);
+    expect(colors[(MAX - 1) * 6 + 3]).toBeLessThan(1);
   });
 
   it("keeps the hilt edge dimmer than the tip edge", () => {

@@ -1,0 +1,284 @@
+/*
+ * The combat sim is a workbench, not a game screen: readable at a glance,
+ * no remote fonts so a headless capture looks the same as the browser.
+ */
+
+:root {
+  --ink: #f4e6d6;
+  --dim: #a4907f;
+  --edge: rgb(244 172 114 / 26%);
+  --panel: rgb(22 13 10 / 86%);
+
+  color: var(--ink);
+  background: #160d0a;
+  font-family: system-ui, sans-serif;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#sim,
+#arena {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+#arena {
+  display: block;
+}
+
+.sim-bar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--edge);
+  background: var(--panel);
+  font-size: 0.72rem;
+  backdrop-filter: blur(8px);
+}
+
+.sim-title {
+  color: #f0a365;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.sim-group {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.sim-group label {
+  color: var(--dim);
+}
+
+button,
+input[type="number"] {
+  padding: 3px 9px;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  color: var(--ink);
+  background: rgb(255 255 255 / 6%);
+  font: inherit;
+  cursor: pointer;
+}
+
+input[type="number"] {
+  width: 74px;
+  cursor: text;
+}
+
+button:hover {
+  background: rgb(255 179 93 / 22%);
+}
+
+button[aria-pressed="true"] {
+  color: #1a0e0a;
+  background: #ffb35d;
+  font-weight: 600;
+}
+
+input[type="range"] {
+  width: 96px;
+  accent-color: #ffb35d;
+}
+
+output {
+  min-width: 44px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-readout {
+  position: fixed;
+  top: 52px;
+  right: 12px;
+  width: 264px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  background: var(--panel);
+  font-size: 0.7rem;
+  backdrop-filter: blur(8px);
+}
+
+.sim-status {
+  display: flex;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgb(255 224 192 / 12%);
+  font-variant-numeric: tabular-nums;
+}
+
+#verdict {
+  color: #ffb35d;
+  font-weight: 600;
+}
+
+.sim-fighters {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+}
+
+.fighter {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  padding: 6px 8px;
+  border-left: 3px solid var(--accent, #ffb35d);
+  border-radius: 2px;
+  background: rgb(255 255 255 / 4%);
+}
+
+.fighter.down {
+  opacity: 0.42;
+}
+
+.fighter .name {
+  color: var(--accent, #ffb35d);
+  font-weight: 600;
+}
+
+.fighter .hp {
+  align-self: center;
+  height: 5px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 12%);
+}
+
+.fighter .hp span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent, #ffb35d);
+}
+
+.fighter .line {
+  grid-column: 1 / -1;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.fighter .line b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.fighter .phase {
+  grid-column: 1 / -1;
+  height: 3px;
+  background: rgb(255 255 255 / 10%);
+}
+
+.fighter .phase span {
+  display: block;
+  height: 100%;
+  background: rgb(255 224 192 / 55%);
+}
+
+.sim-tally {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr auto);
+  gap: 3px 6px;
+  margin: 10px 0 0;
+  padding-top: 8px;
+  border-top: 1px solid rgb(255 224 192 / 12%);
+  color: var(--dim);
+  font-size: 0.65rem;
+}
+
+.sim-tally dt {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.sim-tally dd {
+  margin: 0;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.sim-log {
+  position: fixed;
+  bottom: 34px;
+  left: 12px;
+  width: 320px;
+  max-height: 46vh;
+  overflow: hidden;
+  padding: 8px 10px;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  background: var(--panel);
+  font-size: 0.67rem;
+  backdrop-filter: blur(8px);
+}
+
+.sim-log ol {
+  display: flex;
+  flex-direction: column-reverse;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sim-log li {
+  display: flex;
+  gap: 7px;
+  padding: 1px 0;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.sim-log time {
+  color: rgb(255 224 192 / 45%);
+}
+
+.sim-log .kind {
+  min-width: 52px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.sim-log .hit .kind { color: #ff8f5e; }
+.sim-log .damage .kind { color: #ff6b3d; }
+.sim-log .block .kind { color: #bcd4ff; }
+.sim-log .glance .kind { color: #ffd29a; }
+.sim-log .whiff .kind { color: #8fa08f; }
+.sim-log .riposte .kind { color: #ffb35d; }
+.sim-log .swing .kind { color: #7d6a5c; }
+.sim-log .defeat .kind { color: #ff5f5f; }
+.sim-log .start .kind { color: #9ad0ff; }
+
+.sim-help {
+  position: fixed;
+  bottom: 8px;
+  left: 12px;
+  color: var(--dim);
+  font-size: 0.64rem;
+}
+
+kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--edge);
+  border-radius: 3px;
+  color: var(--ink);
+  background: rgb(255 255 255 / 7%);
+  font: inherit;
+}

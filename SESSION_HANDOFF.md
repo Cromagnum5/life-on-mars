@@ -2,9 +2,9 @@
 
 ## Current checkpoint
 
-Branch `combat-spectacle-pass` at `f3778e1` (`Sharpen combat presentation with
-sparks, sound, and trails`), branched from `main` at `3b89a55`. Not yet merged
-to `main` and not pushed.
+Branch `combat-spectacle-pass`, on top of `2d317e2` (`Document combat effects
+handoff`). Working tree has the combat sim and the readability pass described
+below; nothing committed or pushed yet.
 
 Production remains set to one Rigwalker every 20 seconds.
 
@@ -14,132 +14,96 @@ Run these checks after future combat changes:
 npm test
 npm run build
 blender --background --python tools/render_rigwalker_duel.py
+npm run dev   # then tools/capture_sim.sh /tmp/sheet 3v2 5 3 6 9 12
 ```
 
 The Vite warning about the core Three.js chunk exceeding 500 kB is known and
-non-blocking.
+non-blocking. It is now reported against the shared `world` chunk.
 
-## Outstanding: the effects have never been seen
+## The effects have now been seen
 
-The spark, flash, ring, and weapon-trail work in `src/effects.ts` was written
-and reasoned about but **never validated as a rendered result**. Browser
-automation was unavailable in the session that wrote it, and the Blender duel
-tool validates skeleton poses, not particles.
+The previous handoff's first job was to look at the spark, flash, ring, and
+trail work, which had never been rendered. It has been, through the combat sim
+in headless Chromium (SwiftShader), and the results drove this session's
+changes. See `AGENTS.md` for how to capture frames.
 
-Reviewing the math instead caught four real bugs worth knowing about, since the
-same class of error is likely to recur:
+What looking at it revealed, in rough order of how badly each one hurt:
 
-- Sparks were sized under 2 px. `gl_PointSize` for an orthographic camera needs
-  an explicit world-to-pixel uniform; there is no perspective divide to rely on.
-- That uniform must use the framebuffer height (`renderer.domElement.height`),
-  not `window.innerHeight`, or a device pixel ratio above one halves everything.
-- The trail tinted both `material.color` and its vertex colors, squaring the
-  accent. The material stays white; the accent rides on vertex colors.
-- Every `play()` leaked a `StereoPannerNode` connected to master.
+1. **Fighters stood inside each other.** Pairs settled around 1.9 m and crowds
+   pressed to 0.8 m, so a duel rendered as one twitching blob. Two causes: the
+   closing step ran at full speed on a deliberately stale distance reading and
+   overshot, and steering separation is too weak to hold a crowd that is all
+   pushing the same way. Fixed by clamping the closing step against the real
+   gap and adding a positional clearance floor. `src/rigwalker.test.ts` pins it.
+2. **The weapon trail was an opaque wedge.** It spanned the whole blade from
+   the hilt across a full arc at near-full additive accent, covering the
+   fighter swinging it. Now it starts past the middle of the blade, holds fewer
+   samples, and fades quadratically from a leading edge well under 1.
+3. **Sparks were too small to read** at RTS scale. Sized up by about 1.6×.
+4. **Health bars floated over every unit at full HP**, competing with the
+   sparks. They now appear only once a fighter is hurt, or on selection.
+5. **Sword-side cuts landed behind the attacker.** At the moment of contact,
+   `overhead`, `forehand`, and `flank` put the blade's percussion point 0.14 m
+   *behind* the attacker and 2 m out to the side, with the opponent 2.9 m
+   straight ahead, so the sparks appeared to come off the attacker's own
+   shoulder. The impact wrist carried a hand-tuned per-side triple instead of
+   mirroring with `attackSide` like the rest of the arm; every line now
+   resolves with 1.8-2.6 m of reach toward the opponent. Found and fixed by
+   measurement, with `contacts=1` in the sim.
+6. **Corpses blinked out** at 2.5 s. They now lie for 3.4 s and sink into the
+   dust over the last 0.8 s. Sinking rather than fading is deliberate: cloned
+   GLB instances share materials, so fading one corpse would fade every unit.
 
-**First job next session: open the game and look.** Spark counts, colors, trail
-length, flash scale, and ring radius are all unverified guesses. Judge at RTS
-viewing scale per `AGENTS.md`.
+## Layout
 
-## Combat implementation
-
-- `src/combat.ts` owns combat planning, targeting, exchanges, damage outcomes,
-  persistent temperaments, tactical memory, group-support assignments, and the
-  discrete event stream.
-- `src/rigwalker.ts` owns presentation: movement cues, imported-skeleton
-  procedural poses, guards, blocks, hit reactions, recoil, health bars,
-  animation blending, and blade sampling in world space.
-- `src/effects.ts` owns pooled sparks, flashes, ground rings, and weapon-trail
-  ribbons. All preallocated; the update path does not allocate.
-- `src/audio.ts` owns synthesized combat sound. No assets, no dependency.
-- `src/main.ts` creates combat snapshots, applies damage, presents events as
-  sparks and sound, and feeds trails.
-- `src/combat.test.ts` and `src/effects.test.ts` carry deterministic coverage.
-- `tools/render_rigwalker_duel.py` imports the shipped GLB and renders a
-  multi-frame, three-angle duel review.
+- `src/world.ts` — terrain, rocks, atmosphere, lighting, camera, renderer.
+- `src/battle.ts` — `BattleRuntime`: one frame of fighting end to end (plan,
+  present, damage, pose, trail, cull). The game and the sim both drive it.
+- `src/sim.ts` + `sim.html` + `src/sim.css` — the combat workbench.
+- `src/combat.ts` — planning, targeting, exchanges, outcomes, temperaments,
+  tactical memory, group support, and the discrete event stream.
+- `src/rigwalker.ts` — presentation: movement, imported-skeleton poses, guards,
+  blocks, reactions, health bars, blending, blade sampling.
+- `src/effects.ts` — pooled sparks, flashes, rings, trails. No allocation in
+  the update path.
+- `src/audio.ts` — synthesized combat sound.
+- `src/random.ts` — seeded PRNG, so a sim replays a fight.
+- `tools/capture_sim.sh` — headless contact sheets from the sim.
 
 ## Architecture notes worth preserving
 
-- **Cues carry phases, not fake elapsed times.** An earlier design multiplied a
-  cue phase by a constant and immediately divided by the same constant. Do not
-  reintroduce a duration constant in `rigwalker.ts`; the director owns real
-  per-strategy durations.
+- **Cues carry phases, not fake elapsed times.** Do not reintroduce a duration
+  constant in `rigwalker.ts`; the director owns real per-strategy durations.
 - **Events, not edge detection.** `CombatFrame.events` exists so presentation
-  never has to diff per-frame cues. A swing that resolves inside one frame still
-  produces exactly one spark and one sound. Tests pin this invariant.
-- **The blade's ends come from geometry, not assumed axes.** The Blender
-  cylinder is authored along local Z, but the glTF Z-up to Y-up conversion moves
-  it. `sampleBlade` reads the bounding box and picks the tip by distance from
-  the body.
-- **The pipe is fallback-only.** `pipePivot` is rendered only when the GLB fails
-  to load. Keep its choreography behind the `pipePivot.visible` guard.
+  never diffs per-frame cues. Tests pin this.
+- **The blade's ends come from geometry, not assumed axes.** `sampleBlade`
+  reads the bounding box and picks the tip by distance from the body.
+- **The pipe is fallback-only.** Keep its choreography behind `pipePivot.visible`.
+- **Stale readings decide, real distance constrains.** Combat spacing looks
+  unrehearsed because fighters act on an out-of-date distance; it stays legible
+  because the step is clamped against the true one. Keep those separate.
 
-## Implemented behavior
+## Measured state
 
-- Persistent bold, reactive, patient, and adaptive temperaments.
-- Random opening plans including rushes, reaction waits, extended sizing-up,
-  feints, beats, distance traps, and ripostes.
-- Plans adapt to health, opponent health, tactical memory, and recent strategy.
-- Only swinging/club-like attacks are used; no stabbing vocabulary or attacks.
-- Blocks prevent damage, glancing outcomes reduce it, and clean hits apply full
-  reaction intensity, each with a distinct spark, flash, and sound signature.
-- Feints show a false line for the first 30% of the swing, visible as a
-  mid-swing direction change in the weapon trail.
-- Units help threatened teammates; a target accepts one primary opponent plus at
-  most two support attackers.
-- Survivors promote/retarget correctly after an opponent dies.
-- Health is visible to opponents through combat snapshots and to players via
-  world-space bars/HUD. The HUD reports temperament and current plan.
+- Duels resolve in roughly 22 s on average across 200 seeded runs.
+- Outcome mix is about 26% blocked, 10% glancing, 55% clean hits, 8% whiffs.
+  `combat.test.ts` now guards the pace and the mix, since a vanishing outcome
+  silently removes a whole read from combat.
+- Blender validation: foot drift 0.069 m, recovery error 0.00 degrees.
+- 32 tests pass; production build passes.
 
-## Validation details
+## Suggested next steps
 
-The duel renderer must transform every imported GLB top-level object through a
-shared actor root. Rotating only the armature can leave visible meshes facing
-the wrong direction.
+The goal remains that combat looks cooler each iteration, not that it becomes
+playable. Player agency (attack orders, focus fire) is still out of scope.
 
-Automated imported-GLB validation currently checks:
-
-- Visible facing from the visor-to-backpack vector at multiple approach and
-  combat frames. A non-positive opponent-facing dot product fails.
-- `Broadsword` is bone-parented to `weapon.R`.
-- `weapon.R` is directly parented to `hand.R`.
-- Maximum sampled foot-height drift stays below 0.18 m.
-- Recovery stays within 0.08 radians of the ready pose.
-
-Last measured result:
-
-- Maximum foot drift: 0.069 m.
-- Maximum recovery error: 0.00 degrees.
-- All 28 tests passed.
-- Production build passed.
-
-Rendered review files are temporary:
-
-- `/tmp/life-on-mars-animation-review/`
-- `/tmp/life-on-mars-combat-contact-sheet.png`
-
-## Relevant commit sequence
-
-- `10a1678` Deepen tactical combat exchanges
-- `ce9f3d6` Add line-specific combat choreography
-- `fa06454` Harden long-running group combat
-- `5f10e63` Validate Rigwalker duel facing
-- `eb99c0d` Expand Rigwalker combat validation
-- `8c59e74` Add Rigwalker balance controller
-- `63fb5d8` Vary combat spacing and reactions
-- `3b89a55` Fix death animation rotation wrap
-- `f3778e1` Sharpen combat presentation with sparks, sound, and trails
-
-## Suggested next-session approach
-
-The stated goal is for combat to look cooler each iteration, not to become
-playable. Player agency (attack orders, focus fire) is deliberately out of
-scope.
-
-1. Look at the running game and tune the effects. They are unverified.
-2. Health bars render on every unit at full HP, competing with the new sparks.
-   Hiding them until damaged or selected is a small readability win.
-3. Corpses pop out of existence at 2.5 s with no fade. Persistent wrecks and a
-   scorch decal would give the battlefield stakes.
-4. Both corporations rally to the world origin, so fights happen by accident at
-   the map centre rather than anywhere the player is looking.
+1. Both corporations still rally to the world origin, so fights happen by
+   accident at the map centre rather than anywhere the player is looking.
+2. A scorch decal under a wreck would give the battlefield stakes; the corpse
+   currently sinks into unmarked ground.
+3. Group fights all converge on the same face of a target. Supporting attackers
+   have an angle cue but no assigned position around the target, so a 3v2 reads
+   as a queue rather than an encirclement.
+4. Trails read as white-hot rather than corporate-colored, because additive
+   blending over bright ground washes out the accent. Vertex alpha with normal
+   blending would keep the color if that matters.

@@ -113,12 +113,28 @@ type Encounter = {
   exchange: Exchange;
 };
 
+/** Player-facing names for each plan, shared by the HUD and the combat sim. */
+export const STRATEGY_LABELS: Record<CombatStrategy, string> = {
+  rush: "Rushing",
+  react: "Waiting to counter",
+  "size-up": "Sizing up",
+  feint: "Feinting",
+  "distance-trap": "Baiting range",
+  beat: "Beating the guard",
+  riposte: "Riposting",
+};
+
 const AWARENESS_RANGE = 8.5;
 // Kept clear of MAX_FIGHT_DISTANCE so a pair drifting around its preferred
 // spacing cannot cross the range check and rewind the exchange every frame.
-const ATTACK_RANGE = 3.7;
-const MIN_FIGHT_DISTANCE = 2.15;
-const MAX_FIGHT_DISTANCE = 3.15;
+export const ATTACK_RANGE = 4.3;
+// Sized from the rendered result, not from reach: below about 2.6 m the two
+// silhouettes merge into one blob at RTS viewing scale and the fight stops
+// reading. The blade is 2.65 m, so this band still lets it do the work.
+export const MIN_FIGHT_DISTANCE = 2.6;
+export const MAX_FIGHT_DISTANCE = 3.65;
+/** Spacing a pair settles at when nothing biases the plan toward reach. */
+export const BASE_FIGHT_DISTANCE = 3.05;
 const MAX_SUPPORTERS_PER_TARGET = 2;
 const LINES: readonly AttackLine[] = ["overhead", "forehand", "backhand", "flank", "rising"];
 const EMPTY_CUE: CombatCue = {
@@ -133,7 +149,7 @@ const EMPTY_CUE: CombatCue = {
   side: 1,
   intensity: 0,
   outcome: "pending",
-  preferredDistance: 2.65,
+  preferredDistance: BASE_FIGHT_DISTANCE,
 };
 
 function clamp01(value: number): number {
@@ -186,6 +202,12 @@ export class CombatDirector {
   private readonly fighters = new Map<number, FighterState>();
 
   constructor(private readonly random: () => number = Math.random) {}
+
+  /** Forgets every encounter and all tactical memory. Used to restart a sim. */
+  reset(): void {
+    this.encounters.clear();
+    this.fighters.clear();
+  }
 
   update(delta: number, snapshots: readonly CombatantSnapshot[]): CombatFrame {
     const presentIds = new Set(snapshots.map((fighter) => fighter.id));
@@ -381,7 +403,10 @@ export class CombatDirector {
       0;
     const preferredDistance = Math.max(
       MIN_FIGHT_DISTANCE,
-      Math.min(MAX_FIGHT_DISTANCE, 2.65 + rangeBias + (this.random() - 0.5) * 0.6875),
+      Math.min(
+        MAX_FIGHT_DISTANCE,
+        BASE_FIGHT_DISTANCE + rangeBias + (this.random() - 0.5) * 0.6875,
+      ),
     );
     return {
       plannerId: attacker.id,

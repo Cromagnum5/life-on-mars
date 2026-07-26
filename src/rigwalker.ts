@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { BalanceController, type BalancePose } from "./balance";
 import type { RigwalkerAsset } from "./rigwalker-assets";
 import {
+  BASE_FIGHT_DISTANCE,
   createCombatProfile,
   type AttackLine,
   type CombatCue,
@@ -50,13 +51,29 @@ export type NavigationObstacle = {
 const MOVE_SPEED = 3.6;
 const SEPARATION_SPEED = 1.1;
 const SEPARATION_RADIUS = 1.25;
+/**
+ * Fighters keep more room than marching units. Allies converging on one target
+ * otherwise stand shoulder to shoulder, and the melee reads as a single blob
+ * instead of several fighters working an opponent from different angles.
+ */
+const COMBAT_SEPARATION_RADIUS = 2.05;
+/**
+ * Hard floor on how close two bodies may end a frame. Steering alone cannot
+ * hold a crowd apart: several units converging on one target push inward
+ * faster than the separation drift pushes back, and they end up occupying the
+ * same spot. This resolves the remaining overlap positionally.
+ */
+const UNIT_CLEARANCE = 1.15;
+const COMBAT_CLEARANCE = 1.85;
 const OBSTACLE_LOOKAHEAD = 1.4;
 const WALK_CYCLE_SPEED = 8.4;
 const MAX_HEALTH = 100;
-const DEFAULT_FIGHT_DISTANCE = 2.65;
 const COMBAT_DISTANCE_DEAD_ZONE = 0.16;
 const COMBAT_SHUFFLE_SPEED = 2.25;
 const WALK_ANIMATION_SPEED = 1.72;
+/** How long a wreck stays on the battlefield, and its final sink. */
+const CORPSE_SECONDS = 3.4;
+const CORPSE_SINK_SECONDS = 0.8;
 /** Fraction of an attack during which a feint shows its false line. */
 const FEINT_REVEAL_PHASE = 0.3;
 
@@ -239,9 +256,14 @@ function applyCombatPose(bones: CombatBones, input: CombatPoseInput): void {
     attackSide * (winding * 0.18 - impact * 0.28 - followThrough * 0.14),
     attackSide * (0.04 + winding * 0.08 - impact * 0.1 + guarding * 0.08),
   );
-  const contactWristX = attackSide > 0 ? 0.8 : -1.2;
-  const contactWristY = attackSide > 0 ? 0.25 : 0;
-  const contactWristZ = attackSide > 0 ? 2 : 1.5;
+  // The impact wrist mirrors with `attackSide`, like the rest of the arm chain.
+  // The sword-side lines used to carry their own hand-tuned triple, which rolled
+  // the blade back over the attacker's own shoulder at the moment of contact:
+  // measured against the opponent, the percussion point sat 0.14 m *behind* the
+  // attacker and 2 m out to the side, so sparks flew off the wrong fighter.
+  const contactWristX = -1.2;
+  const contactWristY = 0;
+  const contactWristZ = -attackSide * 1.5;
   setBoneOffset(bones.handR, bones.armRest.handR,
     (-0.1 - winding * 0.22) * (1 - impact)  + contactWristX * impact + followThrough * 0.2 - deflection * 0.5,
     attackSide * (-0.12 - winding * 0.26) * (1 - impact) + contactWristY * impact - attackSide * followThrough * 0.12,
@@ -522,6 +544,8 @@ export function createRigwalker(
   asset: RigwalkerAsset | null = null,
   accentColor = 0xf29a3f,
   corporation = "Independent",
+  /** Injected so a sim can seed temperaments and replay the same fight. */
+  random: () => number = Math.random,
 ): Rigwalker {
   const group = new THREE.Group();
   group.name = "Rigwalker";
@@ -569,6 +593,9 @@ export function createRigwalker(
   );
   healthFill.position.z = 0.01;
   healthBar.add(healthBack, healthFill);
+  // A full bar over every unit competes with the sparks and tells the player
+  // nothing. It appears once the fighter has been hurt, or on selection.
+  healthBar.visible = false;
   group.add(healthBar);
 
   const pipePivot = new THREE.Group();
@@ -654,7 +681,7 @@ export function createRigwalker(
 
   let destination: THREE.Vector3 | null = null;
   let health = MAX_HEALTH;
-  const combatProfile = createCombatProfile();
+  const combatProfile = createCombatProfile(random);
   let combatTarget: Rigwalker | null = null;
   let activeStrategy: CombatStrategy | null = null;
   let swinging = false;
@@ -667,7 +694,7 @@ export function createRigwalker(
   let wasInCombat = false;
   let observedCombatTargetId: number | null = null;
   let observedEnemyDistance = Number.POSITIVE_INFINITY;
-  let observedFightDistance = DEFAULT_FIGHT_DISTANCE;
+  let observedFightDistance = BASE_FIGHT_DISTANCE;
   let distanceObservationElapsed = 0;
   let distanceObservationCount = 0;
   const balance = new BalanceController();
@@ -730,6 +757,7 @@ export function createRigwalker(
 
   function setSelected(selected: boolean): void {
     selectionRing.visible = selected;
+    healthBar.visible = selected || (health > 0 && health < MAX_HEALTH);
   }
 
   /** Swings the primitive fallback's pipe, which has no skeleton to drive it. */
@@ -791,6 +819,7 @@ export function createRigwalker(
     health = Math.max(0, health - damage);
     healthFill.scale.x = health / MAX_HEALTH;
     healthFill.position.x = -0.69 * (1 - health / MAX_HEALTH);
+    healthBar.visible = health > 0;
     if (health === 0) {
       selectionRing.visible = false;
       defeatElapsed = 0;
@@ -821,10 +850,15 @@ export function createRigwalker(
         defeatTargetRotation,
         fallProgress,
       );
+      // The wreck lies where it fell, then settles into the dust. Materials are
+      // shared between clones, so sinking is how a corpse leaves without
+      // fading every other Rigwalker with it.
+      const settling = Math.max(
+        0, (defeatElapsed - (CORPSE_SECONDS - CORPSE_SINK_SECONDS)) / CORPSE_SINK_SECONDS,
+      );
       group.position.y = THREE.MathUtils.damp(
         group.position.y, terrainHeightAt(group.position.x, group.position.z) + 0.2, 12, delta,
-      );
-      healthBar.quaternion.copy(group.quaternion).invert().multiply(cameraQuaternion);
+      ) - settling * 2.1;
       return;
     }
 
@@ -842,10 +876,17 @@ export function createRigwalker(
 
     let moving = false;
     let travelSpeed = 0;
+    // Distance this frame's step may cover, so closing cannot overshoot.
+    let travelLimit = Number.POSITIVE_INFINITY;
     separation.set(0, 0, 0);
 
+    combatTarget = combatCue?.targetId == null
+      ? null
+      : nearbyUnits.find((other) => other.combatId === combatCue.targetId && other.isAlive) ?? null;
+
+    const separationRadius = combatTarget ? COMBAT_SEPARATION_RADIUS : SEPARATION_RADIUS;
     for (const other of nearbyUnits) {
-      if (other === rigwalker) {
+      if (other === rigwalker || !other.isAlive) {
         continue;
       }
 
@@ -855,7 +896,7 @@ export function createRigwalker(
         group.position.z - other.group.position.z,
       );
       const distance = radial.length();
-      if (distance < SEPARATION_RADIUS) {
+      if (distance < separationRadius) {
         if (distance < 0.001) {
           const angle = (group.id % 8) * (Math.PI / 4);
           radial.set(Math.cos(angle), 0, Math.sin(angle));
@@ -864,14 +905,10 @@ export function createRigwalker(
         }
         separation.addScaledVector(
           radial,
-          (SEPARATION_RADIUS - distance) / SEPARATION_RADIUS,
+          (separationRadius - distance) / separationRadius,
         );
       }
     }
-
-    combatTarget = combatCue?.targetId == null
-      ? null
-      : nearbyUnits.find((other) => other.combatId === combatCue.targetId && other.isAlive) ?? null;
 
     const inCombat = combatTarget !== null;
     activeStrategy = inCombat ? combatCue?.strategy ?? null : null;
@@ -886,7 +923,7 @@ export function createRigwalker(
       ? group.position.distanceTo(combatTarget.group.position)
       : Number.POSITIVE_INFINITY;
     if (combatTarget) {
-      const fightDistance = combatCue?.preferredDistance ?? DEFAULT_FIGHT_DISTANCE;
+      const fightDistance = combatCue?.preferredDistance ?? BASE_FIGHT_DISTANCE;
       if (observedCombatTargetId !== combatTarget.combatId) {
         observedCombatTargetId = combatTarget.combatId;
         observedEnemyDistance = enemyDistance;
@@ -915,6 +952,10 @@ export function createRigwalker(
       if (observedEnemyDistance > observedFightDistance + COMBAT_DISTANCE_DEAD_ZONE || wantsToClose) {
         movement.copy(combatDirection);
         moving = true;
+        // The decision runs on a deliberately stale reading, but the step is
+        // clamped against the real gap. Walking through the opponent merges
+        // two silhouettes into one blob and the fight stops reading.
+        travelLimit = Math.max(0, enemyDistance - (fightDistance - COMBAT_DISTANCE_DEAD_ZONE));
       } else if (observedEnemyDistance < observedFightDistance - COMBAT_DISTANCE_DEAD_ZONE || wantsToRetreat) {
         movement.copy(combatDirection).multiplyScalar(-1);
         moving = true;
@@ -930,7 +971,7 @@ export function createRigwalker(
     } else {
       observedCombatTargetId = null;
       observedEnemyDistance = Number.POSITIVE_INFINITY;
-      observedFightDistance = DEFAULT_FIGHT_DISTANCE;
+      observedFightDistance = BASE_FIGHT_DISTANCE;
     }
 
     if (!combatTarget && destination) {
@@ -1011,7 +1052,7 @@ export function createRigwalker(
             destination.z - group.position.z,
           )
         : Number.POSITIVE_INFINITY;
-      const travel = Math.min(remainingDistance, travelSpeed * delta);
+      const travel = Math.min(remainingDistance, travelLimit, travelSpeed * delta);
       group.position.addScaledVector(movement, travel);
 
       const targetAngle = combatTarget
@@ -1026,6 +1067,27 @@ export function createRigwalker(
     // applyCombatPose and needs no separate choreography.
     if (pipePivot.visible) {
       poseFallbackWeapon(attackPhase, defensePhase, beatPreparation, presentedLine);
+    }
+
+    const clearance = combatTarget ? COMBAT_CLEARANCE : UNIT_CLEARANCE;
+    for (const other of nearbyUnits) {
+      if (other === rigwalker || !other.isAlive) continue;
+      radial.set(
+        group.position.x - other.group.position.x,
+        0,
+        group.position.z - other.group.position.z,
+      );
+      const distance = radial.length();
+      if (distance >= clearance) continue;
+      if (distance < 0.001) {
+        const angle = (group.id % 8) * (Math.PI / 4);
+        radial.set(Math.cos(angle), 0, Math.sin(angle));
+      } else {
+        radial.divideScalar(distance);
+      }
+      // Half the overlap each: the other unit resolves its own half on its own
+      // update, so a pair separates without either being thrown clear.
+      group.position.addScaledVector(radial, (clearance - distance) * 0.5);
     }
 
     group.position.y = THREE.MathUtils.damp(
@@ -1111,7 +1173,7 @@ export function createRigwalker(
     maxHealth: MAX_HEALTH,
     get isAlive() { return health > 0; },
     get strategy() { return activeStrategy; },
-    get canRemove() { return defeatElapsed >= 2.5; },
+    get canRemove() { return defeatElapsed >= CORPSE_SECONDS; },
     get isSwinging() { return swinging; },
     getContactPoint,
     getBladeVelocity,

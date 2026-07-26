@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  ATTACK_RANGE,
   CombatDirector,
+  MAX_FIGHT_DISTANCE,
+  MIN_FIGHT_DISTANCE,
   createCombatProfile,
   type CombatCue,
   type CombatEvent,
@@ -138,13 +141,40 @@ describe("CombatDirector", () => {
     for (let seed = 1; seed <= 40; seed += 1) expect(simulate(seed).blockedDamage).toBe(0);
   });
 
+  it("resolves duels at a pace with a mix of outcomes", () => {
+    const tally = { swing: 0, block: 0, glance: 0, hit: 0, whiff: 0, riposte: 0 };
+    let totalSeconds = 0;
+    for (let seed = 1; seed <= 60; seed += 1) {
+      const result = simulate(seed * 7919);
+      // A duel that hits the 120 s ceiling means the exchange loop stalled.
+      expect(result.seconds).toBeLessThan(120);
+      totalSeconds += result.seconds;
+      for (const event of result.events) tally[event.type] += 1;
+    }
+    const mean = totalSeconds / 60;
+    // Long enough to show the vocabulary, short enough to stay a fight.
+    expect(mean).toBeGreaterThan(6);
+    expect(mean).toBeLessThan(50);
+    const contacts = tally.block + tally.glance + tally.hit + tally.whiff;
+    // Every outcome has to keep happening: each has its own spark, sound, and
+    // reaction, and a vanishing one quietly removes a whole read from combat.
+    for (const outcome of ["block", "glance", "hit", "whiff"] as const) {
+      expect(tally[outcome] / contacts).toBeGreaterThan(0.04);
+    }
+    expect(tally.hit / contacts).toBeLessThan(0.7);
+    expect(tally.riposte).toBeGreaterThan(0);
+  });
+
   it("varies the preferred distance between exchanges while keeping attacks in reach", () => {
     const distances = new Set<number>();
     for (let seed = 1; seed <= 32; seed += 1) {
       for (const cue of simulate(seed).cues) {
         distances.add(Math.round(cue.preferredDistance * 100));
-        expect(cue.preferredDistance).toBeGreaterThanOrEqual(2.15);
-        expect(cue.preferredDistance).toBeLessThanOrEqual(3.15);
+        expect(cue.preferredDistance).toBeGreaterThanOrEqual(MIN_FIGHT_DISTANCE);
+        expect(cue.preferredDistance).toBeLessThanOrEqual(MAX_FIGHT_DISTANCE);
+        // Spacing a pair settles at has to stay inside the range that keeps
+        // the exchange alive, or the encounter rewinds every frame.
+        expect(cue.preferredDistance).toBeLessThan(ATTACK_RANGE);
       }
     }
     expect(distances.size).toBeGreaterThan(20);

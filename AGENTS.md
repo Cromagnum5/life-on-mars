@@ -30,6 +30,11 @@ interaction over broad systems or premature engine architecture.
 - No physics engine or ECS dependency at this stage.
 - Development server listens on `0.0.0.0:5173` for access from another machine.
 - Run with `npm run dev`; validate with `npm run build`.
+- Two entry points: `index.html` for the game and `sim.html` for the combat sim.
+  Both are listed in `vite.config.ts`; a new page needs an entry there.
+- `src/world.ts` owns terrain, lighting, and the camera; `src/battle.ts` owns one
+  frame of fighting end to end. The game and the sim share both, so a change
+  seen in the sim is a change the player gets.
 
 Current camera controls are intentionally minimal after playtesting:
 
@@ -109,6 +114,10 @@ is now the normal runtime visual for initial and produced units; asset tooling
 is loaded as a separate browser chunk, and gameplay remains independent of the
 rendered model. The original nine-step vertical slice is complete.
 
+Combat has its own workbench rather than being tuned in the game: `sim.html`
+stages seeded 1v1 through 5v5 matchups against the same runtime, with a
+per-fighter readout and an event log, and renders headlessly for review.
+
 ## Current playtest
 
 The nine-step vertical slice has been manually playtested and feels good. The
@@ -164,11 +173,53 @@ only code or one pose.
 - Judge motion at RTS viewing scale. If consecutive rendered phases are barely
   distinguishable, increase the motion envelope and rerun both geometry and
   multi-frame visual checks.
+- The arm chain mirrors with `attackSide`: X is side-independent, Y and Z flip.
+  A pose that breaks that rule with hand-tuned per-side values will look
+  plausible on one side and wrong on the other. The impact wrist did exactly
+  this, rolling sword-side cuts back over the attacker's own shoulder.
+- Where a strike lands is measurable, so measure it instead of eyeballing the
+  pose. `contacts=1` reports the percussion point relative to the opponent; a
+  swing that resolves with less reach than the gap between fighters is landing
+  on nobody, and its sparks will appear to come off the wrong fighter.
+
+## The combat sim
+
+`sim.html` (`src/sim.ts`) is the workbench for combat. It stages a matchup on an
+empty arena, drives the same `BattleRuntime` the game does, and shows what the
+director is deciding: each fighter's temperament, plan, action, phase, and
+distance, plus a timestamped event log and an outcome tally.
+
+- Matchups are `1v1`, `2v2`, `3v2`, `3v3`, and `5v5`. Seeded, so a fight
+  replays.
+- `Space` pauses, `.` steps one frame, `R` restarts, `1`-`5` pick a matchup,
+  `WASD` pans, wheel zooms.
+- URL parameters: `matchup`, `seed`, `speed`, `zoom`, `hud=0`, `t`, and
+  `contacts=1`, which logs where each strike throws its sparks in the
+  attacker's own frame: reach toward the opponent, side, and height.
+
+`t` is the headless capture mode: the page steps a fixed timestep fight to that
+exact sim time in one synchronous burst, renders one frame, and freezes. It
+skips the intermediate draws, so a whole fight is capturable in a second.
+`tools/capture_sim.sh` wraps it:
+
+```sh
+npm run dev
+tools/capture_sim.sh /tmp/sheet 3v2 5 3 6 9 12
+```
+
+Chromium renders it with SwiftShader in `--headless=new`. Screenshots need the
+page to keep redrawing, which capture mode does deliberately: a canvas rendered
+once is empty by the time the screenshot is taken. `--dump-dom` returns the
+event log as text, which is often more useful than the picture.
+
+Do not point a capture past the end of a fight with auto-restart on; capture
+mode turns it off, because a restart would reset the clock the capture waits on.
 
 ## Combat effects validation
 
 Sparks, flashes, trails, and rings are not covered by the Blender duel tool,
-which validates skeleton poses only. They must be judged in the running game.
+which validates skeleton poses only. Judge them in the combat sim, which
+renders them at gameplay scale under the real camera.
 
 - Size particles in world units against the orthographic camera. There is no
   perspective divide, so `gl_PointSize` needs an explicit world-to-pixel
@@ -179,3 +230,25 @@ which validates skeleton poses only. They must be judged in the running game.
   channels.
 - Combat presentation reads `CombatFrame.events`, never per-frame cue diffs, so
   a swing resolving inside one frame produces exactly one spark and one sound.
+- Additive effects over bright Martian ground blow out fast. A weapon trail at
+  full accent strength reads as an opaque wedge covering the fighter rather
+  than a swept smear of light; keep its leading edge well under 1.
+
+## Combat spacing
+
+Spacing is a presentation constraint as much as a tactical one. Two Rigwalkers
+closer than about 2.6 m merge into a single silhouette at RTS viewing scale and
+the fight stops reading, whatever the poses are doing.
+
+- `MIN_FIGHT_DISTANCE`, `MAX_FIGHT_DISTANCE`, and `BASE_FIGHT_DISTANCE` in
+  `combat.ts` set the band a pair settles at. `ATTACK_RANGE` must stay clear of
+  the top of that band or the exchange rewinds every frame.
+- Fighters decide from a deliberately stale distance reading, which is what
+  makes spacing look unrehearsed. The step itself is clamped against the real
+  gap, so a decision made on old information cannot walk a unit through its
+  opponent.
+- Steering separation is not enough on its own. Several units converging on one
+  target push inward faster than the separation drift pushes back, so
+  `rigwalker.ts` also applies a positional clearance floor each frame.
+- `src/rigwalker.test.ts` drives movement and planning together, without
+  rendering, and pins the spacing a real fight settles at.

@@ -1,0 +1,221 @@
+import * as THREE from "three";
+import { CombatAudio } from "./audio";
+import {
+  CombatDirector,
+  type CombatCue,
+  type CombatEvent,
+  type CombatFrame,
+} from "./combat";
+import { CombatEffects } from "./effects";
+import type { NavigationObstacle, Rigwalker } from "./rigwalker";
+
+/**
+ * One frame of fighting, end to end: plan, present, damage, pose, and clean up
+ * the dead. The game and the combat sim both drive this, so anything seen in
+ * the sim is the same code path the player gets.
+ */
+
+export type BattleContext = {
+  camera: THREE.OrthographicCamera;
+  /** Where the camera is looking on the ground plane; the audio listener. */
+  focus: THREE.Vector3;
+  /** Framebuffer height, not CSS height; spark sizing depends on it. */
+  drawingBufferHeight: number;
+  terrainHeightAt: (x: number, z: number) => number;
+  obstacles: readonly NavigationObstacle[];
+};
+
+export type BattleFrame = {
+  cues: Map<number, CombatCue>;
+  events: readonly CombatEvent[];
+  /** Damage applied this frame, already dealt to the units. */
+  damage: CombatFrame["damage"];
+  /** Units defeated this frame, in the order they fell. */
+  defeats: readonly Rigwalker[];
+};
+
+export type BattleOptions = {
+  /** Injected for deterministic sims; defaults to `Math.random`. */
+  random?: () => number;
+  accentOf?: (corporation: string) => number;
+};
+
+const DEFAULT_ACCENT = 0xffb35d;
+/**
+ * Where along the blade the trail ribbon starts. Trailing the whole blade from
+ * the hilt sweeps a wedge as wide as the fighter; starting past the middle
+ * leaves a band that follows the edge doing the cutting.
+ */
+const TRAIL_INNER_EDGE = 0.62;
+
+// Contacts are what the player needs to hear. Swings are atmosphere, so they
+// yield to a clang when a crowded frame exceeds the voice budget.
+const EVENT_AUDIO_PRIORITY: Record<CombatEvent["type"], number> = {
+  hit: 0, block: 1, glance: 2, riposte: 3, whiff: 4, swing: 5,
+};
+
+export class BattleRuntime {
+  /** Live and recently defeated units. Producers may push directly. */
+  readonly units: Rigwalker[] = [];
+  readonly effects: CombatEffects;
+  readonly audio = new CombatAudio();
+
+  private readonly director: CombatDirector;
+  private readonly accentOf: (corporation: string) => number;
+  private readonly defeated = new Set<number>();
+  private readonly cameraRight = new THREE.Vector3();
+  private readonly cameraUp = new THREE.Vector3();
+  private readonly cameraForward = new THREE.Vector3();
+  private readonly contactPoint = new THREE.Vector3();
+  private readonly bladeDirection = new THREE.Vector3();
+  private readonly trailHilt = new THREE.Vector3();
+  private readonly trailTip = new THREE.Vector3();
+  private readonly deathFlash = new THREE.Vector3();
+  private readonly orderedEvents: CombatEvent[] = [];
+  private readonly frameDefeats: Rigwalker[] = [];
+
+  constructor(private readonly scene: THREE.Scene, options: BattleOptions = {}) {
+    this.effects = new CombatEffects(scene);
+    this.director = new CombatDirector(options.random);
+    this.accentOf = options.accentOf ?? (() => DEFAULT_ACCENT);
+  }
+
+  /** Adds a unit to the scene and the roster. */
+  spawn(unit: Rigwalker): Rigwalker {
+    this.scene.add(unit.group);
+    this.units.push(unit);
+    return unit;
+  }
+
+  /**
+   * Empties the battlefield and forgets every encounter. The effect pools are
+   * reused rather than rebuilt, so restarting a sim allocates nothing.
+   */
+  reset(): void {
+    for (const unit of this.units) unit.group.removeFromParent();
+    this.units.length = 0;
+    this.defeated.clear();
+    this.director.reset();
+    this.effects.clear();
+  }
+
+  update(delta: number, elapsed: number, context: BattleContext): BattleFrame {
+    const { camera } = context;
+    this.audio.beginFrame();
+    camera.updateMatrixWorld();
+    camera.matrixWorld.extractBasis(this.cameraRight, this.cameraUp, this.cameraForward);
+    this.audio.setListener(
+      context.focus.x, context.focus.z,
+      this.cameraRight.x, this.cameraRight.z,
+      (camera.top - camera.bottom) / camera.zoom,
+    );
+
+    const frame = this.director.update(
+      delta,
+      this.units.map((unit) => ({
+        id: unit.combatId, corporation: unit.corporation,
+        health: unit.health, maxHealth: unit.maxHealth, isAlive: unit.isAlive,
+        x: unit.group.position.x, z: unit.group.position.z, profile: unit.combatProfile,
+      })),
+    );
+    const byId = new Map(this.units.map((unit) => [unit.combatId, unit]));
+    this.presentEvents(frame.events, byId);
+    for (const event of frame.damage) {
+      byId.get(event.targetId)?.applyCombatDamage(event.amount, event.side);
+    }
+
+    this.frameDefeats.length = 0;
+    for (const unit of this.units) {
+      if (unit.isAlive || this.defeated.has(unit.combatId)) continue;
+      this.defeated.add(unit.combatId);
+      this.frameDefeats.push(unit);
+      this.audio.play("defeat", unit.group.position.x, unit.group.position.z, 1);
+      this.effects.flash(
+        this.deathFlash.copy(unit.group.position).setY(unit.group.position.y + 2.2),
+        2.4, 0xff8a4c,
+      );
+      this.effects.ring(unit.group.position, 3.2, this.accentOf(unit.corporation), 0.9);
+    }
+
+    for (const unit of this.units) {
+      unit.update(
+        delta, elapsed, context.terrainHeightAt, this.units, context.obstacles,
+        camera.quaternion, frame.cues.get(unit.combatId),
+      );
+    }
+    // Fed after unit.update so the ribbon samples this frame's pose. A trail
+    // that stops being fed fades itself out and releases its pool slot.
+    for (const unit of this.units) {
+      if (!unit.isSwinging || !unit.sampleBlade(this.trailHilt, this.trailTip)) continue;
+      this.trailHilt.lerp(this.trailTip, TRAIL_INNER_EDGE);
+      this.effects.trail(
+        unit.combatId, this.trailHilt, this.trailTip, this.accentOf(unit.corporation),
+      );
+    }
+    this.effects.update(delta, camera, context.drawingBufferHeight);
+
+    for (let index = this.units.length - 1; index >= 0; index -= 1) {
+      const unit = this.units[index];
+      if (!unit.canRemove) continue;
+      unit.group.removeFromParent();
+      this.defeated.delete(unit.combatId);
+      this.units.splice(index, 1);
+    }
+
+    return {
+      cues: frame.cues,
+      events: frame.events,
+      damage: frame.damage,
+      defeats: this.frameDefeats,
+    };
+  }
+
+  /**
+   * Turns the director's discrete events into sparks and sound at the place the
+   * blade actually is, so a block reads differently from a landed cut.
+   */
+  private presentEvents(
+    events: readonly CombatEvent[],
+    byId: Map<number, Rigwalker>,
+  ): void {
+    this.orderedEvents.length = 0;
+    for (const event of events) this.orderedEvents.push(event);
+    this.orderedEvents.sort(
+      (left, right) => EVENT_AUDIO_PRIORITY[left.type] - EVENT_AUDIO_PRIORITY[right.type],
+    );
+    for (const event of this.orderedEvents) {
+      const attacker = byId.get(event.attackerId);
+      if (!attacker) continue;
+      attacker.getContactPoint(this.contactPoint);
+      attacker.getBladeVelocity(this.bladeDirection);
+      if (this.bladeDirection.lengthSq() < 0.0001) {
+        this.bladeDirection.set(0, 0.4, 0);
+      }
+      this.bladeDirection.normalize();
+      this.audio.play(event.type, this.contactPoint.x, this.contactPoint.z, event.intensity);
+
+      switch (event.type) {
+        case "block":
+          // A parry throws the brightest, widest shower: it is the moment most
+          // worth noticing, and nothing else in the fight looks like it.
+          this.effects.sparkBurst(this.contactPoint, this.bladeDirection, 26, 7.5, 0xdbe7ff, 1.15);
+          this.effects.flash(this.contactPoint, 1.5, 0xcfe0ff);
+          break;
+        case "glance":
+          this.effects.sparkBurst(this.contactPoint, this.bladeDirection, 12, 5.5, 0xffcf95, 0.85);
+          this.effects.flash(this.contactPoint, 0.85, 0xffc98a);
+          break;
+        case "hit":
+          this.effects.sparkBurst(this.contactPoint, this.bladeDirection, 18, 4.4, 0xffa060, 0.7);
+          this.effects.flash(this.contactPoint, 1.25, 0xffb066);
+          break;
+        case "riposte":
+          // Telegraph the counter under the fighter turning it around.
+          this.effects.ring(
+            attacker.group.position, 2.1, this.accentOf(attacker.corporation), 0.55,
+          );
+          break;
+      }
+    }
+  }
+}
