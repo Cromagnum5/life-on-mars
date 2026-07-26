@@ -1,3 +1,5 @@
+export type CombatTemperament = "bold" | "reactive" | "patient" | "adaptive";
+
 export type CombatStrategy =
   | "rush"
   | "react"
@@ -13,6 +15,7 @@ export type CombatMovement = "hold" | "close" | "retreat" | "angle-left" | "angl
 export type CombatOutcome = "pending" | "blocked" | "glancing" | "hit" | "whiff";
 
 export type CombatProfile = {
+  temperament: CombatTemperament;
   initiative: number;
   patience: number;
   defense: number;
@@ -125,13 +128,24 @@ function freshMemory(): Memory {
 }
 
 export function createCombatProfile(random: () => number = Math.random): CombatProfile {
+  const temperaments: readonly CombatTemperament[] = ["bold", "reactive", "patient", "adaptive"];
+  const temperament = temperaments[Math.floor(random() * temperaments.length)];
+  const bases: Record<CombatTemperament, Omit<CombatProfile, "temperament">> = {
+    bold: { initiative: 0.9, patience: 0.32, defense: 0.58, deception: 0.42, aggression: 0.9, adaptability: 0.58 },
+    reactive: { initiative: 0.52, patience: 0.62, defense: 0.9, deception: 0.48, aggression: 0.48, adaptability: 0.78 },
+    patient: { initiative: 0.38, patience: 0.92, defense: 0.82, deception: 0.55, aggression: 0.38, adaptability: 0.88 },
+    adaptive: { initiative: 0.62, patience: 0.68, defense: 0.72, deception: 0.88, aggression: 0.62, adaptability: 0.95 },
+  };
+  const base = bases[temperament];
+  const vary = (value: number) => clamp01(value + (random() - 0.5) * 0.16);
   return {
-    initiative: 0.25 + random() * 0.75,
-    patience: 0.25 + random() * 0.75,
-    defense: 0.48 + random() * 0.45,
-    deception: 0.25 + random() * 0.75,
-    aggression: 0.3 + random() * 0.7,
-    adaptability: 0.45 + random() * 0.55,
+    temperament,
+    initiative: vary(base.initiative),
+    patience: vary(base.patience),
+    defense: vary(base.defense),
+    deception: vary(base.deception),
+    aggression: vary(base.aggression),
+    adaptability: vary(base.adaptability),
   };
 }
 
@@ -224,6 +238,10 @@ export class CombatDirector {
         strategy === "feint" ? p.deception + p.adaptability * 0.45 :
         strategy === "distance-trap" ? p.defense + p.adaptability * 0.7 :
         p.aggression + p.deception * 0.65;
+      if (p.temperament === "bold" && strategy === "rush") weight += 1.2;
+      if (p.temperament === "reactive" && strategy === "react") weight += 1.1;
+      if (p.temperament === "patient" && (strategy === "size-up" || strategy === "distance-trap")) weight += 1.25;
+      if (p.temperament === "adaptive" && (strategy === "feint" || strategy === "beat")) weight += 1.1;
       if (healthRatio < opponentRatio - 0.2 && (strategy === "react" || strategy === "distance-trap")) {
         weight += 0.8;
       }

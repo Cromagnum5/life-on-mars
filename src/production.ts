@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { createRigwalker, type Rigwalker } from "./rigwalker";
 import type { RigwalkerAsset } from "./rigwalker-assets";
 
-const PRODUCTION_SECONDS = 10;
+const PRODUCTION_SECONDS = 20;
 const DOOR_SPEED = 1.4;
 const DOOR_HEIGHT = 2.9;
 const OPEN_DOOR_SCALE = 0.12;

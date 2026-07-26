@@ -77,6 +77,19 @@ describe("CombatDirector", () => {
     for (let seed = 1; seed <= 40; seed += 1) expect(simulate(seed).blockedDamage).toBe(0);
   });
 
+  it("creates all persistent temperaments with distinct dominant traits", () => {
+    const temperamentRandom = seededRandom(1000);
+    const profiles = Array.from({ length: 256 }, () =>
+      createCombatProfile(temperamentRandom),
+    );
+    const byTemperament = new Map(profiles.map((profile) => [profile.temperament, profile]));
+    expect([...byTemperament.keys()].sort()).toEqual(["adaptive", "bold", "patient", "reactive"]);
+    expect(byTemperament.get("bold")!.aggression).toBeGreaterThan(byTemperament.get("bold")!.patience);
+    expect(byTemperament.get("reactive")!.defense).toBeGreaterThan(byTemperament.get("reactive")!.aggression);
+    expect(byTemperament.get("patient")!.patience).toBeGreaterThan(byTemperament.get("patient")!.initiative);
+    expect(byTemperament.get("adaptive")!.adaptability).toBeGreaterThan(0.8);
+  });
+
   it("produces bold, reactive, patient, and deceptive openings", () => {
     const openings = new Set<string>();
     for (let seed = 1; seed <= 160; seed += 1) {
