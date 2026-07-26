@@ -624,6 +624,9 @@ export function createRigwalker(
   let hitReactionElapsed = -1;
   let hitReactionSide: -1 | 1 = 1;
   let defeatElapsed = -1;
+  const defeatStartRotation = new THREE.Quaternion();
+  const defeatTargetRotation = new THREE.Quaternion();
+  const defeatRoll = new THREE.Quaternion();
   let wasInCombat = false;
   let observedCombatTargetId: number | null = null;
   let observedEnemyDistance = Number.POSITIVE_INFINITY;
@@ -667,6 +670,12 @@ export function createRigwalker(
     if (health === 0) {
       selectionRing.visible = false;
       defeatElapsed = 0;
+      defeatStartRotation.copy(group.quaternion);
+      defeatRoll.setFromAxisAngle(
+        new THREE.Vector3(0, 0, 1),
+        hitReactionSide * 1.32,
+      );
+      defeatTargetRotation.copy(defeatStartRotation).multiply(defeatRoll);
     }
   }
 
@@ -682,9 +691,14 @@ export function createRigwalker(
     previousPosition.copy(group.position);
     if (health <= 0) {
       defeatElapsed += delta;
-      group.rotation.z = THREE.MathUtils.damp(group.rotation.z, hitReactionSide * 1.32, 5.5, delta);
+      const fallProgress = 1 - Math.exp(-5.5 * defeatElapsed);
+      group.quaternion.slerpQuaternions(
+        defeatStartRotation,
+        defeatTargetRotation,
+        fallProgress,
+      );
       group.position.y = THREE.MathUtils.damp(
-        group.position.y, terrainHeightAt(group.position.x, group.position.z) + 0.12, 12, delta,
+        group.position.y, terrainHeightAt(group.position.x, group.position.z) + 0.2, 12, delta,
       );
       healthBar.quaternion.copy(group.quaternion).invert().multiply(cameraQuaternion);
       return;
