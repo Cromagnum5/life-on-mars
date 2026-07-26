@@ -56,7 +56,8 @@ export type CombatantSnapshot = {
  * of edge-detecting per-frame cues, so a swing that starts and resolves inside
  * one frame still produces exactly one spark and one sound.
  */
-export type CombatEventType = "swing" | "block" | "glance" | "hit" | "whiff" | "riposte";
+export type CombatEventType =
+  | "swing" | "block" | "glance" | "hit" | "whiff" | "riposte" | "plan";
 
 export type CombatEvent = {
   type: CombatEventType;
@@ -272,6 +273,7 @@ export class CombatDirector {
     for (const candidate of candidates) {
       if (reserved.has(candidate.a.id) || reserved.has(candidate.b.id)) continue;
       const encounter = this.createEncounter(candidate.a, candidate.b);
+      this.announcePlan(encounter.exchange, events);
       this.encounters.set(this.key(candidate.a.id, candidate.b.id), encounter);
       reserved.add(candidate.a.id);
       reserved.add(candidate.b.id);
@@ -303,6 +305,7 @@ export class CombatDirector {
       const choice = choices[0];
       if (!choice) continue;
       const encounter = this.createSupportEncounter(helper, choice.target);
+      this.announcePlan(encounter.exchange, events);
       this.encounters.set("support:" + helper.id + ":" + choice.target.id, encounter);
       reserved.add(helper.id);
       supportCounts.set(choice.target.id, (supportCounts.get(choice.target.id) ?? 0) + 1);
@@ -316,6 +319,15 @@ export class CombatDirector {
     }
 
     return { cues, damage, events };
+  }
+
+  /**
+   * A fighter committing to a plan is a discrete moment like any contact, so it
+   * travels on the event stream rather than being edge-detected from cues. A
+   * riposte announces itself with its own event and is not repeated here.
+   */
+  private announcePlan(exchange: Exchange, events: CombatEvent[]): void {
+    if (exchange.strategy !== "riposte") events.push(this.event(exchange, "plan"));
   }
 
   private createEncounter(a: CombatantSnapshot, b: CombatantSnapshot): Encounter {
@@ -542,6 +554,7 @@ export class CombatDirector {
     this.recordExchange(exchange);
     if (encounter.support) {
       encounter.exchange = this.planExchange(a, b, 0, undefined, true);
+      this.announcePlan(encounter.exchange, events);
       return;
     }
     if ((exchange.outcome === "blocked" || exchange.outcome === "whiff") &&
@@ -556,6 +569,7 @@ export class CombatDirector {
         this.random() < 0.5 ? attacker : defender;
       const nextDefender = nextAttacker.id === attacker.id ? defender : attacker;
       encounter.exchange = this.planExchange(nextAttacker, nextDefender, 0);
+      this.announcePlan(encounter.exchange, events);
     }
   }
 
@@ -640,6 +654,7 @@ export class CombatDirector {
       strategy: exchange.strategy,
       side: exchange.side,
       intensity:
+        type === "plan" ? 0.55 :
         type === "block" ? 0.78 :
         type === "glance" ? 0.42 :
         type === "whiff" ? 0.3 :

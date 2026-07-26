@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BattleRuntime } from "./battle";
+import { STRATEGY_KEYS } from "./audio";
 import { STRATEGY_LABELS, type CombatCue } from "./combat";
 import { createSeededRandom } from "./random";
 import { createRigwalker, type Rigwalker } from "./rigwalker";
@@ -131,7 +132,9 @@ let verdict: string | null = null;
 let verdictTime = 0;
 const labels = new Map<number, string>();
 const log: LogEntry[] = [];
-const tally = { swing: 0, block: 0, glance: 0, hit: 0, whiff: 0, riposte: 0, damage: 0 };
+const tally = {
+  swing: 0, block: 0, glance: 0, hit: 0, whiff: 0, riposte: 0, plan: 0, damage: 0,
+};
 let cues = new Map<number, CombatCue>();
 
 if (!MATCHUPS[matchup]) matchup = "1v1";
@@ -210,6 +213,8 @@ function advance(delta: number): void {
       event.type,
       event.type === "swing"
         ? `${attacker} → ${defender} · ${event.line} · ${event.strategy}`
+        : event.type === "plan"
+          ? `${attacker} commits to ${event.strategy} · key ${STRATEGY_KEYS[event.strategy] ?? "?"}`
         : event.type === "riposte"
           ? `${attacker} turns it around on ${defender}`
           : `${defender} ${event.type === "whiff" ? "slips" : "takes it"} from ${attacker}`,

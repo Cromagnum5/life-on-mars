@@ -54,6 +54,26 @@ What looking at it revealed, in rough order of how badly each one hurt:
    dust over the last 0.8 s. Sinking rather than fading is deliberate: cloned
    GLB instances share materials, so fading one corpse would fade every unit.
 
+## Plans are audible
+
+A `plan` event fires whenever a fighter commits to a new exchange, alongside
+the existing contact events. Presentation draws a small accent ring under the
+fighter and plays the telephone keypad tone for that strategy, so a fight
+sounds like fighters dialling their intent:
+
+| key | strategy | key | strategy |
+| --- | --- | --- | --- |
+| 1 | rush | 5 | distance-trap |
+| 2 | react | 6 | beat |
+| 3 | size-up | 7 | riposte |
+| 4 | feint | | |
+
+Ripostes keep announcing themselves through their own event, so they are not
+also announced as plans. The tones are real DTMF pairs, held flat and released
+rather than decayed, and sit under the contact sounds in the voice budget.
+`?contacts=1` aside, the sim log prints the key for every plan, which is the
+quickest way to check the mapping.
+
 ## Layout
 
 - `src/world.ts` — terrain, rocks, atmosphere, lighting, camera, renderer.

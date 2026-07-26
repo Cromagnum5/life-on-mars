@@ -142,7 +142,7 @@ describe("CombatDirector", () => {
   });
 
   it("resolves duels at a pace with a mix of outcomes", () => {
-    const tally = { swing: 0, block: 0, glance: 0, hit: 0, whiff: 0, riposte: 0 };
+    const tally = { swing: 0, block: 0, glance: 0, hit: 0, whiff: 0, riposte: 0, plan: 0 };
     let totalSeconds = 0;
     for (let seed = 1; seed <= 60; seed += 1) {
       const result = simulate(seed * 7919);
@@ -331,7 +331,7 @@ describe("CombatDirector", () => {
       for (const event of simulate(seed).events) seen.add(event.type);
     }
     expect([...seen].sort()).toEqual(
-      ["block", "glance", "hit", "riposte", "swing", "whiff"],
+      ["block", "glance", "hit", "plan", "riposte", "swing", "whiff"],
     );
   });
 

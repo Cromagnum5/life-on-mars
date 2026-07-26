@@ -51,7 +51,7 @@ const TRAIL_INNER_EDGE = 0.62;
 // Contacts are what the player needs to hear. Swings are atmosphere, so they
 // yield to a clang when a crowded frame exceeds the voice budget.
 const EVENT_AUDIO_PRIORITY: Record<CombatEvent["type"], number> = {
-  hit: 0, block: 1, glance: 2, riposte: 3, whiff: 4, swing: 5,
+  hit: 0, block: 1, glance: 2, riposte: 3, whiff: 4, plan: 5, swing: 6,
 };
 
 export class BattleRuntime {
@@ -192,7 +192,9 @@ export class BattleRuntime {
         this.bladeDirection.set(0, 0.4, 0);
       }
       this.bladeDirection.normalize();
-      this.audio.play(event.type, this.contactPoint.x, this.contactPoint.z, event.intensity);
+      this.audio.play(
+        event.type, this.contactPoint.x, this.contactPoint.z, event.intensity, event.strategy,
+      );
 
       switch (event.type) {
         case "block":
@@ -213,6 +215,13 @@ export class BattleRuntime {
           // Telegraph the counter under the fighter turning it around.
           this.effects.ring(
             attacker.group.position, 2.1, this.accentOf(attacker.corporation), 0.55,
+          );
+          break;
+        case "plan":
+          // The same mark, smaller and quicker: a fighter settling on a plan is
+          // worth noticing but must not read as loudly as turning one around.
+          this.effects.ring(
+            attacker.group.position, 1.35, this.accentOf(attacker.corporation), 0.38,
           );
           break;
       }

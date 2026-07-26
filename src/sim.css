@@ -263,6 +263,7 @@ output {
 .sim-log .whiff .kind { color: #8fa08f; }
 .sim-log .riposte .kind { color: #ffb35d; }
 .sim-log .swing .kind { color: #7d6a5c; }
+.sim-log .plan .kind { color: #9d8bd8; }
 .sim-log .defeat .kind { color: #ff5f5f; }
 .sim-log .start .kind { color: #9ad0ff; }
 
