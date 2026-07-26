@@ -618,8 +618,13 @@ export function createRigwalker(
 
     attackElapsed = combatCue?.action === "attack" ? combatCue.phase * ATTACK_DURATION : -1;
     attackVariant = combatCue?.variant ?? attackVariant;
+    const presentedAttackVariant = combatCue?.strategy === "feint" && attackElapsed >= 0 &&
+      attackElapsed / ATTACK_DURATION < 0.3 ? (attackVariant + 2) % 5 : attackVariant;
+    const beatPreparation = combatCue?.strategy === "beat" && combatCue.action === "attack" &&
+      combatCue.phase < 0.35;
     defenseElapsed = combatCue?.action === "block" || combatCue?.action === "size-up"
-      ? combatCue.phase * ATTACK_DURATION : -1;
+      ? combatCue.phase * ATTACK_DURATION
+      : beatPreparation ? (combatCue!.phase / 0.35) * ATTACK_DURATION : -1;
     defenseSide = combatCue?.side ?? defenseSide;
     hitReactionElapsed = combatCue?.action === "hit" ? combatCue.phase * 0.42 : -1;
 
@@ -783,13 +788,16 @@ export function createRigwalker(
       const strike = Math.sin(phase * Math.PI);
       const swing = smoothRange(phase, 0.14, 0.64);
       pipePivot.position.set(0.72, 1.65, 0.28);
-      if (attackVariant === 0) {
+      if (beatPreparation) {
+        const beat = Math.sin(phase / 0.35 * Math.PI);
+        pipePivot.rotation.set(1.05, defenseSide * (0.45 + beat * 0.5), -0.3);
+      } else if (presentedAttackVariant === 0) {
         pipePivot.rotation.set(1.35 - swing * 0.78, 0.1, -1.15 + swing * 1.75);
-      } else if (attackVariant === 1) {
+      } else if (presentedAttackVariant === 1) {
         pipePivot.rotation.set(1.15 - swing * 0.62, -0.9 + swing * 1.8, 0.9 - swing * 1.55);
-      } else if (attackVariant === 2) {
+      } else if (presentedAttackVariant === 2) {
         pipePivot.rotation.set(0.82 - strike * 0.22, -1.3 + swing * 2.6, -0.58);
-      } else if (attackVariant === 3) {
+      } else if (presentedAttackVariant === 3) {
         pipePivot.rotation.set(0.45, 1.3 - swing * 2.6, -0.35 + strike * 0.3);
       } else {
         pipePivot.rotation.set(1.45 - swing * 1.15, -0.55 + swing * 1.1, 0.55);
@@ -832,10 +840,7 @@ export function createRigwalker(
         applyCombatPose(
           combatBones,
           attackElapsed >= 0 ? Math.min(1, attackElapsed / ATTACK_DURATION) : -1,
-          combatCue?.strategy === "feint" && attackElapsed >= 0 &&
-            attackElapsed / ATTACK_DURATION < 0.3
-            ? (attackVariant + 2) % 5
-            : attackVariant,
+          presentedAttackVariant,
           defenseElapsed >= 0 ? Math.min(1, defenseElapsed / ATTACK_DURATION) : -1,
           defenseSide,
           hitReactionElapsed >= 0 ? Math.min(1, hitReactionElapsed / 0.42) : -1,

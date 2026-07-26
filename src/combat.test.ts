@@ -85,6 +85,21 @@ describe("CombatDirector", () => {
     expect(cues.get(3)?.targetId).toBe(2);
   });
 
+  it("promotes a support fight when the primary teammate is defeated", () => {
+    const random = seededRandom(24);
+    const director = new CombatDirector(random);
+    const fighters = [
+      fighter(1, "A", 0, random), fighter(2, "B", 2.7, random),
+      fighter(3, "A", 5.4, random),
+    ];
+    director.update(1 / 30, fighters);
+    fighters[0].health = 0;
+    fighters[0].isAlive = false;
+    const cues = director.update(1 / 30, fighters).cues;
+    expect(cues.get(2)?.targetId).toBe(3);
+    expect(cues.get(3)?.targetId).toBe(2);
+  });
+
   it("caps coordinated pressure at a primary fighter plus two supporters", () => {
     const random = seededRandom(22);
     const director = new CombatDirector(random);
@@ -139,6 +154,34 @@ describe("CombatDirector", () => {
     expect(openings.has("react")).toBe(true);
     expect(openings.has("size-up")).toBe(true);
     expect(openings.has("feint")).toBe(true);
+  });
+
+  it("lets reactive and distance-trap planners yield the first attack", () => {
+    let sawReactive = false;
+    let sawDistanceTrap = false;
+    let sawDistanceWhiff = false;
+    for (let seed = 1; seed <= 220; seed += 1) {
+      const result = simulate(seed);
+      for (const cue of result.cues) {
+        if (cue.action !== "attack") continue;
+        if (cue.strategy === "react") {
+          sawReactive = true;
+          expect(cue.plannerId).not.toBeNull();
+          expect(cue.targetId).toBe(cue.plannerId);
+        }
+        if (cue.strategy === "distance-trap") {
+          sawDistanceTrap = true;
+          expect(cue.targetId).toBe(cue.plannerId);
+          if (cue.outcome === "whiff") sawDistanceWhiff = true;
+        }
+        if (cue.strategy === "rush" || cue.strategy === "feint" || cue.strategy === "beat") {
+          expect(cue.targetId).not.toBe(cue.plannerId);
+        }
+      }
+    }
+    expect(sawReactive).toBe(true);
+    expect(sawDistanceTrap).toBe(true);
+    expect(sawDistanceWhiff).toBe(true);
   });
 
   it("finishes seeded duels without deadlock and near the brisk spectacle target", () => {

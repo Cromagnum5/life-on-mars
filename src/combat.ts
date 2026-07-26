@@ -25,6 +25,7 @@ export type CombatProfile = {
 };
 
 export type CombatCue = {
+  plannerId: number | null;
   targetId: number | null;
   action: CombatAction;
   movement: CombatMovement;
@@ -67,6 +68,7 @@ type FighterState = {
 };
 
 type Exchange = {
+  plannerId: number;
   attackerId: number;
   defenderId: number;
   strategy: CombatStrategy;
@@ -94,6 +96,7 @@ const ATTACK_RANGE = 3.25;
 const MAX_SUPPORTERS_PER_TARGET = 2;
 const LINES: readonly AttackLine[] = ["overhead", "forehand", "backhand", "flank", "rising"];
 const EMPTY_CUE: CombatCue = {
+  plannerId: null,
   targetId: null,
   action: "idle",
   movement: "hold",
@@ -170,6 +173,24 @@ export class CombatDirector {
       if (!a || !b || a.corporation === b.corporation || this.distance(a, b) > AWARENESS_RANGE * 1.35) {
         this.encounters.delete(key);
       }
+    }
+
+    const primaryParticipants = new Set<number>();
+    for (const encounter of this.encounters.values()) {
+      if (!encounter.support) {
+        primaryParticipants.add(encounter.a);
+        primaryParticipants.add(encounter.b);
+      }
+    }
+    const promotedTargets = new Set<number>();
+    for (const encounter of this.encounters.values()) {
+      if (!encounter.support || primaryParticipants.has(encounter.b) || promotedTargets.has(encounter.b)) {
+        continue;
+      }
+      encounter.support = false;
+      primaryParticipants.add(encounter.a);
+      primaryParticipants.add(encounter.b);
+      promotedTargets.add(encounter.b);
     }
 
     const reserved = new Set<number>();
@@ -258,7 +279,7 @@ export class CombatDirector {
     this.ensureFighter(target.id);
     return {
       a: helper.id, b: target.id, support: true,
-      exchange: this.planExchange(helper, target, 0),
+      exchange: this.planExchange(helper, target, 0, undefined, true),
     };
   }
 
@@ -267,15 +288,18 @@ export class CombatDirector {
     defender: CombatantSnapshot,
     chainDepth: number,
     forcedStrategy?: CombatStrategy,
+    offensiveOnly = false,
   ): Exchange {
     const state = this.ensureFighter(attacker.id);
     const healthRatio = attacker.health / attacker.maxHealth;
     const opponentRatio = defender.health / defender.maxHealth;
     const firstExchange = state.plans === 0;
     state.plans += 1;
-    const strategies: readonly CombatStrategy[] = firstExchange
-      ? ["rush", "react", "size-up", "feint"]
-      : ["rush", "react", "size-up", "feint", "distance-trap", "beat"];
+    const strategies: readonly CombatStrategy[] = offensiveOnly
+      ? ["rush", "feint", "beat"]
+      : firstExchange
+        ? ["rush", "react", "size-up", "feint"]
+        : ["rush", "react", "size-up", "feint", "distance-trap", "beat"];
     const p = attacker.profile;
     const weights = strategies.map((strategy) => {
       let weight =
@@ -296,6 +320,9 @@ export class CombatDirector {
       return weight;
     });
     const strategy = forcedStrategy ?? weightedChoice(strategies, weights, this.random);
+    const defensivePlan = strategy === "react" || strategy === "distance-trap";
+    const actualAttacker = defensivePlan ? defender : attacker;
+    const actualDefender = defensivePlan ? attacker : defender;
     const defenderMemory = this.ensureFighter(defender.id).memory;
     const lineWeights = LINES.map((line) => {
       const seen = defenderMemory.lines[line];
@@ -312,8 +339,9 @@ export class CombatDirector {
       strategy === "riposte" ? 0.12 + this.random() * 0.12 :
       0.35 + this.random() * 0.45;
     return {
-      attackerId: attacker.id,
-      defenderId: defender.id,
+      plannerId: attacker.id,
+      attackerId: actualAttacker.id,
+      defenderId: actualDefender.id,
       strategy,
       line,
       variant,
@@ -364,14 +392,14 @@ export class CombatDirector {
     if (exchange.elapsed < exchange.measureDuration) {
       const phase = exchange.elapsed / exchange.measureDuration;
       const attackerMove: CombatMovement =
-        exchange.strategy === "distance-trap" ? "retreat" :
+        exchange.strategy === "distance-trap" || exchange.strategy === "react" ? "close" :
         exchange.strategy === "size-up" ? (exchange.side > 0 ? "angle-left" : "angle-right") :
         "hold";
       cues.set(attacker.id, this.cue(exchange, defender.id, "size-up", attackerMove, phase));
       if (!encounter.support) {
         cues.set(defender.id, this.cue(
           exchange, attacker.id, "size-up",
-          exchange.strategy === "distance-trap" ? "close" : phase > 0.55 ? "angle-right" : "hold",
+          exchange.strategy === "distance-trap" ? "retreat" : phase > 0.55 ? "angle-right" : "hold",
           phase,
         ));
       }
@@ -401,6 +429,8 @@ export class CombatDirector {
         if (exchange.outcome === "hit" || exchange.outcome === "glancing") {
           const base =
             exchange.strategy === "rush" ? 28 :
+            exchange.strategy === "beat" ? 20 :
+            exchange.strategy === "riposte" ? 22 :
             exchange.line === "rising" ? 18 :
             24;
           damage.push({
@@ -426,7 +456,7 @@ export class CombatDirector {
 
     this.recordExchange(exchange);
     if (encounter.support) {
-      encounter.exchange = this.planExchange(a, b, 0);
+      encounter.exchange = this.planExchange(a, b, 0, undefined, true);
       return;
     }
     if ((exchange.outcome === "blocked" || exchange.outcome === "whiff") &&
@@ -446,19 +476,26 @@ export class CombatDirector {
     attacker: CombatantSnapshot,
     defender: CombatantSnapshot,
   ): CombatOutcome {
-    if (exchange.strategy === "distance-trap" && this.random() < 0.48 + attacker.profile.patience * 0.25) {
+    if (exchange.strategy === "distance-trap" && this.random() <
+        0.35 + defender.profile.patience * 0.4 + defender.profile.adaptability * 0.15) {
       return "whiff";
     }
     const defenderState = this.ensureFighter(defender.id);
     const learnedLine = defenderState.memory.lines[exchange.line] /
       Math.max(1, defenderState.memory.exchanges);
-    const deceptive = exchange.strategy === "feint" || exchange.strategy === "beat";
+    const tacticalDefense =
+      exchange.strategy === "react"
+        ? defender.profile.defense * 0.18 + defender.profile.adaptability * 0.1
+        : exchange.strategy === "distance-trap" ? defender.profile.patience * 0.12 : 0;
+    const attackPressure =
+      exchange.strategy === "feint" ? attacker.profile.deception * 0.25 :
+      exchange.strategy === "beat" ? 0.12 + attacker.profile.aggression * 0.12 :
+      exchange.strategy === "rush" ? attacker.profile.initiative * 0.1 :
+      exchange.strategy === "size-up" ? attacker.profile.adaptability * 0.1 :
+      exchange.strategy === "riposte" ? 0.18 : 0;
     const defenseChance = clamp01(
-      0.17 +
-      defender.profile.defense * 0.25 +
-      defender.profile.adaptability * learnedLine * 0.25 -
-      (deceptive ? attacker.profile.deception * 0.28 : 0) -
-      (exchange.strategy === "rush" ? attacker.profile.initiative * 0.1 : 0),
+      0.17 + defender.profile.defense * 0.25 +
+      defender.profile.adaptability * learnedLine * 0.25 + tacticalDefense - attackPressure,
     );
     const roll = this.random();
     if (roll < defenseChance) return "blocked";
@@ -467,14 +504,14 @@ export class CombatDirector {
   }
 
   private recordExchange(exchange: Exchange): void {
-    const attacker = this.ensureFighter(exchange.attackerId);
+    const planner = this.ensureFighter(exchange.plannerId);
     const observer = this.ensureFighter(exchange.defenderId);
     observer.memory.lines[exchange.line] += 1;
     observer.memory.exchanges += 1;
     if (exchange.strategy === "feint" || exchange.strategy === "beat") observer.memory.deceptive += 1;
     else observer.memory.direct += 1;
-    attacker.recentStrategies.push(exchange.strategy);
-    if (attacker.recentStrategies.length > 2) attacker.recentStrategies.shift();
+    planner.recentStrategies.push(exchange.strategy);
+    if (planner.recentStrategies.length > 2) planner.recentStrategies.shift();
   }
 
   private cue(
@@ -485,6 +522,7 @@ export class CombatDirector {
     phase: number,
   ): CombatCue {
     return {
+      plannerId: exchange.plannerId,
       targetId,
       action,
       movement,
