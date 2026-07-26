@@ -5,6 +5,7 @@ import {
   createBuildings,
 } from "./buildings";
 import { MovementMarkers } from "./feedback";
+import { CombatDirector } from "./combat";
 import { AssemblyBayProduction } from "./production";
 import { createRigwalker } from "./rigwalker";
 import { loadRigwalkerAsset } from "./rigwalker-assets";
@@ -179,6 +180,7 @@ const productions = corporateBases.map((base) =>
     base.corporation,
   ),
 );
+const combatDirector = new CombatDirector();
 const movementMarkers = new MovementMarkers(scene);
 const rallyMarkers = corporateBases.map((base) => {
   const marker = new THREE.Mesh(
@@ -504,6 +506,18 @@ function animate(): void {
     production.update(delta);
   }
   movementMarkers.update(delta);
+  const combatFrame = combatDirector.update(
+    delta,
+    units.map((unit) => ({
+      id: unit.combatId, corporation: unit.corporation,
+      health: unit.health, maxHealth: unit.maxHealth, isAlive: unit.isAlive,
+      x: unit.group.position.x, z: unit.group.position.z, profile: unit.combatProfile,
+    })),
+  );
+  for (const event of combatFrame.damage) {
+    units.find((unit) => unit.combatId === event.targetId)
+      ?.applyCombatDamage(event.amount, event.side);
+  }
   for (const unit of [...units]) {
     unit.update(
       delta,
@@ -512,10 +526,11 @@ function animate(): void {
       units,
       BUILDING_OBSTACLES,
       camera.quaternion,
+      combatFrame.cues.get(unit.combatId),
     );
   }
   for (let index = units.length - 1; index >= 0; index -= 1) {
-    if (!units[index].isAlive) {
+    if (units[index].canRemove) {
       units[index].group.removeFromParent();
       units.splice(index, 1);
     }

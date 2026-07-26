@@ -108,7 +108,7 @@ angles=((8,-10,7),(-8,-10,7),(8,8,6))
 for angle_index,location in enumerate(angles):
     cam.location=location
     cam.rotation_euler=(Vector((0,0,1.6))-cam.location).to_track_quat('-Z','Y').to_euler()
-    for frame in (59,68,77,83,93):
+    for frame in (59,64,68,73,77,83,88,93,101,113):
         scene.frame_set(frame)
         scene.render.filepath=str(OUTPUT / f'angle_{angle_index}_frame_{frame:04d}.png')
         bpy.ops.render.render(write_still=True)
