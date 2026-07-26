@@ -234,9 +234,11 @@ renders them at gameplay scale under the real camera.
   contacts, never a cue diff. It draws a small accent ring and makes no sound:
   the ring flashing as a fighter changes its mind reads well, but a tone on
   every plan buried the contacts it was supposed to sit under.
-- `audio.ts` keeps telephone keypad tones (`playKey`, `STRATEGY_KEYS`,
-  `keyTones`, pinned by `src/audio.test.ts`) for interface sounds. Nothing on
-  the battlefield plays them; that was tried and it was too much.
+- Combat sound is synthesized from telephone keypad tones and noise, no assets.
+  A riposte plays its strategy's keypad key and is the only such tone in a
+  fight; a tone on every plan was tried and buried the contacts. The rest of
+  the keys (`playKey`, `STRATEGY_KEYS`, `keyTones`, pinned by
+  `src/audio.test.ts`) are kept for interface sounds.
 - Additive effects over bright Martian ground blow out fast. A weapon trail at
   full accent strength reads as an opaque wedge covering the fighter rather
   than a swept smear of light; keep its leading edge well under 1.

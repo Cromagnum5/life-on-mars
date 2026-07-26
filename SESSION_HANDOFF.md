@@ -61,9 +61,10 @@ the existing contact events. Presentation draws a small accent ring under the
 fighter, which flashes often as a fight swings between plans and reads well.
 
 It briefly played a telephone keypad tone per strategy as well. That was too
-much under fighting and is disabled: plans are silent. The tones stay in
-`audio.ts` behind `playKey`, intended for menu and interface sounds, with the
-strategy mapping kept so an interface can share the fighting's vocabulary:
+much under fighting and is disabled: plans are silent. One keypad tone stayed
+on the battlefield, on the riposte, which is rare enough to be punctuation. The
+rest are kept in `audio.ts` behind `playKey` for menu and interface sounds,
+with the strategy mapping shared so an interface can speak the same vocabulary:
 
 | key | strategy | key | strategy |
 | --- | --- | --- | --- |
@@ -73,9 +74,9 @@ strategy mapping kept so an interface can share the fighting's vocabulary:
 | 4 | feint | | |
 
 Ripostes keep announcing themselves through their own event, so they are not
-also announced as plans, and they kept their original sawtooth counter sound.
-The keypad tones are real DTMF pairs, held flat and released rather than
-decayed, which is what makes them read as a key press rather than a game blip.
+also announced as plans. They sound key 7. The tones are real DTMF pairs, held
+flat and released rather than decayed, which is what makes them read as a key
+press rather than a game blip. No oscillator sweep is left in the mix.
 
 ## Layout
 
