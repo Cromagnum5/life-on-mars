@@ -161,6 +161,10 @@ export class CombatDirector {
   constructor(private readonly random: () => number = Math.random) {}
 
   update(delta: number, snapshots: readonly CombatantSnapshot[]): CombatFrame {
+    const presentIds = new Set(snapshots.map((fighter) => fighter.id));
+    for (const id of this.fighters.keys()) {
+      if (!presentIds.has(id)) this.fighters.delete(id);
+    }
     const living = snapshots.filter((fighter) => fighter.isAlive);
     const byId = new Map(living.map((fighter) => [fighter.id, fighter]));
     const cues = new Map<number, CombatCue>();

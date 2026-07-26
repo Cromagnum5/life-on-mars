@@ -219,6 +219,38 @@ describe("CombatDirector", () => {
     expect(sawBlock && sawGlancing && sawCleanHit).toBe(true);
   });
 
+  it("completes seeded three-on-three battles without idle victims or excess dogpiling", () => {
+    for (let seed = 300; seed < 312; seed += 1) {
+      const random = seededRandom(seed);
+      const director = new CombatDirector(random);
+      const fighters = [
+        fighter(1, "A", 0, random), fighter(3, "A", 0.2, random), fighter(5, "A", 0.4, random),
+        fighter(2, "B", 2.4, random), fighter(4, "B", 2.6, random), fighter(6, "B", 2.8, random),
+      ];
+      let elapsed = 0;
+      while (new Set(fighters.filter((item) => item.isAlive).map((item) => item.corporation)).size > 1 &&
+          elapsed < 120) {
+        const frame = director.update(1 / 30, fighters);
+        const activeCues = [...frame.cues.entries()].filter(([, cue]) => cue.targetId !== null);
+        for (const fighter of fighters.filter((item) => item.isAlive)) {
+          const isThreatened = activeCues.some(([, cue]) => cue.targetId === fighter.id);
+          if (isThreatened) expect(frame.cues.get(fighter.id)?.targetId).not.toBeNull();
+          const pressure = activeCues.filter(([, cue]) => cue.targetId === fighter.id).length;
+          expect(pressure).toBeLessThanOrEqual(3);
+        }
+        for (const event of frame.damage) {
+          const target = fighters.find((item) => item.id === event.targetId)!;
+          target.health = Math.max(0, target.health - event.amount);
+          target.isAlive = target.health > 0;
+        }
+        elapsed += 1 / 30;
+      }
+      expect(elapsed).toBeLessThan(120);
+      expect(new Set(fighters.filter((item) => item.isAlive).map((item) => item.corporation)).size)
+        .toBeLessThanOrEqual(1);
+    }
+  });
+
   it("exposes only cut-and-block action vocabulary", () => {
     const actions = ["idle", "size-up", "attack", "block", "hit", "recover", "defeated"];
     expect(actions).not.toContain("thrust");
