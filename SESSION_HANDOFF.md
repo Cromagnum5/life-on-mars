@@ -2,9 +2,23 @@
 
 ## Current checkpoint
 
-Branch `combat-spectacle-pass`, on top of `2d317e2` (`Document combat effects
-handoff`). Working tree has the combat sim and the readability pass described
-below; nothing committed or pushed yet.
+`main` at `71949ba` (`Leave the battlefield sounding only on contact`), clean
+tree. `combat-spectacle-pass` has been merged in and the session's work is all
+committed. `main` is 20 commits ahead of `origin/main`; nothing is pushed, and
+pushing is the user's call.
+
+This session's commits, oldest first:
+
+- `b0924d1` Add a combat sim and fix what it showed
+- `50f9fe0` Sound a keypad tone when a fighter picks a plan
+- `576181c` Rebalance the combat mix toward contact
+- `2ef90de` Silence plan tones and shelve the keypad for menus
+- `22a9445` Sound a riposte as a keypad press
+- `71949ba` Leave the battlefield sounding only on contact
+
+The last four are one thread: keypad tones were added, then walked back twice
+by playtesting until the battlefield sounded only on contact. Read them as one
+decision, not four.
 
 Production remains set to one Rigwalker every 20 seconds.
 
