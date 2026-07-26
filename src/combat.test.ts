@@ -73,6 +73,45 @@ describe("CombatDirector", () => {
     for (const [id, cue] of targets) expect(targets.get(cue.targetId!)?.targetId).toBe(id);
   });
 
+  it("sends an unengaged Rigwalker to help a teammate already fighting", () => {
+    const random = seededRandom(21);
+    const director = new CombatDirector(random);
+    const fighters = [
+      fighter(1, "A", 0, random), fighter(2, "B", 2.7, random),
+      fighter(3, "A", 5.4, random),
+    ];
+    const cues = director.update(1 / 30, fighters).cues;
+    expect(cues.get(1)?.targetId).toBe(2);
+    expect(cues.get(3)?.targetId).toBe(2);
+  });
+
+  it("caps coordinated pressure at a primary fighter plus two supporters", () => {
+    const random = seededRandom(22);
+    const director = new CombatDirector(random);
+    const fighters = [
+      fighter(1, "A", 0, random), fighter(2, "B", 2, random),
+      fighter(3, "A", 4.8, random), fighter(4, "A", 5.1, random),
+      fighter(5, "A", 5.4, random),
+    ];
+    const cues = director.update(1 / 30, fighters).cues;
+    const attackers = fighters.filter((item) =>
+      item.corporation === "A" && cues.get(item.id)?.targetId === 2);
+    expect(attackers).toHaveLength(3);
+  });
+
+  it("prioritizes the enemy threatening the more wounded teammate", () => {
+    const random = seededRandom(23);
+    const director = new CombatDirector(random);
+    const fighters = [
+      fighter(1, "A", 0, random), fighter(2, "B", 1, random),
+      fighter(3, "A", 10, random), fighter(4, "B", 11, random),
+      fighter(5, "A", 5.5, random),
+    ];
+    fighters[0].health = 20;
+    const cues = director.update(1 / 30, fighters).cues;
+    expect(cues.get(5)?.targetId).toBe(2);
+  });
+
   it("never applies damage to a successfully blocked action", () => {
     for (let seed = 1; seed <= 40; seed += 1) expect(simulate(seed).blockedDamage).toBe(0);
   });

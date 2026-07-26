@@ -85,11 +85,13 @@ type Exchange = {
 type Encounter = {
   a: number;
   b: number;
+  support: boolean;
   exchange: Exchange;
 };
 
 const AWARENESS_RANGE = 8.5;
 const ATTACK_RANGE = 3.25;
+const MAX_SUPPORTERS_PER_TARGET = 2;
 const LINES: readonly AttackLine[] = ["overhead", "forehand", "backhand", "flank", "rising"];
 const EMPTY_CUE: CombatCue = {
   targetId: null,
@@ -171,9 +173,14 @@ export class CombatDirector {
     }
 
     const reserved = new Set<number>();
+    const supportCounts = new Map<number, number>();
     for (const encounter of this.encounters.values()) {
       reserved.add(encounter.a);
-      reserved.add(encounter.b);
+      if (encounter.support) {
+        supportCounts.set(encounter.b, (supportCounts.get(encounter.b) ?? 0) + 1);
+      } else {
+        reserved.add(encounter.b);
+      }
     }
 
     const candidates: Array<{ a: CombatantSnapshot; b: CombatantSnapshot; distance: number }> = [];
@@ -195,6 +202,37 @@ export class CombatDirector {
       reserved.add(candidate.b.id);
     }
 
+    const primaryThreats: Array<{ ally: CombatantSnapshot; target: CombatantSnapshot }> = [];
+    for (const encounter of this.encounters.values()) {
+      if (encounter.support) continue;
+      const a = byId.get(encounter.a);
+      const b = byId.get(encounter.b);
+      if (!a || !b) continue;
+      primaryThreats.push({ ally: a, target: b }, { ally: b, target: a });
+    }
+    for (const helper of living) {
+      if (reserved.has(helper.id)) continue;
+      const choices = primaryThreats
+        .filter(({ ally, target }) =>
+          ally.corporation === helper.corporation && ally.id !== helper.id &&
+          target.corporation !== helper.corporation &&
+          this.distance(helper, target) <= AWARENESS_RANGE * 1.15 &&
+          (supportCounts.get(target.id) ?? 0) < MAX_SUPPORTERS_PER_TARGET)
+        .map(({ ally, target }) => ({
+          ally, target,
+          score: this.distance(helper, target) +
+            (ally.health / ally.maxHealth) * 2 +
+            (target.health / target.maxHealth) * 0.35,
+        }))
+        .sort((left, right) => left.score - right.score);
+      const choice = choices[0];
+      if (!choice) continue;
+      const encounter = this.createSupportEncounter(helper, choice.target);
+      this.encounters.set("support:" + helper.id + ":" + choice.target.id, encounter);
+      reserved.add(helper.id);
+      supportCounts.set(choice.target.id, (supportCounts.get(choice.target.id) ?? 0) + 1);
+    }
+
     for (const encounter of this.encounters.values()) {
       const a = byId.get(encounter.a);
       const b = byId.get(encounter.b);
@@ -212,7 +250,16 @@ export class CombatDirector {
     const initiativeB = b.profile.initiative + b.profile.aggression * 0.45 + this.random() * 0.35;
     const attacker = initiativeA >= initiativeB ? a : b;
     const defender = attacker === a ? b : a;
-    return { a: a.id, b: b.id, exchange: this.planExchange(attacker, defender, 0) };
+    return { a: a.id, b: b.id, support: false, exchange: this.planExchange(attacker, defender, 0) };
+  }
+
+  private createSupportEncounter(helper: CombatantSnapshot, target: CombatantSnapshot): Encounter {
+    this.ensureFighter(helper.id);
+    this.ensureFighter(target.id);
+    return {
+      a: helper.id, b: target.id, support: true,
+      exchange: this.planExchange(helper, target, 0),
+    };
   }
 
   private planExchange(
@@ -298,7 +345,19 @@ export class CombatDirector {
     if (distance > ATTACK_RANGE) {
       exchange.elapsed = Math.min(exchange.elapsed, exchange.measureDuration);
       cues.set(attacker.id, this.cue(exchange, defender.id, "size-up", "close", 0));
-      cues.set(defender.id, this.cue(exchange, attacker.id, "size-up", "hold", 0));
+      if (!encounter.support) {
+        cues.set(defender.id, this.cue(exchange, attacker.id, "size-up", "hold", 0));
+      }
+      return;
+    }
+
+    const occupiedCue = cues.get(defender.id);
+    if (encounter.support && exchange.elapsed >= exchange.measureDuration &&
+        (occupiedCue?.action === "attack" || occupiedCue?.action === "block")) {
+      exchange.elapsed = exchange.measureDuration;
+      cues.set(attacker.id, this.cue(
+        exchange, defender.id, "size-up", exchange.side > 0 ? "angle-left" : "angle-right", 1,
+      ));
       return;
     }
 
@@ -309,11 +368,13 @@ export class CombatDirector {
         exchange.strategy === "size-up" ? (exchange.side > 0 ? "angle-left" : "angle-right") :
         "hold";
       cues.set(attacker.id, this.cue(exchange, defender.id, "size-up", attackerMove, phase));
-      cues.set(defender.id, this.cue(
-        exchange, attacker.id, "size-up",
-        exchange.strategy === "distance-trap" ? "close" : phase > 0.55 ? "angle-right" : "hold",
-        phase,
-      ));
+      if (!encounter.support) {
+        cues.set(defender.id, this.cue(
+          exchange, attacker.id, "size-up",
+          exchange.strategy === "distance-trap" ? "close" : phase > 0.55 ? "angle-right" : "hold",
+          phase,
+        ));
+      }
       return;
     }
 
@@ -333,7 +394,9 @@ export class CombatDirector {
         exchange.strategy === "distance-trap" ? "retreat" :
         "hold";
       cues.set(attacker.id, this.cue(exchange, defender.id, "attack", "hold", phase));
-      cues.set(defender.id, this.cue(exchange, attacker.id, defenderAction, defenderMove, phase));
+      if (!encounter.support || (phase >= 0.48 && exchange.outcome !== "whiff")) {
+        cues.set(defender.id, this.cue(exchange, attacker.id, defenderAction, defenderMove, phase));
+      }
       if (!exchange.damageApplied && phase >= 0.54) {
         if (exchange.outcome === "hit" || exchange.outcome === "glancing") {
           const base =
@@ -356,10 +419,16 @@ export class CombatDirector {
       (attackElapsed - exchange.attackDuration) / exchange.recoveryDuration,
     );
     cues.set(attacker.id, this.cue(exchange, defender.id, "recover", "retreat", recoveryPhase));
-    cues.set(defender.id, this.cue(exchange, attacker.id, "recover", "hold", recoveryPhase));
+    if (!encounter.support) {
+      cues.set(defender.id, this.cue(exchange, attacker.id, "recover", "hold", recoveryPhase));
+    }
     if (recoveryPhase < 1) return;
 
     this.recordExchange(exchange);
+    if (encounter.support) {
+      encounter.exchange = this.planExchange(a, b, 0);
+      return;
+    }
     if ((exchange.outcome === "blocked" || exchange.outcome === "whiff") &&
         exchange.chainDepth < 2 && this.random() < (exchange.outcome === "whiff" ? 0.9 : 0.78)) {
       encounter.exchange = this.planExchange(defender, attacker, exchange.chainDepth + 1, "riposte");
