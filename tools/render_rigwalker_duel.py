@@ -16,7 +16,10 @@ def import_actor(label, accent, z, yaw):
     objects=list(set(bpy.data.objects)-before)
     rig=next(o for o in objects if o.type=='ARMATURE')
     roots=[o for o in objects if o.parent is None]
-    root=roots[0] if len(roots)==1 else rig
+    root=bpy.data.objects.new(f'{label}_ActorRoot', None)
+    bpy.context.scene.collection.objects.link(root)
+    for imported_root in roots:
+        imported_root.parent=root
     for o in objects:
         o.name=f'{label}_{o.name}'
         if o.type=='MESH' and any(k in o.name for k in ('Accent','Stripe','Shoulder','Knee','Toe')):
@@ -88,6 +91,25 @@ for f in range(1,169):
     for root in (rootA,rootB): root.keyframe_insert('location',frame=f)
     for rig in (rigA,rigB):
         for b in rig.pose.bones: b.keyframe_insert('rotation_quaternion',frame=f)
+
+def visible_forward(objects):
+    visor=next(o for o in objects if o.name.endswith("_Visor"))
+    backpack=next(o for o in objects if o.name.endswith("_Backpack"))
+    direction=visor.matrix_world.translation-backpack.matrix_world.translation
+    direction.z=0
+    return direction.normalized()
+
+def assert_opponents_face_each_other(frame):
+    scene.frame_set(frame)
+    bpy.context.view_layer.update()
+    direction_ab=(rootB.matrix_world.translation-rootA.matrix_world.translation).normalized()
+    facing_a=visible_forward(objsA).dot(direction_ab)
+    facing_b=visible_forward(objsB).dot(-direction_ab)
+    if facing_a < 0.75 or facing_b < 0.75:
+        raise RuntimeError(f"Facing validation failed at frame {frame}: A={facing_a:.3f}, B={facing_b:.3f}")
+
+for validation_frame in (1, 30, 58, 59, 73, 88, 113, 167):
+    assert_opponents_face_each_other(validation_frame)
 
 # Mars floor and lighting.
 mat=bpy.data.materials.new('Mars'); mat.diffuse_color=(.22,.045,.025,1); mat.roughness=.9
