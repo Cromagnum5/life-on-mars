@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { BalanceController, type BalancePose } from "./balance";
 import type { RigwalkerAsset } from "./rigwalker-assets";
 import {
   createCombatProfile,
@@ -142,6 +143,32 @@ function setBoneOffset(bone: THREE.Bone, rest: THREE.Quaternion, x: number, y: n
   boneOffsetEuler.set(x, y, z);
   boneOffsetQuaternion.setFromEuler(boneOffsetEuler);
   bone.quaternion.copy(rest).multiply(boneOffsetQuaternion);
+}
+
+function addBoneOffset(bone: THREE.Bone, x: number, y: number, z: number): void {
+  boneOffsetEuler.set(x, y, z);
+  boneOffsetQuaternion.setFromEuler(boneOffsetEuler);
+  bone.quaternion.multiply(boneOffsetQuaternion);
+}
+
+function applyBalancePose(bones: CombatBones, pose: BalancePose, inCombat: boolean): void {
+  if (!inCombat) return;
+
+  const leftStep = pose.stepSide < 0 ? pose.step : 0;
+  const rightStep = pose.stepSide > 0 ? pose.step : 0;
+  addBoneOffset(bones.root, pose.leanZ * 0.72, 0, -pose.leanX * 0.8);
+  addBoneOffset(bones.spine, pose.leanZ * 0.34, 0, -pose.leanX * 0.28);
+  addBoneOffset(bones.chest, -pose.leanZ * 0.16, 0, pose.leanX * 0.12);
+  addBoneOffset(bones.neck, -pose.leanZ * 0.34, 0, pose.leanX * 0.38);
+  addBoneOffset(bones.head, -pose.leanZ * 0.3, 0, pose.leanX * 0.3);
+  const stance = pose.stance * 1.2;
+  const crouch = pose.crouch + pose.step * 0.05;
+  addBoneOffset(bones.upperLegL, crouch - leftStep * 0.28, 0, stance + leftStep * 0.22);
+  addBoneOffset(bones.lowerLegL, crouch * 1.45 + leftStep * 0.48, 0, 0);
+  addBoneOffset(bones.footL, -crouch * 1.15 - leftStep * 0.2, 0, -stance * 0.8);
+  addBoneOffset(bones.upperLegR, crouch - rightStep * 0.28, 0, -stance - rightStep * 0.22);
+  addBoneOffset(bones.lowerLegR, crouch * 1.45 + rightStep * 0.48, 0, 0);
+  addBoneOffset(bones.footR, -crouch * 1.15 - rightStep * 0.2, 0, stance * 0.8);
 }
 
 function applyCombatPose(
@@ -444,6 +471,10 @@ function createFallbackVisual(accentColor: number): {
 
     leftLeg.hip.rotation.x = stride * 0.52;
     rightLeg.hip.rotation.x = oppositeStride * 0.52;
+    leftLeg.hip.rotation.z = 0;
+    rightLeg.hip.rotation.z = 0;
+    leftLeg.hip.position.x = -0.28;
+    rightLeg.hip.position.x = 0.28;
     leftLeg.knee.rotation.x = Math.max(0, -stride) * 0.72;
     rightLeg.knee.rotation.x = Math.max(0, stride) * 0.72;
     leftLeg.ankle.rotation.x = -leftLeg.hip.rotation.x * 0.35;
@@ -454,6 +485,7 @@ function createFallbackVisual(accentColor: number): {
     rightArm.elbow.rotation.x = -0.25 - Math.max(0, -stride) * 0.3;
     root.position.y =
       0.07 + stepLift * 0.08 + Math.sin(elapsed * 1.8) * 0.012;
+    root.rotation.x = 0;
     root.rotation.z = stride * 0.025;
     head.rotation.y = Math.sin(elapsed * 1.1) * 0.07;
   }
@@ -592,6 +624,9 @@ export function createRigwalker(
   let hitReactionSide: -1 | 1 = 1;
   let defeatElapsed = -1;
   let wasInCombat = false;
+  const balance = new BalanceController();
+  let pendingBalanceImpactX = 0;
+  let pendingBalanceImpactZ = 0;
   const targetRotation = new THREE.Quaternion();
   const upAxis = new THREE.Vector3(0, 1, 0);
   const movement = new THREE.Vector3();
@@ -600,6 +635,10 @@ export function createRigwalker(
   const separation = new THREE.Vector3();
   const radial = new THREE.Vector3();
   const proposedPosition = new THREE.Vector3();
+  const previousPosition = new THREE.Vector3();
+  const worldVelocity = new THREE.Vector3();
+  const localVelocity = new THREE.Vector3();
+  const inverseFacing = new THREE.Quaternion();
 
   function moveTo(nextDestination: THREE.Vector3): void {
     destination = nextDestination.clone();
@@ -614,6 +653,8 @@ export function createRigwalker(
     if (health <= 0) return;
     hitReactionElapsed = 0;
     hitReactionSide = side;
+    pendingBalanceImpactX += side * Math.min(0.38, 0.16 + damage / MAX_HEALTH * 0.55);
+    pendingBalanceImpactZ -= Math.min(0.24, damage / MAX_HEALTH * 0.4);
     health = Math.max(0, health - damage);
     healthFill.scale.x = health / MAX_HEALTH;
     healthFill.position.x = -0.69 * (1 - health / MAX_HEALTH);
@@ -632,6 +673,7 @@ export function createRigwalker(
     cameraQuaternion: THREE.Quaternion,
     combatCue?: CombatCue,
   ): void {
+    previousPosition.copy(group.position);
     if (health <= 0) {
       defeatElapsed += delta;
       group.rotation.z = THREE.MathUtils.damp(group.rotation.z, hitReactionSide * 1.32, 5.5, delta);
@@ -855,6 +897,27 @@ export function createRigwalker(
       delta,
     );
 
+    worldVelocity.copy(group.position).sub(previousPosition);
+    if (delta > 0) worldVelocity.divideScalar(delta);
+    inverseFacing.copy(group.quaternion).invert();
+    localVelocity.copy(worldVelocity).applyQuaternion(inverseFacing);
+    const balanceAttackPhase = attackElapsed >= 0 ? Math.min(1, attackElapsed / ATTACK_DURATION) : -1;
+    const attackLine = COMBAT_LINE_MOTION[combatCue?.line ?? "overhead"];
+    const strikeLoad = balanceAttackPhase >= 0
+      ? Math.sin(balanceAttackPhase * Math.PI) * (combatCue?.intensity ?? 0.72)
+      : 0;
+    const balancePose = balance.update({
+      delta,
+      localVelocityX: localVelocity.x,
+      localVelocityZ: localVelocity.z,
+      impactX: pendingBalanceImpactX,
+      impactZ: pendingBalanceImpactZ,
+      combatLoadX: combatTarget ? -attackLine.attackSide * strikeLoad * 0.11 : 0,
+      combatLoadZ: combatTarget ? strikeLoad * 0.08 : 0,
+    });
+    pendingBalanceImpactX = 0;
+    pendingBalanceImpactZ = 0;
+
     healthBar.quaternion.copy(group.quaternion).invert().multiply(cameraQuaternion);
 
     fallbackVisual?.update(delta, elapsed, moving);
@@ -883,6 +946,7 @@ export function createRigwalker(
           moving ? Math.sin(elapsed * 5.8 + group.id * 0.7) * 0.24 : 0,
         );
       }
+      if (combatBones) applyBalancePose(combatBones, balancePose, inCombat);
     }
   }
 
