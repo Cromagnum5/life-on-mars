@@ -370,7 +370,8 @@ function describeRigwalker(unit: (typeof units)[number]): string {
   const temperament = unit.combatProfile.temperament;
   const readable = temperament[0].toUpperCase() + temperament.slice(1);
   const plan = unit.strategy ? ` · ${STRATEGY_LABELS[unit.strategy] ?? unit.strategy}` : "";
-  return `Rigwalker · ${Math.ceil(unit.health)} HP · ${readable}${plan}`;
+  const kind = unit.role === "hurler" ? "Rigwalker Hurler" : "Rigwalker";
+  return `${kind} · ${Math.ceil(unit.health)} HP · ${readable}${plan}`;
 }
 
 function updateHud(elapsed: number): void {
@@ -392,7 +393,8 @@ function updateHud(elapsed: number): void {
         ? "None"
       : selectedRigwalkers.length === 1
         ? describeRigwalker(selectedRigwalkers[0])
-        : `${selectedRigwalkers.length} Rigwalkers`;
+        : `${selectedRigwalkers.length} Rigwalkers · ` +
+          `${selectedRigwalkers.filter((unit) => unit.role === "hurler").length} hurling`;
 }
 
 const clock = new THREE.Clock();

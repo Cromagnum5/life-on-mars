@@ -3,11 +3,15 @@ import { BalanceController, type BalancePose } from "./balance";
 import type { RigwalkerAsset } from "./rigwalker-assets";
 import {
   BASE_FIGHT_DISTANCE,
+  HURLER_FIGHT_DISTANCE,
   createCombatProfile,
+  isThrow,
   type AttackLine,
   type CombatCue,
   type CombatProfile,
+  type CombatRole,
   type CombatStrategy,
+  type ThrowType,
 } from "./combat";
 
 export type Rigwalker = {
@@ -15,6 +19,8 @@ export type Rigwalker = {
   corporation: string;
   combatId: number;
   combatProfile: CombatProfile;
+  /** What this one does for a living. Hurlers throw rocks; the rest cut. */
+  role: CombatRole;
   health: number;
   maxHealth: number;
   isAlive: boolean;
@@ -23,8 +29,15 @@ export type Rigwalker = {
   canRemove: boolean;
   /** True while a swing is in flight, so the blade is worth trailing. */
   isSwinging: boolean;
-  /** World-space point on the blade where a strike lands. */
+  /**
+   * World-space point a strike is thrown from: the blade's percussion point, or
+   * the rock in a hurler's hand.
+   */
   getContactPoint: (out: THREE.Vector3) => THREE.Vector3;
+  /** World-space point on this unit's body that an incoming rock lands against. */
+  getImpactPoint: (out: THREE.Vector3) => THREE.Vector3;
+  /** Hides the held rock, because it is now in the air. Returns false if empty-handed. */
+  releaseRock: () => boolean;
   /** World-space direction the blade is travelling this frame. */
   getBladeVelocity: (out: THREE.Vector3) => THREE.Vector3;
   /** Writes the blade's hilt and tip in world space; false when it has no weapon. */
@@ -71,6 +84,14 @@ const MAX_HEALTH = 100;
 const COMBAT_DISTANCE_DEAD_ZONE = 0.16;
 const COMBAT_SHUFFLE_SPEED = 2.25;
 const WALK_ANIMATION_SPEED = 1.72;
+/**
+ * A fighter with a long way to go runs it rather than shuffling. Without this a
+ * swordsman closing on a hurler twelve metres away advances at the same speed
+ * the hurler backs off at, and the two walk the length of the map in step.
+ */
+const COMBAT_RUN_DISTANCE = 6;
+/** Backing away is slower than walking at something, which is what lets it be caught. */
+const HURLER_BACKPEDAL_SPEED = 1.5;
 /** How long a wreck stays on the battlefield, and its final sink. */
 const CORPSE_SECONDS = 3.4;
 const CORPSE_SINK_SECONDS = 0.8;
@@ -305,6 +326,274 @@ function applyCombatPose(bones: CombatBones, input: CombatPoseInput): void {
   setBoneOffset(bones.footR, bones.legRest.footR, -(upperR + lowerR), 0, guarding * 0.025);
 }
 
+/**
+ * Bone axes on the imported skeleton, measured rather than assumed. The Z-up to
+ * Y-up conversion moves them, so every sign below was read off the rig by
+ * applying one rotation at a time and recording where the hand ended up:
+ *
+ *   upper_arm/lower_arm  X−  swings the arm forward and up,  X+ back and up
+ *   upper_arm            Z+  carries it across the body,     Z− out to the side
+ *   lower_arm            X+  flexes the elbow, hand toward the shoulder
+ *   root/spine/chest     Y+  coils away from the target,     Y− whips through
+ *   root                 X+  pitches forward,                Z− leans right
+ *   upper_leg            X+  takes the leg back,             X− strides it forward
+ *   lower_leg            X+  bends the knee
+ *
+ * X reads the same on both arms; Y and Z mirror, which is the same rule the
+ * sword lines follow.
+ */
+
+type ThrowPoseInput = {
+  throwType: ThrowType;
+  /** 0..1 through the throwing motion, or -1 when no throw is running. */
+  attackPhase: number;
+  /** 0..1 through the aim that precedes it, or -1. */
+  aimPhase: number;
+  hitPhase: number;
+  /** The line the incoming rock reads as, for the hit reaction. */
+  line: AttackLine;
+  intensity: number;
+  combatStep: number;
+};
+
+/** A beat of the motion: fades in over the first pair, out over the second. */
+type Beat = readonly [number, number, number, number];
+
+function beat(phase: number, [inStart, inEnd, outStart, outEnd]: Beat): number {
+  if (phase < 0) return 0;
+  return smoothRange(phase, inStart, inEnd) * (1 - smoothRange(phase, outStart, outEnd));
+}
+
+/**
+ * The drive behind every throw: coil away, open, whip through, follow through.
+ * The three throws differ in when these land and how far they go, not in which
+ * bones they use.
+ */
+type ThrowDrive = { draw: number; stride: number; whip: number; follow: number };
+
+const THROW_BEATS: Record<ThrowType, Record<keyof ThrowDrive, Beat>> = {
+  // A long wind: a full coil, a stride that opens the hips while the shoulders
+  // stay shut, then everything unwinds at once.
+  hurl: {
+    draw: [0, 0.3, 0.34, 0.5],
+    stride: [0.3, 0.46, 0.52, 0.64],
+    // The whip is deliberately still climbing at the release phase, so the rock
+    // leaves near the top of the arc rather than after the arm has come down.
+    whip: [0.46, 0.6, 0.8, 0.94],
+    follow: [0.66, 0.8, 0.9, 1],
+  },
+  // No stride and half the coil: a shoulder pitch thrown off a planted stance.
+  pitch: {
+    draw: [0, 0.24, 0.26, 0.4],
+    stride: [0.18, 0.3, 0.34, 0.46],
+    whip: [0.3, 0.44, 0.52, 0.7],
+    follow: [0.44, 0.58, 0.8, 1],
+  },
+  // Barely a wind at all: the elbow and the wrist do all of it.
+  toss: {
+    draw: [0, 0.18, 0.2, 0.34],
+    stride: [0.1, 0.2, 0.24, 0.36],
+    whip: [0.2, 0.32, 0.4, 0.58],
+    // Kept moving through the whole recovery: a flick that freezes after the
+    // release reads as a dropped frame at RTS scale.
+    follow: [0.32, 0.44, 0.62, 0.95],
+  },
+};
+
+function throwDrive(throwType: ThrowType, phase: number): ThrowDrive {
+  const beats = THROW_BEATS[throwType];
+  return {
+    draw: beat(phase, beats.draw),
+    stride: beat(phase, beats.stride),
+    whip: beat(phase, beats.whip),
+    follow: beat(phase, beats.follow),
+  };
+}
+
+/**
+ * A rock arriving is shaped like a cut arriving, so the reaction is shared with
+ * the sword pose rather than rewritten. Added on top of a finished pose.
+ */
+function addHitReaction(
+  bones: CombatBones, line: AttackLine, hitPhase: number, intensity: number,
+): number {
+  if (hitPhase < 0) return 0;
+  const shock = Math.sin(Math.min(1, hitPhase) * Math.PI) * intensity;
+  const motion = COMBAT_LINE_MOTION[line];
+  addBoneOffset(bones.spine, -shock * motion.hitPitch, 0, shock * motion.hitRoll * 0.45);
+  addBoneOffset(bones.chest, -shock * motion.hitPitch * 1.15, 0, shock * motion.hitRoll);
+  addBoneOffset(bones.neck, -shock * 0.12, 0, 0);
+  addBoneOffset(
+    bones.head, shock * (0.08 + motion.hitPitch * 0.6), 0, shock * motion.hitRoll * 0.7,
+  );
+  addBoneOffset(bones.upperArmR, shock * 0.1, 0, 0);
+  addBoneOffset(bones.upperArmL, shock * 0.1, 0, 0);
+  return shock;
+}
+
+/**
+ * The hurler's three throws. Each is one continuous motion driven by the same
+ * four beats, and each is a different way of getting a rock moving:
+ *
+ * - `hurl` is the whole body. The rock is drawn back past the ear over a coiled
+ *   torso, the left arm points out at the target, the front foot strides, the
+ *   hips open ahead of the shoulders, and the arm slings over the top with the
+ *   wrist last. It is slow, and it is why standing off is worth it.
+ * - `pitch` is the arm and shoulder only, thrown from a three-quarter slot off
+ *   a planted stance. Half the coil, no stride, no aiming arm.
+ * - `toss` is a flick from the hip: elbow and wrist, underhand, weight centred,
+ *   done before the wind-up of a hurl would have finished.
+ *
+ * Everything is written as an offset from the imported rest pose, and every
+ * foot angle cancels the joints above it so the soles stay flat on the ground.
+ */
+function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
+  const { throwType, attackPhase, aimPhase, line, hitPhase, intensity, combatStep } = input;
+  const { draw, stride, whip, follow } = throwDrive(throwType, attackPhase);
+  // The aim settles rather than pulses: a hurler judging a gap is still.
+  const aim = aimPhase >= 0 ? smoothRange(aimPhase, 0, 0.45) : 0;
+  const ready = 1 - Math.max(draw, stride, whip, follow);
+
+  if (throwType === "hurl") {
+    // Hips lead the shoulders. The separation between the two during the stride
+    // is what makes a throw read as a throw rather than an arm swing.
+    const hip = 0.85 * draw + 0.15 * stride - 0.9 * whip - 0.6 * follow;
+    const chest = 1 * draw + 0.9 * stride - 1 * whip - 0.5 * follow;
+    setBoneOffset(bones.root, bones.bodyRest.root,
+      -0.16 * draw + 0.04 * stride + 0.1 * whip + 0.12 * follow,
+      0.34 * hip,
+      -0.14 * draw - 0.08 * stride + 0.08 * whip + 0.12 * follow);
+    setBoneOffset(bones.spine, bones.bodyRest.spine,
+      0.04 + 0.1 * draw - 0.22 * follow, 0.3 * chest, 0.06 * draw - 0.05 * follow);
+    setBoneOffset(bones.chest, bones.bodyRest.chest,
+      0.03 + 0.16 * draw - 0.26 * follow, 0.44 * chest, 0.05 * draw - 0.08 * follow);
+    // The eyes stay on the target through a coil of nearly sixty degrees.
+    setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08 - 0.06 * follow, -0.5 * chest, 0);
+    setBoneOffset(bones.head, bones.bodyRest.head, -0.03 + 0.08 * aim, -0.35 * chest, 0);
+
+    setBoneOffset(bones.upperArmR, bones.armRest.upperArmR,
+      -0.35 + 1.35 * draw + 1.05 * stride - 1.55 * whip + 0.85 * follow,
+      0.85 * draw + 0.7 * stride - 1.1 * whip - 0.5 * follow,
+      -0.3 - 0.55 * draw - 0.15 * stride - 0.35 * whip + 0.95 * follow);
+    setBoneOffset(bones.lowerArmR, bones.armRest.lowerArmR,
+      -0.45 + 1.5 * draw + 1.35 * stride - 0.25 * whip + 0.55 * follow,
+      0, 0.2 * draw + 0.45 * follow);
+    // Last link in the chain, and the fastest: the wrist is still cocked at the
+    // top of the whip and has snapped through by the time the rock is gone.
+    setBoneOffset(bones.handR, bones.armRest.handR,
+      0.55 * draw + 0.4 * stride - 0.85 * whip - 0.25 * follow,
+      0, -0.2 * draw + 0.3 * follow);
+
+    // The aiming arm: raised at the target through the wind, then pulled down
+    // hard into the ribs, which is what the throwing shoulder rotates around.
+    setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
+      -0.3 - 1.35 * draw - 1.45 * stride + 1.15 * whip + 0.9 * follow - 0.35 * aim,
+      0, -0.1 - 0.25 * stride + 0.2 * follow);
+    setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
+      -0.35 - 0.55 * draw - 0.6 * stride + 0.9 * whip + 1 * follow - 0.3 * aim,
+      0, -0.05);
+    setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
+
+    // Left leg strides out and takes the weight; the right trails and its knee
+    // folds instead of its heel lifting.
+    const upperL = -0.06 + 0.14 * draw - 0.22 * stride - 0.22 * whip - 0.14 * follow + combatStep;
+    const lowerL = 0.24 + 0.16 * draw + 0.14 * stride + 0.08 * whip + 0.14 * follow;
+    const upperR = 0.06 + 0.2 * draw + 0.26 * stride + 0.16 * whip + 0.07 * follow - combatStep;
+    const lowerR = 0.24 + 0.26 * draw + 0.1 * stride + 0.1 * whip + 0.08 * follow;
+    setLegs(bones, upperL, lowerL, upperR, lowerR);
+  } else if (throwType === "pitch") {
+    const coil = 0.95 * draw + 0.7 * stride - 0.95 * whip - 0.4 * follow;
+    setBoneOffset(bones.root, bones.bodyRest.root,
+      -0.1 * draw + 0.22 * whip + 0.3 * follow, 0.16 * coil, -0.08 * draw + 0.1 * follow);
+    setBoneOffset(bones.spine, bones.bodyRest.spine,
+      0.04 + 0.05 * draw - 0.12 * follow, 0.17 * coil, 0);
+    setBoneOffset(bones.chest, bones.bodyRest.chest,
+      0.03 + 0.08 * draw - 0.16 * follow, 0.24 * coil, 0);
+    setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08, -0.32 * coil, 0);
+    setBoneOffset(bones.head, bones.bodyRest.head, -0.03 + 0.06 * aim, -0.24 * coil, 0);
+
+    // A three-quarter slot: the elbow stays out at shoulder height rather than
+    // going over the top, so the arc is visibly flatter than a hurl's.
+    setBoneOffset(bones.upperArmR, bones.armRest.upperArmR,
+      -0.35 + 0.85 * draw + 0.62 * stride - 1.05 * whip - 0.5 * follow,
+      0.5 * draw + 0.4 * stride - 0.7 * whip - 0.3 * follow,
+      -0.85 - 0.3 * draw + 1.15 * whip + 0.7 * follow);
+    setBoneOffset(bones.lowerArmR, bones.armRest.lowerArmR,
+      -0.45 + 1.1 * draw + 0.95 * stride - 0.7 * whip + 0.4 * follow,
+      0, 0.15 * draw + 0.3 * follow);
+    setBoneOffset(bones.handR, bones.armRest.handR,
+      0.4 * draw + 0.3 * stride - 0.6 * whip - 0.15 * follow, 0, 0.2 * follow);
+
+    // The free arm only counterbalances; there is no time to aim with it.
+    setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
+      -0.32 - 0.3 * draw + 0.45 * whip + 0.55 * follow, 0, -0.08);
+    setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
+      -0.5 - 0.2 * draw + 0.35 * whip + 0.45 * follow, 0, -0.05);
+    setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
+
+    const upperL = -0.02 + 0.06 * draw - 0.1 * whip - 0.08 * follow + combatStep;
+    const lowerL = 0.24 + 0.08 * draw + 0.06 * whip + 0.09 * follow;
+    const upperR = 0.02 + 0.1 * draw + 0.08 * whip + 0.04 * follow - combatStep;
+    const lowerR = 0.24 + 0.14 * draw + 0.13 * whip + 0.17 * follow;
+    setLegs(bones, upperL, lowerL, upperR, lowerR);
+  } else {
+    const coil = 0.5 * draw - 0.45 * whip - 0.2 * follow;
+    setBoneOffset(bones.root, bones.bodyRest.root,
+      0.06 * draw + 0.12 * whip + 0.14 * follow, 0.1 * coil, 0);
+    setBoneOffset(bones.spine, bones.bodyRest.spine, 0.04 + 0.06 * draw, 0.12 * coil, 0);
+    setBoneOffset(bones.chest, bones.bodyRest.chest, 0.03 + 0.05 * draw, 0.16 * coil, 0);
+    setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08, -0.2 * coil, 0);
+    setBoneOffset(bones.head, bones.bodyRest.head, -0.03, -0.16 * coil, 0);
+
+    // Underhand from the hip. The shoulder barely travels; the read is the
+    // elbow opening and the wrist flicking up, so both are given full range.
+    setBoneOffset(bones.upperArmR, bones.armRest.upperArmR,
+      -0.05 + 0.55 * draw + 0.35 * stride - 0.8 * whip - 0.55 * follow,
+      0.2 * draw - 0.3 * whip,
+      -0.34 - 0.14 * draw + 0.1 * whip + 0.3 * follow);
+    setBoneOffset(bones.lowerArmR, bones.armRest.lowerArmR,
+      -0.3 + 0.5 * draw + 0.35 * stride - 0.15 * whip + 0.25 * follow,
+      0, 0.08 * draw);
+    setBoneOffset(bones.handR, bones.armRest.handR,
+      0.7 * draw + 0.5 * stride - 1.05 * whip - 0.2 * follow, 0, 0.1 * follow);
+
+    setBoneOffset(bones.upperArmL, bones.armRest.upperArmL, -0.34 + 0.14 * whip, 0, -0.1);
+    setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL, -0.62 + 0.12 * whip, 0, -0.06);
+    setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
+
+    const upperL = -0.02 - 0.08 * whip + combatStep;
+    const lowerL = 0.26 + 0.14 * draw + 0.1 * whip;
+    const upperR = 0.02 + 0.08 * whip - combatStep;
+    const lowerR = 0.26 + 0.18 * draw + 0.14 * whip;
+    setLegs(bones, upperL, lowerL, upperR, lowerR);
+  }
+
+  // Bladed and settled between throws: rock hand low at the hip, free hand up
+  // across the chest, weight slightly back. Distinct at a glance from a
+  // swordsman's guard, which is what tells the two units apart on the field.
+  if (ready > 0.001) {
+    addBoneOffset(bones.root, 0, ready * 0.16, -ready * 0.05);
+    addBoneOffset(bones.chest, 0, ready * 0.12, 0);
+    addBoneOffset(bones.neck, 0, -ready * 0.16, 0);
+    addBoneOffset(bones.upperArmL, -ready * (0.1 + aim * 0.5), 0, 0);
+    addBoneOffset(bones.lowerArmL, -ready * (0.25 + aim * 0.35), 0, 0);
+  }
+
+  addHitReaction(bones, line, hitPhase, intensity);
+}
+
+/** Sets both legs and cancels each ankle, so the soles stay flat on the ground. */
+function setLegs(
+  bones: CombatBones, upperL: number, lowerL: number, upperR: number, lowerR: number,
+): void {
+  setBoneOffset(bones.upperLegL, bones.legRest.upperLegL, upperL, 0, 0.11);
+  setBoneOffset(bones.lowerLegL, bones.legRest.lowerLegL, lowerL, 0, 0);
+  setBoneOffset(bones.footL, bones.legRest.footL, -(upperL + lowerL), 0, -0.09);
+  setBoneOffset(bones.upperLegR, bones.legRest.upperLegR, upperR, 0, -0.11);
+  setBoneOffset(bones.lowerLegR, bones.legRest.lowerLegR, lowerR, 0, 0);
+  setBoneOffset(bones.footR, bones.legRest.footR, -(upperR + lowerR), 0, 0.09);
+}
+
 function resetCombatPose(bones: CombatBones): void {
   bones.root.quaternion.copy(bones.bodyRest.root);
   bones.spine.quaternion.copy(bones.bodyRest.spine);
@@ -354,6 +643,38 @@ const visor = new THREE.MeshStandardMaterial({
   metalness: 0.2,
   roughness: 0.18,
 });
+
+/**
+ * Martian rock: an icosahedron with its vertices knocked about, flat shaded so
+ * the facets catch the low sun. Built once and shared — a hurler holds one, the
+ * effects pool flies them, and there may be dozens on the field.
+ */
+export function createRockGeometry(radius = 1, seed = 1): THREE.BufferGeometry {
+  const geometry = new THREE.IcosahedronGeometry(radius, 0);
+  const position = geometry.attributes.position;
+  const jitter = new THREE.Vector3();
+  for (let index = 0; index < position.count; index += 1) {
+    const wobble = Math.sin((index + seed) * 12.9898) * 43758.5453;
+    const amount = 0.72 + (wobble - Math.floor(wobble)) * 0.5;
+    jitter.fromBufferAttribute(position, index).multiplyScalar(amount);
+    position.setXYZ(index, jitter.x, jitter.y * 0.86, jitter.z);
+  }
+  geometry.computeVertexNormals();
+  return geometry;
+}
+
+export const ROCK_MATERIAL = new THREE.MeshStandardMaterial({
+  color: 0x59352a,
+  roughness: 0.95,
+  metalness: 0.04,
+  flatShading: true,
+});
+
+// Sized from the rendered result rather than from plausibility, the way the
+// sparks were: at gameplay zoom a rock under about a quarter of a metre is a
+// three-pixel speck and the throw reads as a fighter miming one.
+const heldRockGeometry = createRockGeometry(0.28, 3);
+const cachedRockGeometry = createRockGeometry(0.2, 11);
 
 function addMesh(
   parent: THREE.Object3D,
@@ -540,15 +861,22 @@ function createFallbackVisual(accentColor: number): {
   return { root, update };
 }
 
+export type RigwalkerOptions = {
+  /** Defaults to melee, so every existing caller keeps the swordsman. */
+  role?: CombatRole;
+};
+
 export function createRigwalker(
   asset: RigwalkerAsset | null = null,
   accentColor = 0xf29a3f,
   corporation = "Independent",
   /** Injected so a sim can seed temperaments and replay the same fight. */
   random: () => number = Math.random,
+  options: RigwalkerOptions = {},
 ): Rigwalker {
+  const role: CombatRole = options.role ?? "melee";
   const group = new THREE.Group();
-  group.name = "Rigwalker";
+  group.name = role === "hurler" ? "Rigwalker Hurler" : "Rigwalker";
 
   const contactShadow = new THREE.Mesh(
     new THREE.CircleGeometry(0.72, 24),
@@ -598,6 +926,27 @@ export function createRigwalker(
   healthBar.visible = false;
   group.add(healthBar);
 
+  // A hurler carries its ammunition where it can be seen: a couple of rocks on
+  // the hip. At RTS scale that satchel, and the empty sword hand, are how the
+  // player tells the two units apart before either has done anything.
+  const rockCache = new THREE.Group();
+  rockCache.name = "Rigwalker rock cache";
+  rockCache.visible = role === "hurler";
+  if (role === "hurler") {
+    for (const [offset, tilt] of [
+      [new THREE.Vector3(-0.46, 1.46, -0.2), 0.6],
+      [new THREE.Vector3(-0.36, 1.24, -0.32), 2.1],
+      [new THREE.Vector3(-0.5, 1.2, -0.1), 4.4],
+    ] as const) {
+      const stone = new THREE.Mesh(cachedRockGeometry, ROCK_MATERIAL);
+      stone.position.copy(offset);
+      stone.rotation.set(tilt, tilt * 1.7, tilt * 0.6);
+      stone.castShadow = true;
+      rockCache.add(stone);
+    }
+  }
+  group.add(rockCache);
+
   const pipePivot = new THREE.Group();
   pipePivot.name = "Rigwalker weapon pivot";
   const pipe = new THREE.Mesh(
@@ -608,7 +957,7 @@ export function createRigwalker(
   pipe.position.y = 1.15;
   pipe.castShadow = true;
   pipePivot.add(pipe);
-  pipePivot.visible = !asset;
+  pipePivot.visible = !asset && role === "melee";
   group.add(pipePivot);
 
   const fallbackVisual = asset ? null : createFallbackVisual(accentColor);
@@ -636,8 +985,10 @@ export function createRigwalker(
     });
     group.add(model);
     combatBones = findCombatBones(model);
-    weaponVisual = model.getObjectByName("Broadsword") ?? null;
+    weaponVisual = role === "hurler" ? null : model.getObjectByName("Broadsword") ?? null;
     if (weaponVisual) weaponVisual.visible = false;
+    const carriedSword = role === "hurler" ? model.getObjectByName("Broadsword") : null;
+    if (carriedSword) carriedSword.visible = false;
     mixer = new THREE.AnimationMixer(model);
     const idleClip = THREE.AnimationClip.findByName(asset.clips, "Idle");
     const walkClip = THREE.AnimationClip.findByName(asset.clips, "Walk");
@@ -653,6 +1004,24 @@ export function createRigwalker(
     }
     if (combatClip) {
       combatAction = mixer.clipAction(combatClip);
+    }
+  }
+
+  // The held rock rides the wrist bone, so it inherits the whole arm chain and
+  // is never positioned independently — the same rule the broadsword follows.
+  // The hand bone runs forward from the wrist, so local +Y is the palm.
+  let heldRock: THREE.Mesh | null = null;
+  if (role === "hurler") {
+    heldRock = new THREE.Mesh(heldRockGeometry, ROCK_MATERIAL);
+    heldRock.name = "Rigwalker held rock";
+    heldRock.castShadow = true;
+    heldRock.visible = false;
+    if (combatBones) {
+      heldRock.position.set(0, 0.2, 0);
+      combatBones.handR.add(heldRock);
+    } else {
+      heldRock.position.set(0.68, 1.5, 0.1);
+      group.add(heldRock);
     }
   }
 
@@ -684,6 +1053,10 @@ export function createRigwalker(
   const combatProfile = createCombatProfile(random);
   let combatTarget: Rigwalker | null = null;
   let activeStrategy: CombatStrategy | null = null;
+  /** Keeps a hurler standing like the throw it last loaded while it reloads. */
+  let lastThrowType: ThrowType = "hurl";
+  const restingFightDistance =
+    role === "hurler" ? HURLER_FIGHT_DISTANCE : BASE_FIGHT_DISTANCE;
   let swinging = false;
   let defenseSide = 1;
   let hitReactionSide: -1 | 1 = 1;
@@ -694,7 +1067,7 @@ export function createRigwalker(
   let wasInCombat = false;
   let observedCombatTargetId: number | null = null;
   let observedEnemyDistance = Number.POSITIVE_INFINITY;
-  let observedFightDistance = BASE_FIGHT_DISTANCE;
+  let observedFightDistance = restingFightDistance;
   let distanceObservationElapsed = 0;
   let distanceObservationCount = 0;
   const balance = new BalanceController();
@@ -737,13 +1110,29 @@ export function createRigwalker(
 
   /**
    * Strikes land around the percussion point, not the very tip, so sparks fly
-   * from where the blade would actually bite.
+   * from where the blade would actually bite. A hurler has no blade: its strike
+   * leaves from the rock in its hand.
    */
   function getContactPoint(out: THREE.Vector3): THREE.Vector3 {
+    if (heldRock) {
+      heldRock.updateWorldMatrix(true, false);
+      return out.setFromMatrixPosition(heldRock.matrixWorld);
+    }
     if (sampleBlade(hiltScratch, tipScratch)) {
       return out.copy(hiltScratch).lerp(tipScratch, 0.72);
     }
     return out.set(0, 2.4, 1.05).applyQuaternion(group.quaternion).add(group.position);
+  }
+
+  /** Chest height on the body itself: where a thrown rock arrives. */
+  function getImpactPoint(out: THREE.Vector3): THREE.Vector3 {
+    return out.set(0, 2.3, 0.18).applyQuaternion(group.quaternion).add(group.position);
+  }
+
+  function releaseRock(): boolean {
+    if (!heldRock?.visible) return false;
+    heldRock.visible = false;
+    return true;
   }
 
   function getBladeVelocity(out: THREE.Vector3): THREE.Vector3 {
@@ -863,6 +1252,12 @@ export function createRigwalker(
     }
 
     const attackPhase = combatCue?.action === "attack" ? combatCue.phase : -1;
+    const throwType: ThrowType | null =
+      role === "hurler" && isThrow(combatCue?.strategy ?? null)
+        ? (combatCue!.strategy as ThrowType)
+        : null;
+    // A hurler judging the gap is aiming, which is a pose of its own.
+    const aimPhase = combatCue?.action === "size-up" ? combatCue.phase : -1;
     const line = combatCue?.line ?? "overhead";
     const presentedLine = combatCue?.feintLine && attackPhase >= 0 &&
       attackPhase < FEINT_REVEAL_PHASE ? combatCue.feintLine : line;
@@ -912,18 +1307,22 @@ export function createRigwalker(
 
     const inCombat = combatTarget !== null;
     activeStrategy = inCombat ? combatCue?.strategy ?? null : null;
+    if (throwType) lastThrowType = throwType;
     swinging = inCombat && attackPhase >= 0;
     if (!inCombat && wasInCombat && combatBones) {
       resetCombatPose(combatBones);
     }
     wasInCombat = inCombat;
     if (weaponVisual) weaponVisual.visible = inCombat;
+    // The rock leaves the hand on the release event, and the hurler has another
+    // out of the hip cache by the time the motion is over.
+    if (heldRock && combatCue?.action !== "attack") heldRock.visible = true;
 
     const enemyDistance = combatTarget
       ? group.position.distanceTo(combatTarget.group.position)
       : Number.POSITIVE_INFINITY;
     if (combatTarget) {
-      const fightDistance = combatCue?.preferredDistance ?? BASE_FIGHT_DISTANCE;
+      const fightDistance = combatCue?.preferredDistance ?? restingFightDistance;
       if (observedCombatTargetId !== combatTarget.combatId) {
         observedCombatTargetId = combatTarget.combatId;
         observedEnemyDistance = enemyDistance;
@@ -949,16 +1348,28 @@ export function createRigwalker(
         enemyDistance > observedFightDistance - COMBAT_DISTANCE_DEAD_ZONE;
       const wantsToRetreat = movementIntent === "retreat" &&
         enemyDistance < observedFightDistance + COMBAT_DISTANCE_DEAD_ZONE;
-      if (observedEnemyDistance > observedFightDistance + COMBAT_DISTANCE_DEAD_ZONE || wantsToClose) {
+      travelSpeed = COMBAT_SHUFFLE_SPEED;
+      if (movementIntent === "plant") {
+        // Both feet are doing the throw. Nothing else moves.
+        movement.set(0, 0, 0);
+      } else if (observedEnemyDistance > observedFightDistance + COMBAT_DISTANCE_DEAD_ZONE ||
+          wantsToClose) {
         movement.copy(combatDirection);
         moving = true;
+        // A long approach is run, not shuffled: a swordsman crossing a hurler's
+        // standoff at shuffle speed would never make up the ground.
+        if (enemyDistance > COMBAT_RUN_DISTANCE) travelSpeed = MOVE_SPEED;
         // The decision runs on a deliberately stale reading, but the step is
         // clamped against the real gap. Walking through the opponent merges
         // two silhouettes into one blob and the fight stops reading.
         travelLimit = Math.max(0, enemyDistance - (fightDistance - COMBAT_DISTANCE_DEAD_ZONE));
-      } else if (observedEnemyDistance < observedFightDistance - COMBAT_DISTANCE_DEAD_ZONE || wantsToRetreat) {
+      } else if (observedEnemyDistance < observedFightDistance - COMBAT_DISTANCE_DEAD_ZONE ||
+          wantsToRetreat) {
         movement.copy(combatDirection).multiplyScalar(-1);
         moving = true;
+        // Giving ground is slower than taking it, so a hurler kiting a
+        // swordsman buys time rather than escaping outright.
+        if (role === "hurler") travelSpeed = HURLER_BACKPEDAL_SPEED;
       } else if (movementIntent === "angle-left" || movementIntent === "angle-right") {
         movement.set(-combatDirection.z, 0, combatDirection.x)
           .multiplyScalar(movementIntent === "angle-left" ? 1 : -1);
@@ -966,12 +1377,11 @@ export function createRigwalker(
       } else {
         movement.set(0, 0, 0);
       }
-      travelSpeed = COMBAT_SHUFFLE_SPEED;
       desiredMovement.copy(movement);
     } else {
       observedCombatTargetId = null;
       observedEnemyDistance = Number.POSITIVE_INFINITY;
-      observedFightDistance = BASE_FIGHT_DISTANCE;
+      observedFightDistance = restingFightDistance;
     }
 
     if (!combatTarget && destination) {
@@ -1132,17 +1542,32 @@ export function createRigwalker(
       }
       mixer.update(delta);
       if (combatBones && combatTarget) {
-        applyCombatPose(combatBones, {
-          attackPhase,
-          presentedLine,
-          defensePhase,
-          defenseSide,
-          hitPhase,
-          line,
-          intensity: combatCue?.intensity ?? 0.72,
-          deflected: combatCue?.action === "attack" && combatCue.outcome === "blocked",
-          combatStep: moving ? Math.sin(elapsed * 5.8 + group.id * 0.7) * 0.24 : 0,
-        });
+        const combatStep = moving ? Math.sin(elapsed * 5.8 + group.id * 0.7) * 0.24 : 0;
+        if (role === "hurler") {
+          applyThrowPose(combatBones, {
+            // Between throws the hurler still stands like one, so the ready
+            // stance comes from the last throw it was loading.
+            throwType: throwType ?? lastThrowType,
+            attackPhase,
+            aimPhase,
+            hitPhase,
+            line,
+            intensity: combatCue?.intensity ?? 0.72,
+            combatStep,
+          });
+        } else {
+          applyCombatPose(combatBones, {
+            attackPhase,
+            presentedLine,
+            defensePhase,
+            defenseSide,
+            hitPhase,
+            line,
+            intensity: combatCue?.intensity ?? 0.72,
+            deflected: combatCue?.action === "attack" && combatCue.outcome === "blocked",
+            combatStep,
+          });
+        }
       }
       if (combatBones) applyBalancePose(combatBones, balancePose, inCombat);
     }
@@ -1169,6 +1594,7 @@ export function createRigwalker(
     corporation,
     combatId: group.id,
     combatProfile,
+    role,
     get health() { return health; },
     maxHealth: MAX_HEALTH,
     get isAlive() { return health > 0; },
@@ -1176,6 +1602,8 @@ export function createRigwalker(
     get canRemove() { return defeatElapsed >= CORPSE_SECONDS; },
     get isSwinging() { return swinging; },
     getContactPoint,
+    getImpactPoint,
+    releaseRock,
     getBladeVelocity,
     sampleBlade,
     applyCombatDamage,

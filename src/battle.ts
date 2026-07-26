@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { CombatAudio } from "./audio";
 import {
   CombatDirector,
+  isThrow,
   type CombatCue,
   type CombatEvent,
   type CombatFrame,
@@ -48,11 +49,13 @@ const DEFAULT_ACCENT = 0xffb35d;
  */
 const TRAIL_INNER_EDGE = 0.62;
 
-// Contacts are what the player needs to hear. Swings are atmosphere, so they
-// yield to a clang when a crowded frame exceeds the voice budget.
+// Contacts are what the player needs to hear. Swings and releases are
+// atmosphere, so they yield to a clang when a crowded frame exceeds the budget.
 const EVENT_AUDIO_PRIORITY: Record<CombatEvent["type"], number> = {
-  hit: 0, block: 1, glance: 2, riposte: 3, whiff: 4, plan: 5, swing: 6,
+  hit: 0, block: 1, glance: 2, riposte: 3, whiff: 4, plan: 5, swing: 6, throw: 7,
 };
+/** How far past a target a missed rock carries before it hits the dirt. */
+const WHIFF_OVERSHOOT = 2.4;
 
 
 export class BattleRuntime {
@@ -72,6 +75,10 @@ export class BattleRuntime {
   private readonly trailHilt = new THREE.Vector3();
   private readonly trailTip = new THREE.Vector3();
   private readonly deathFlash = new THREE.Vector3();
+  private readonly rockOrigin = new THREE.Vector3();
+  private readonly rockLanding = new THREE.Vector3();
+  /** Dust off a ground strike goes up and out, not along a blade. */
+  private readonly dustUp = new THREE.Vector3(0, 1, 0);
   private readonly orderedEvents: CombatEvent[] = [];
   private readonly frameDefeats: Rigwalker[] = [];
 
@@ -114,7 +121,7 @@ export class BattleRuntime {
     const frame = this.director.update(
       delta,
       this.units.map((unit) => ({
-        id: unit.combatId, corporation: unit.corporation,
+        id: unit.combatId, corporation: unit.corporation, role: unit.role,
         health: unit.health, maxHealth: unit.maxHealth, isAlive: unit.isAlive,
         x: unit.group.position.x, z: unit.group.position.z, profile: unit.combatProfile,
       })),
@@ -187,12 +194,34 @@ export class BattleRuntime {
     for (const event of this.orderedEvents) {
       const attacker = byId.get(event.attackerId);
       if (!attacker) continue;
-      attacker.getContactPoint(this.contactPoint);
-      attacker.getBladeVelocity(this.bladeDirection);
-      if (this.bladeDirection.lengthSq() < 0.0001) {
-        this.bladeDirection.set(0, 0.4, 0);
+      const defender = byId.get(event.defenderId);
+      const thrown = isThrow(event.strategy);
+
+      if (event.type === "throw") {
+        if (event.projectile && defender) this.launchRock(attacker, defender, event.projectile);
+        // A release is the same kind of moment as a swing: atmosphere under the
+        // landing, graded by how much of the body went into it.
+        this.audio.play(
+          "swing", attacker.group.position.x, attacker.group.position.z, event.intensity,
+        );
+        continue;
       }
-      this.bladeDirection.normalize();
+
+      // A cut resolves on the blade; a rock resolves on the body it reaches.
+      // Reading the attacker's hand for a landing twelve metres away would put
+      // every spark on the wrong fighter.
+      if (thrown && defender) {
+        defender.getImpactPoint(this.contactPoint);
+        this.bladeDirection.copy(this.contactPoint).sub(attacker.group.position)
+          .setY(0.5).normalize();
+      } else {
+        attacker.getContactPoint(this.contactPoint);
+        attacker.getBladeVelocity(this.bladeDirection);
+        if (this.bladeDirection.lengthSq() < 0.0001) {
+          this.bladeDirection.set(0, 0.4, 0);
+        }
+        this.bladeDirection.normalize();
+      }
       // Plans and ripostes are seen and not heard. Both draw a ring, and both
       // were playtested with a tone: announcing a decision as often as fighters
       // make them buries the contacts the sound is meant to punctuate.
@@ -203,17 +232,43 @@ export class BattleRuntime {
       switch (event.type) {
         case "block":
           // A parry throws the brightest, widest shower: it is the moment most
-          // worth noticing, and nothing else in the fight looks like it.
-          this.effects.sparkBurst(this.contactPoint, this.bladeDirection, 26, 7.5, 0xdbe7ff, 1.15);
-          this.effects.flash(this.contactPoint, 1.5, 0xcfe0ff);
+          // worth noticing, and nothing else in the fight looks like it. A
+          // swatted rock bursts instead of sparking, and shatters downward.
+          if (thrown) {
+            this.effects.sparkBurst(
+              this.contactPoint, this.bladeDirection, 22, 5.6 * event.intensity + 1.6,
+              0xc79172, 1.25,
+            );
+            this.effects.flash(this.contactPoint, 0.9, 0xffd2a6);
+          } else {
+            this.effects.sparkBurst(this.contactPoint, this.bladeDirection, 26, 7.5, 0xdbe7ff, 1.15);
+            this.effects.flash(this.contactPoint, 1.5, 0xcfe0ff);
+          }
           break;
         case "glance":
-          this.effects.sparkBurst(this.contactPoint, this.bladeDirection, 12, 5.5, 0xffcf95, 0.85);
+          this.effects.sparkBurst(
+            this.contactPoint, this.bladeDirection, thrown ? 14 : 12, 5.5,
+            thrown ? 0xd8a179 : 0xffcf95, 0.85,
+          );
           this.effects.flash(this.contactPoint, 0.85, 0xffc98a);
           break;
         case "hit":
-          this.effects.sparkBurst(this.contactPoint, this.bladeDirection, 18, 4.4, 0xffa060, 0.7);
-          this.effects.flash(this.contactPoint, 1.25, 0xffb066);
+          this.effects.sparkBurst(
+            this.contactPoint, this.bladeDirection,
+            thrown ? 20 : 18, thrown ? 3.6 * event.intensity + 1.4 : 4.4,
+            thrown ? 0xbe8258 : 0xffa060, thrown ? 1.05 : 0.7,
+          );
+          this.effects.flash(this.contactPoint, thrown ? 1 : 1.25, 0xffb066);
+          break;
+        case "whiff":
+          // A missed rock has to land somewhere, and the puff of dust where it
+          // does is the only thing that tells the player it was ever thrown.
+          if (thrown && defender) {
+            this.landingBeyond(attacker, defender, this.rockLanding);
+            this.effects.sparkBurst(
+              this.rockLanding, this.dustUp, 14, 2.6, 0x9a6a4c, 1.3,
+            );
+          }
           break;
         case "riposte":
           // Telegraph the counter under the fighter turning it around.
@@ -230,5 +285,41 @@ export class BattleRuntime {
           break;
       }
     }
+  }
+
+  /**
+   * Puts a rock in the air. The flight time comes from the director, so it
+   * lands on the frame the strike resolves; a miss is aimed past the target so
+   * the rock is visibly seen to go wide rather than vanishing on arrival.
+   */
+  private launchRock(
+    attacker: Rigwalker,
+    defender: Rigwalker,
+    projectile: NonNullable<CombatEvent["projectile"]>,
+  ): void {
+    attacker.getContactPoint(this.rockOrigin);
+    attacker.releaseRock();
+    if (projectile.outcome === "whiff") {
+      this.landingBeyond(attacker, defender, this.rockLanding);
+    } else {
+      defender.getImpactPoint(this.rockLanding);
+    }
+    this.effects.rock(
+      this.rockOrigin, this.rockLanding, projectile.flightTime, projectile.speed,
+      // Only the hurl is fast enough for a streak to read as speed rather than
+      // as a smear following a lob.
+      projectile.throwType === "hurl",
+    );
+  }
+
+  /** Where a rock that missed comes down: past the target, along the throw. */
+  private landingBeyond(
+    attacker: Rigwalker, defender: Rigwalker, out: THREE.Vector3,
+  ): THREE.Vector3 {
+    out.copy(defender.group.position).sub(attacker.group.position).setY(0);
+    if (out.lengthSq() < 0.0001) out.set(0, 0, 1);
+    out.normalize().multiplyScalar(WHIFF_OVERSHOOT).add(defender.group.position);
+    out.y = defender.group.position.y + 0.15;
+    return out;
   }
 }

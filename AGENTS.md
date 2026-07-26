@@ -49,6 +49,7 @@ Current camera controls are intentionally minimal after playtesting:
 - Robot production building: **Assembly Bay**
 - Mining building: **Extractor**
 - Initial robot unit: **Rigwalker**
+- Ranged Rigwalker variant: **Rigwalker Hurler**, which throws rocks
 
 Avoid the name “Optimus” because of its strong association with Transformers.
 
@@ -115,8 +116,13 @@ is loaded as a separate browser chunk, and gameplay remains independent of the
 rendered model. The original nine-step vertical slice is complete.
 
 Combat has its own workbench rather than being tuned in the game: `sim.html`
-stages seeded 1v1 through 5v5 matchups against the same runtime, with a
+stages seeded sword and hurler matchups against the same runtime, with a
 per-fighter readout and an event log, and renders headlessly for review.
+
+The Rigwalker Hurler is a second unit built on the same skeleton and the same
+runtime: no sword, a rock in its hand and a cache of them on its hip, and three
+throws picked by how far away its target is. The Assembly Bay produces one every
+third Rigwalker, so the game fields a mixed line without new interface.
 
 ## Current playtest
 
@@ -189,9 +195,14 @@ empty arena, drives the same `BattleRuntime` the game does, and shows what the
 director is deciding: each fighter's temperament, plan, action, phase, and
 distance, plus a timestamped event log and an outcome tally.
 
-- Matchups are `1v1`, `2v2`, `3v2`, `3v3`, and `5v5`. Seeded, so a fight
-  replays.
-- `Space` pauses, `.` steps one frame, `R` restarts, `1`-`5` pick a matchup,
+- Sword matchups are `1v1`, `2v2`, `3v2`, `3v3`, and `5v5`. Hurler matchups are
+  `1h v 1` (the whole unit in one fight: it opens at maximum range and is walked
+  down through all three throws), `1h v 1h`, `2h+2 v 4`, and `2h v 3`. All
+  seeded, so a fight replays.
+- A matchup carries its own starting standoff and zoom. A hurler works from
+  sixteen metres, which needs both a longer approach and a wider view than two
+  swordsmen walking into each other; `zoom` in the URL still overrides it.
+- `Space` pauses, `.` steps one frame, `R` restarts, `1`-`9` pick a matchup,
   `WASD` pans, wheel zooms.
 - URL parameters: `matchup`, `seed`, `speed`, `zoom`, `hud=0`, `t`, and
   `contacts=1`, which logs where each strike throws its sparks in the
@@ -244,6 +255,88 @@ renders them at gameplay scale under the real camera.
 - Additive effects over bright Martian ground blow out fast. A weapon trail at
   full accent strength reads as an opaque wedge covering the fighter rather
   than a swept smear of light; keep its leading edge well under 1.
+
+## The Hurler and ranged combat
+
+The Rigwalker Hurler throws rocks. It has one job — stand off and be deadly at
+the top of its range — and one weakness, which is everything that happens once
+somebody crosses that range.
+
+Its bands are stated in the units the model itself defines, in `combat.ts`:
+
+| throw | band | speed | damage | motion | releases at |
+| --- | --- | --- | --- | --- | --- |
+| `hurl` | up to 12 shoulder widths (16.08 m) | 26 m/s | 38 | 1.15 s | phase 0.58 |
+| `pitch` | up to twice sword reach (8.6 m) | 17 m/s | 19 | 0.62 s | phase 0.44 |
+| `toss` | inside sword reach (4.3 m) | 11 m/s | 8 | 0.30 s | phase 0.32 |
+
+`SHOULDER_WIDTH` is 1.34 m, the span between the arm bones in
+`create_rigwalker.py`. Both the long and medium ranges are derived, not typed
+in, so moving `ATTACK_RANGE` or rebuilding the model moves them too.
+
+- **Most effective at maximum range** is a measured claim, not a comment.
+  `hurler.test.ts` holds a hurler at each band for thirty seconds and compares
+  damage per second; long beats medium beats short by at least a fifth each,
+  and the long throw is the most accurate as well as the hardest.
+- **The gap picks the throw, and only while the hurler is still aiming.** Once
+  the motion starts it is committed, the way a real thrower is. A swordsman
+  walking a hurler down therefore visibly degrades it from hurl to pitch to
+  toss, which is the fight the unit exists to produce.
+- **A hurler never enters a mutual duel.** It gets a one-sided `ranged`
+  encounter, is never promoted into a trade, and never ripostes or picks up a
+  sword plan. Crowded, it keeps throwing and the throws get worse. A swordsman
+  attacking a hurler gets a normal support encounter and does not defer to it:
+  a hurler is permanently mid-throw at somebody else, and treating that as
+  "busy" left swordsmen standing next to one watching it work.
+- **The strike is resolved at release and replayed on arrival.** The `throw`
+  event carries speed, flight time, and the already-rolled outcome, so
+  presentation launches a rock that lands on the exact frame the director
+  applies the damage. The exchange's recovery is extended to outlast the
+  flight, or a rock still in the air would be re-planned out from under.
+- Movement: a fighter with a long way to close runs it (`COMBAT_RUN_DISTANCE`)
+  rather than shuffling, and a hurler backpedals slower than it is walked at.
+  Without both, a hurler and its pursuer cross the map in step and nobody wins.
+- Sparks for a thrown strike come off the **defender**, not the attacker's hand.
+  Reading the attacker for a landing twelve metres away puts the whole shower
+  on the wrong fighter.
+- Rock size was set from the rendered result, like the sparks: under about a
+  quarter of a metre it is a three-pixel speck and the throw reads as mime.
+- Arc height is drawn from how *slow* a throw is, not from ballistics. All
+  three are thrown far harder than their distance needs, so honest physics
+  gives three flat lines; looping the slow ones is what makes the speed
+  difference visible.
+
+## Throw animation validation
+
+`tools/render_rigwalker_throw.py` is to the throws what the duel tool is to the
+sword. It ports `applyThrowPose` onto the real imported GLB, measures, and only
+then renders. **Keep the port in step with `src/rigwalker.ts`.**
+
+```sh
+blender --background --python tools/render_rigwalker_throw.py
+```
+
+It fails the build rather than producing a pretty picture when a throw is
+wrong, and it checks things that were each caught by it in practice:
+
+- the rock ends up in front of the body at release, not behind it;
+- the wind-up actually travels (1.5 m for a hurl, 0.5 m for a toss);
+- release heights order overhand > three-quarter > underhand;
+- feet stay near the ground (a thrower's rear heel lifts, so the limit is
+  looser than the sword's, but they may not leave it);
+- consecutive phases are distinguishable at RTS scale;
+- the pose settles back to the ready stance.
+
+Two traps worth knowing before touching it:
+
+- **Bone axis signs are measured, not guessed.** They are listed in the comment
+  above `applyThrowPose`; the Z-up to Y-up conversion moves them, and the
+  Euler order means a shoulder's abduction changes what its elevation does.
+  When a pose fights back, measure a single axis at a time rather than reason.
+- **Clear the imported animation data before rendering.** The GLB carries
+  Idle, Walk and CombatIdle, and Blender re-applies whichever is assigned every
+  time it renders a frame. Miss this and the measurements are right while every
+  picture shows a unit standing still.
 
 ## Combat spacing
 

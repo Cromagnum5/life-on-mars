@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { MARS_GRAVITY } from "./balance";
+import { ROCK_MATERIAL, createRockGeometry } from "./rigwalker";
 
 /**
  * Pooled, world-space combat effects: sparks struck off the blade, a brief
@@ -13,6 +14,17 @@ const MAX_SPARKS = 720;
 const MAX_FLASHES = 24;
 const MAX_RINGS = 12;
 const MAX_TRAILS = 16;
+const MAX_ROCKS = 24;
+/**
+ * How high a thrown rock rides above the straight line to its target. Real
+ * ballistics would put every one of these throws nearly flat — they are all
+ * thrown far harder than the distance needs — so the arc is drawn from how slow
+ * the throw is instead. A hurl streaks; a short toss visibly floats across.
+ */
+const ROCK_ARC_BASE = 0.35;
+const ROCK_ARC_SLOWNESS = 1.6;
+/** Reference speed the arc is scaled against: the fastest throw in the game. */
+const ROCK_REFERENCE_SPEED = 26;
 /** Blade samples held in a ribbon; longer smears the arc, shorter tightens it. */
 const TRAIL_SAMPLES = 7;
 /**
@@ -72,6 +84,19 @@ type Ring = {
   radius: number;
   mesh: THREE.Mesh;
   material: THREE.MeshBasicMaterial;
+};
+
+type Rock = {
+  /** Seconds left in flight; zero when the slot is free. */
+  life: number;
+  flightTime: number;
+  arc: number;
+  /** Trailed only when it is fast enough for the streak to mean something. */
+  trailed: boolean;
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  spin: THREE.Vector3;
+  mesh: THREE.Mesh;
 };
 
 type Trail = {
@@ -166,6 +191,30 @@ function flashTexture(): THREE.Texture {
   return texture;
 }
 
+/**
+ * Where a rock is at a given point in its flight. Straight line from hand to
+ * target, lifted by a parabola that peaks halfway across.
+ *
+ * Split out from the renderer so the flight can be checked without a scene.
+ */
+export function rockFlightPoint(
+  from: THREE.Vector3,
+  to: THREE.Vector3,
+  arc: number,
+  progress: number,
+  out: THREE.Vector3,
+): THREE.Vector3 {
+  const travelled = Math.max(0, Math.min(1, progress));
+  out.copy(from).lerp(to, travelled);
+  out.y += arc * 4 * travelled * (1 - travelled);
+  return out;
+}
+
+/** Arc height for a throw: the slower it flies, the more it loops. */
+export function rockArcHeight(speed: number): number {
+  return ROCK_ARC_BASE + Math.max(0, 1 - speed / ROCK_REFERENCE_SPEED) * ROCK_ARC_SLOWNESS;
+}
+
 export class CombatEffects {
   private readonly sparkGeometry = new THREE.BufferGeometry();
   private readonly sparkPositions = new Float32Array(MAX_SPARKS * 3);
@@ -177,9 +226,13 @@ export class CombatEffects {
   private readonly flashes: Flash[] = [];
   private readonly rings: Ring[] = [];
   private readonly trails: Trail[] = [];
+  private readonly rocks: Rock[] = [];
+  private readonly rockPoint = new THREE.Vector3();
+  private readonly rockTrailTail = new THREE.Vector3();
   private nextSpark = 0;
   private nextFlash = 0;
   private nextRing = 0;
+  private nextRock = 0;
 
   constructor(scene: THREE.Scene) {
     for (let index = 0; index < MAX_SPARKS; index += 1) {
@@ -266,6 +319,51 @@ export class CombatEffects {
         owner: null, idle: 0, samples: 0, positions, colors, geometry, material, mesh,
       });
     }
+
+    // Bigger in the air than in the hand, so it stays legible in flight.
+    const rockGeometry = createRockGeometry(0.34, 7);
+    for (let index = 0; index < MAX_ROCKS; index += 1) {
+      const mesh = new THREE.Mesh(rockGeometry, ROCK_MATERIAL);
+      mesh.castShadow = true;
+      mesh.visible = false;
+      scene.add(mesh);
+      this.rocks.push({
+        life: 0, flightTime: 1, arc: 0, trailed: false,
+        from: new THREE.Vector3(), to: new THREE.Vector3(),
+        spin: new THREE.Vector3(), mesh,
+      });
+    }
+  }
+
+  /**
+   * Launches a thrown rock. The flight time comes from the director, so the
+   * rock arrives on the same frame the strike resolves rather than being timed
+   * separately and drifting out of step with its own impact.
+   */
+  rock(
+    from: THREE.Vector3,
+    to: THREE.Vector3,
+    flightTime: number,
+    speed: number,
+    trailed: boolean,
+  ): void {
+    const slot = this.nextRock;
+    this.nextRock = (this.nextRock + 1) % MAX_ROCKS;
+    const rock = this.rocks[slot];
+    rock.flightTime = Math.max(0.05, flightTime);
+    rock.life = rock.flightTime;
+    rock.arc = rockArcHeight(speed);
+    rock.trailed = trailed;
+    rock.from.copy(from);
+    rock.to.copy(to);
+    // Tumble rate scales with the throw: a hurl spins visibly faster than a lob.
+    const rate = speed * 0.42;
+    rock.spin.set(
+      (Math.random() - 0.5) * rate, (Math.random() - 0.5) * rate, (Math.random() - 0.5) * rate,
+    );
+    rock.mesh.position.copy(from);
+    rock.mesh.rotation.set(Math.random() * 6.28, Math.random() * 6.28, Math.random() * 6.28);
+    rock.mesh.visible = true;
   }
 
   /**
@@ -397,6 +495,10 @@ export class CombatEffects {
       trail.mesh.visible = false;
       trail.material.opacity = 0;
     }
+    for (const rock of this.rocks) {
+      rock.life = 0;
+      rock.mesh.visible = false;
+    }
   }
 
   /**
@@ -446,6 +548,32 @@ export class CombatEffects {
       const remaining = flash.life / flash.maxLife;
       flash.material.opacity = remaining;
       flash.sprite.scale.setScalar(flash.scale * (1.35 - remaining * 0.5));
+    }
+
+    // Before the trails, so a rock still in the air feeds its streak this frame
+    // and one that has landed lets the ribbon start fading immediately.
+    for (let slot = 0; slot < this.rocks.length; slot += 1) {
+      const rock = this.rocks[slot];
+      if (rock.life <= 0) continue;
+      rock.life -= delta;
+      if (rock.life <= 0) {
+        rock.mesh.visible = false;
+        continue;
+      }
+      const progress = 1 - rock.life / rock.flightTime;
+      rockFlightPoint(rock.from, rock.to, rock.arc, progress, this.rockPoint);
+      rock.mesh.position.copy(this.rockPoint);
+      rock.mesh.rotation.x += rock.spin.x * delta;
+      rock.mesh.rotation.y += rock.spin.y * delta;
+      rock.mesh.rotation.z += rock.spin.z * delta;
+      if (rock.trailed) {
+        // Owner ids are negative so they can never collide with a unit's.
+        rockFlightPoint(
+          rock.from, rock.to, rock.arc,
+          Math.max(0, progress - 0.06), this.rockTrailTail,
+        );
+        this.trail(-1 - slot, this.rockTrailTail, this.rockPoint, 0xffb083);
+      }
     }
 
     for (const trail of this.trails) {

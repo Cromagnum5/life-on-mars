@@ -1,0 +1,379 @@
+"""Validate and render the Rigwalker Hurler's three throws.
+
+Poses come from the same numbers `applyThrowPose` in `src/rigwalker.ts` uses,
+applied to the real imported GLB skeleton, so this checks the shipping motion
+rather than a stand-in. It measures first and renders second: a throw whose
+rock never gets in front of the body is broken however good the picture looks.
+
+Run from the repository root:
+    blender --background --python tools/render_rigwalker_throw.py
+"""
+
+import bpy, math
+from pathlib import Path
+from mathutils import Vector, Euler
+
+ROOT = Path(__file__).resolve().parents[1]
+GLB = str(ROOT / 'public' / 'models' / 'rigwalker.glb')
+OUTPUT = Path('/tmp/life-on-mars-throw-review')
+OUTPUT.mkdir(parents=True, exist_ok=True)
+
+# Measured off the rig, not assumed: the model faces -Y and stands up +Z.
+FORWARD = Vector((0, -1, 0))
+UP = Vector((0, 0, 1))
+# Where the held rock sits in the wrist bone's own space, matching the runtime.
+ROCK_IN_HAND = Vector((0, 0.2, 0))
+
+# Mirrors THROW_BEATS in src/rigwalker.ts.
+BEATS = {
+    'hurl': {
+        'draw': (0, .30, .34, .50),
+        'stride': (.30, .46, .52, .64),
+        'whip': (.46, .60, .80, .94),
+        'follow': (.66, .80, .90, 1),
+    },
+    'pitch': {
+        'draw': (0, .24, .26, .40),
+        'stride': (.18, .30, .34, .46),
+        'whip': (.30, .44, .52, .70),
+        'follow': (.44, .58, .80, 1),
+    },
+    'toss': {
+        'draw': (0, .18, .20, .34),
+        'stride': (.10, .20, .24, .36),
+        'whip': (.20, .32, .40, .58),
+        'follow': (.32, .44, .62, .95),
+    },
+}
+# Mirrors THROW_PROFILES in src/combat.ts.
+RELEASE = {'hurl': .58, 'pitch': .44, 'toss': .32}
+
+
+def smoothstep(value, start, end):
+    if end <= start:
+        return 1.0 if value >= end else 0.0
+    t = max(0.0, min(1.0, (value - start) / (end - start)))
+    return t * t * (3 - 2 * t)
+
+
+def beat(phase, window):
+    if phase < 0:
+        return 0.0
+    a, b, c, d = window
+    return smoothstep(phase, a, b) * (1 - smoothstep(phase, c, d))
+
+
+def drive(throw, phase):
+    windows = BEATS[throw]
+    return {name: beat(phase, windows[name]) for name in windows}
+
+
+bpy.ops.wm.read_factory_settings(use_empty=True)
+RESTS = {}
+
+
+def import_hurler(label, at_x):
+    """One more copy of the unit, posed independently, for the contact sheet."""
+    before = set(bpy.data.objects)
+    bpy.ops.import_scene.gltf(filepath=GLB)
+    objects = list(set(bpy.data.objects) - before)
+    rig = next(o for o in objects if o.type == 'ARMATURE')
+    # The GLB carries Idle, Walk and CombatIdle. Blender re-evaluates whatever
+    # action is assigned every time it renders a frame, which would quietly
+    # throw the pose away: the measurements would be right and the pictures
+    # would show a unit standing still.
+    rig.animation_data_clear()
+    for bone in rig.pose.bones:
+        bone.rotation_mode = 'QUATERNION'
+    RESTS[rig] = {b.name: b.rotation_quaternion.copy() for b in rig.pose.bones}
+    root = bpy.data.objects.new(f'{label}_root', None)
+    bpy.context.scene.collection.objects.link(root)
+    for obj in objects:
+        if obj.parent is None:
+            obj.parent = root
+        obj.name = f'{label}_{obj.name}'
+        # A hurler carries no sword.
+        if obj.name.endswith('Broadsword'):
+            obj.hide_viewport = obj.hide_render = True
+    root.location = (at_x, 0, 0)
+    rock = bpy.data.objects.new(f'{label}_Rock', ROCK_MESH)
+    bpy.context.scene.collection.objects.link(rock)
+    return {'rig': rig, 'objects': objects, 'root': root, 'rock': rock}
+
+
+bpy.ops.mesh.primitive_ico_sphere_add(subdivisions=1, radius=.28)
+ROCK_MESH = bpy.context.object.data
+bpy.data.objects.remove(bpy.context.object)
+
+MAIN = None
+
+
+def named(suffix, actor=None):
+    return next(o for o in (actor or MAIN)['objects'] if o.name.endswith(suffix))
+
+
+def offset(rig, name, x, y, z):
+    bone = rig.pose.bones[name]
+    bone.rotation_quaternion = RESTS[rig][name] @ Euler((x, y, z), 'XYZ').to_quaternion()
+
+
+def add_offset(rig, name, x, y, z):
+    bone = rig.pose.bones[name]
+    bone.rotation_quaternion = bone.rotation_quaternion @ Euler((x, y, z), 'XYZ').to_quaternion()
+
+
+def set_legs(rig, upper_l, lower_l, upper_r, lower_r):
+    """Cancels each ankle against the joints above it, so the soles stay flat."""
+    offset(rig, 'upper_leg.L', upper_l, 0, .11)
+    offset(rig, 'lower_leg.L', lower_l, 0, 0)
+    offset(rig, 'foot.L', -(upper_l + lower_l), 0, -.09)
+    offset(rig, 'upper_leg.R', upper_r, 0, -.11)
+    offset(rig, 'lower_leg.R', lower_r, 0, 0)
+    offset(rig, 'foot.R', -(upper_r + lower_r), 0, .09)
+
+
+def pose_throw(rig, throw, phase, aim_phase=-1):
+    """The port of applyThrowPose. Keep in step with src/rigwalker.ts."""
+    d = drive(throw, phase)
+    draw, stride, whip, follow = d['draw'], d['stride'], d['whip'], d['follow']
+    aim = smoothstep(aim_phase, 0, .45) if aim_phase >= 0 else 0
+    ready = 1 - max(draw, stride, whip, follow)
+
+    if throw == 'hurl':
+        hip = .85 * draw + .15 * stride - .9 * whip - .6 * follow
+        chest = 1 * draw + .9 * stride - 1 * whip - .5 * follow
+        offset(rig, 'root', -.16 * draw + .04 * stride + .1 * whip + .12 * follow, .34 * hip,
+               -.14 * draw - .08 * stride + .08 * whip + .12 * follow)
+        offset(rig, 'spine', .04 + .1 * draw - .22 * follow, .3 * chest, .06 * draw - .05 * follow)
+        offset(rig, 'chest', .03 + .16 * draw - .26 * follow, .44 * chest, .05 * draw - .08 * follow)
+        offset(rig, 'neck', .08 - .06 * follow, -.5 * chest, 0)
+        offset(rig, 'head', -.03 + .08 * aim, -.35 * chest, 0)
+        offset(rig, 'upper_arm.R', -.35 + 1.35 * draw + 1.05 * stride - 1.55 * whip + .85 * follow,
+               .85 * draw + .7 * stride - 1.1 * whip - .5 * follow,
+               -.3 - .55 * draw - .15 * stride - .35 * whip + .95 * follow)
+        offset(rig, 'lower_arm.R', -.45 + 1.5 * draw + 1.35 * stride - .25 * whip + .55 * follow,
+               0, .2 * draw + .45 * follow)
+        offset(rig, 'hand.R', .55 * draw + .4 * stride - .85 * whip - .25 * follow,
+               0, -.2 * draw + .3 * follow)
+        offset(rig, 'upper_arm.L',
+               -.3 - 1.35 * draw - 1.45 * stride + 1.15 * whip + .9 * follow - .35 * aim,
+               0, -.1 - .25 * stride + .2 * follow)
+        offset(rig, 'lower_arm.L',
+               -.35 - .55 * draw - .6 * stride + .9 * whip + 1 * follow - .3 * aim, 0, -.05)
+        offset(rig, 'hand.L', -.06, 0, 0)
+        set_legs(rig, -.06 + .14 * draw - .22 * stride - .22 * whip - .14 * follow,
+                 .24 + .16 * draw + .14 * stride + .08 * whip + .14 * follow,
+                 .06 + .2 * draw + .26 * stride + .16 * whip + .07 * follow,
+                 .24 + .26 * draw + .1 * stride + .1 * whip + .08 * follow)
+    elif throw == 'pitch':
+        coil = .95 * draw + .7 * stride - .95 * whip - .4 * follow
+        offset(rig, 'root', -.1 * draw + .22 * whip + .3 * follow, .16 * coil,
+               -.08 * draw + .1 * follow)
+        offset(rig, 'spine', .04 + .05 * draw - .12 * follow, .17 * coil, 0)
+        offset(rig, 'chest', .03 + .08 * draw - .16 * follow, .24 * coil, 0)
+        offset(rig, 'neck', .08, -.32 * coil, 0)
+        offset(rig, 'head', -.03 + .06 * aim, -.24 * coil, 0)
+        offset(rig, 'upper_arm.R', -.35 + .85 * draw + .62 * stride - 1.05 * whip - .5 * follow,
+               .5 * draw + .4 * stride - .7 * whip - .3 * follow,
+               -.85 - .3 * draw + 1.15 * whip + .7 * follow)
+        offset(rig, 'lower_arm.R', -.45 + 1.1 * draw + .95 * stride - .7 * whip + .4 * follow,
+               0, .15 * draw + .3 * follow)
+        offset(rig, 'hand.R', .4 * draw + .3 * stride - .6 * whip - .15 * follow, 0, .2 * follow)
+        offset(rig, 'upper_arm.L', -.32 - .3 * draw + .45 * whip + .55 * follow, 0, -.08)
+        offset(rig, 'lower_arm.L', -.5 - .2 * draw + .35 * whip + .45 * follow, 0, -.05)
+        offset(rig, 'hand.L', -.06, 0, 0)
+        set_legs(rig, -.02 + .06 * draw - .1 * whip - .08 * follow,
+                 .24 + .08 * draw + .06 * whip + .09 * follow,
+                 .02 + .1 * draw + .08 * whip + .04 * follow,
+                 .24 + .14 * draw + .13 * whip + .17 * follow)
+    else:
+        coil = .5 * draw - .45 * whip - .2 * follow
+        offset(rig, 'root', .06 * draw + .12 * whip + .14 * follow, .1 * coil, 0)
+        offset(rig, 'spine', .04 + .06 * draw, .12 * coil, 0)
+        offset(rig, 'chest', .03 + .05 * draw, .16 * coil, 0)
+        offset(rig, 'neck', .08, -.2 * coil, 0)
+        offset(rig, 'head', -.03, -.16 * coil, 0)
+        offset(rig, 'upper_arm.R', -.05 + .55 * draw + .35 * stride - .8 * whip - .55 * follow,
+               .2 * draw - .3 * whip, -.34 - .14 * draw + .1 * whip + .3 * follow)
+        offset(rig, 'lower_arm.R', -.3 + .5 * draw + .35 * stride - .15 * whip + .25 * follow,
+               0, .08 * draw)
+        offset(rig, 'hand.R', .7 * draw + .5 * stride - 1.05 * whip - .2 * follow, 0, .1 * follow)
+        offset(rig, 'upper_arm.L', -.34 + .14 * whip, 0, -.1)
+        offset(rig, 'lower_arm.L', -.62 + .12 * whip, 0, -.06)
+        offset(rig, 'hand.L', -.06, 0, 0)
+        set_legs(rig, -.02 - .08 * whip, .26 + .14 * draw + .1 * whip,
+                 .02 + .08 * whip, .26 + .18 * draw + .14 * whip)
+
+    if ready > .001:
+        add_offset(rig, 'root', 0, ready * .16, -ready * .05)
+        add_offset(rig, 'chest', 0, ready * .12, 0)
+        add_offset(rig, 'neck', 0, -ready * .16, 0)
+        add_offset(rig, 'upper_arm.L', -ready * (.1 + aim * .5), 0, 0)
+        add_offset(rig, 'lower_arm.L', -ready * (.25 + aim * .35), 0, 0)
+
+
+def rock_world(actor):
+    """Where the held rock is, matching how the runtime parents it to the wrist."""
+    rig = actor['rig']
+    return rig.matrix_world @ (rig.pose.bones['hand.R'].matrix @ ROCK_IN_HAND)
+
+
+def measure(actor, throw, phase, aim_phase=-1):
+    pose_throw(actor['rig'], throw, phase, aim_phase)
+    bpy.context.view_layer.update()
+    rock = rock_world(actor)
+    root = actor['rig'].matrix_world @ actor['rig'].pose.bones['root'].matrix.translation
+    from_body = rock - root
+    return {
+        'reach': from_body.dot(FORWARD),
+        'height': rock.z,
+        'side': from_body.x,
+        'footL': named('Foot.L', actor).matrix_world.translation.z,
+        'footR': named('Foot.R', actor).matrix_world.translation.z,
+        'pose': {b.name: b.rotation_quaternion.copy() for b in actor['rig'].pose.bones},
+    }
+
+
+# ---------------------------------------------------------------- validation
+
+PHASES = [0, .15, .3, .45, .58, .72, .85, 1]
+SPACING = 2.9
+actors = [import_hurler(f'P{index}', (index - (len(PHASES) - 1) / 2) * SPACING)
+          for index in range(len(PHASES))]
+MAIN = actors[0]
+
+failures = []
+print('\n=== throw geometry, in the fighter\'s own frame ===')
+print('reach is toward the target, height is off the ground, side is to its right\n')
+
+ready = measure(MAIN, 'hurl', -1)
+ready_feet = (ready['footL'], ready['footR'])
+ready_pose = ready['pose']
+
+for throw in ('hurl', 'pitch', 'toss'):
+    print(f'--- {throw} (releases at phase {RELEASE[throw]}) ---')
+    samples = {}
+    drift = 0
+    for phase in PHASES:
+        m = measure(MAIN, throw, phase)
+        samples[phase] = m
+        drift = max(drift, abs(m['footL'] - ready_feet[0]), abs(m['footR'] - ready_feet[1]))
+        print(f'  phase {phase:.2f}  reach {m["reach"]:+.2f}  height {m["height"]:.2f}  '
+              f'side {m["side"]:+.2f}  feet {m["footL"]:.2f}/{m["footR"]:.2f}')
+    at_release = measure(MAIN, throw, RELEASE[throw])
+    drawn = min(samples.values(), key=lambda m: m['reach'])
+    travel = at_release['reach'] - drawn['reach']
+    print(f'  release: reach {at_release["reach"]:+.2f}  height {at_release["height"]:.2f}'
+          f'   wind-up travel {travel:+.2f} m   foot drift {drift:.3f} m')
+
+    # The rock has to end up in front of the fighter, or it is being thrown at
+    # nobody and its sparks would come off the wrong unit.
+    if at_release['reach'] <= 0.35:
+        failures.append(f'{throw}: rock is not in front of the body at release '
+                        f'({at_release["reach"]:+.2f} m)')
+    # And the motion has to be a throw rather than a nudge. A hurl swings the
+    # rock much further than a flick from the hip does, so each has its own bar.
+    minimum_travel = {'hurl': 1.5, 'pitch': 0.9, 'toss': 0.5}[throw]
+    if travel < minimum_travel:
+        failures.append(f'{throw}: wind-up travels only {travel:.2f} m, '
+                        f'wanted at least {minimum_travel} m')
+    # A thrower's rear heel does lift, so this is looser than the sword duel's
+    # limit, but the feet still may not leave the ground.
+    if drift > 0.32:
+        failures.append(f'{throw}: foot drift {drift:.3f} m')
+
+    # Consecutive phases have to be tellable apart at RTS viewing scale, up to
+    # the point the motion has settled back to the ready stance.
+    for earlier, later in zip(PHASES, PHASES[1:]):
+        if later > .85:
+            continue
+        moved = abs(samples[later]['reach'] - samples[earlier]['reach']) + \
+            abs(samples[later]['height'] - samples[earlier]['height'])
+        if moved < 0.04:
+            failures.append(f'{throw}: phases {earlier} and {later} are '
+                            f'indistinguishable ({moved:.3f} m apart)')
+
+# Height ordering: the hurl comes over the top, the toss goes up from the hip.
+heights = {throw: measure(MAIN, throw, RELEASE[throw])['height'] for throw in RELEASE}
+print('\nrelease heights: ' +
+      '  '.join(f'{throw} {height:.2f}' for throw, height in heights.items()))
+if not heights['hurl'] > heights['pitch'] > heights['toss']:
+    failures.append(f'release heights are not overhand > three-quarter > underhand: {heights}')
+
+# Back to a clean stance afterwards, or a hurler drifts out of shape over a fight.
+after = measure(MAIN, 'hurl', 1)
+recovery = max(
+    ready_pose[name].rotation_difference(quaternion).angle
+    for name, quaternion in after['pose'].items()
+)
+print(f'recovery error at the end of a hurl: {math.degrees(recovery):.1f} degrees')
+if recovery > 0.7:
+    failures.append(f'hurl does not settle back to the ready stance '
+                    f'({math.degrees(recovery):.1f} degrees out)')
+
+if failures:
+    raise RuntimeError('Throw validation failed:\n  ' + '\n  '.join(failures))
+print('\nThrow geometry validated.\n')
+
+
+# ------------------------------------------------------------------ rendering
+
+scene = bpy.context.scene
+mars = bpy.data.materials.new('Mars')
+mars.diffuse_color = (.22, .045, .025, 1)
+mars.roughness = .9
+rock_material = bpy.data.materials.new('Rock')
+rock_material.diffuse_color = (.16, .09, .06, 1)
+ROCK_MESH.materials.append(rock_material)
+bpy.ops.mesh.primitive_plane_add(size=90, location=(0, 0, -.02))
+bpy.context.object.data.materials.append(mars)
+
+world = bpy.data.worlds.new('World')
+scene.world = world
+world.color = (.025, .012, .008)
+bpy.ops.object.light_add(type='AREA', location=(-6, -14, 16))
+bpy.context.object.data.energy = 9000
+bpy.context.object.data.size = 14
+bpy.ops.object.light_add(type='AREA', location=(10, 6, 12))
+bpy.context.object.data.energy = 5000
+bpy.context.object.data.color = (.35, .55, 1)
+bpy.context.object.data.size = 10
+
+bpy.ops.object.camera_add()
+camera = bpy.context.object
+camera.data.type = 'ORTHO'
+camera.data.ortho_scale = SPACING * len(PHASES) + 1.4
+scene.camera = camera
+scene.render.engine = 'BLENDER_EEVEE'
+scene.render.resolution_x = 2400
+scene.render.resolution_y = 620
+scene.render.image_settings.file_format = 'PNG'
+scene.view_settings.look = 'AgX - Medium High Contrast'
+
+# The gameplay camera angle first, then two more, so a throw that only reads
+# from one side cannot pass. Offsets are directions, scaled out past the line.
+ANGLES = (('game', (8, -10, 7)), ('side', (-11, -5, 5)), ('front', (0, -14, 4)))
+LOOK_AT = Vector((0, 0, 2.0))
+for name, direction in ANGLES:
+    camera.location = LOOK_AT + Vector(direction).normalized() * 40
+    camera.rotation_euler = (LOOK_AT - camera.location).to_track_quat('-Z', 'Y').to_euler()
+    # Lay the row out across the camera rather than along world X, or the line
+    # runs diagonally out of frame at every angle but one.
+    across = (LOOK_AT - camera.location).cross(Vector((0, 0, 1)))
+    across.z = 0
+    across.normalize()
+    for index, actor in enumerate(actors):
+        actor['root'].location = across * ((index - (len(actors) - 1) / 2) * SPACING)
+    for throw in ('hurl', 'pitch', 'toss'):
+        for actor, phase in zip(actors, PHASES):
+            pose_throw(actor['rig'], throw, phase)
+        bpy.context.view_layer.update()
+        for actor, phase in zip(actors, PHASES):
+            actor['rock'].location = rock_world(actor)
+            # Once the rock is gone the hand is empty, which is half the read.
+            actor['rock'].hide_render = phase > RELEASE[throw]
+        scene.render.filepath = str(OUTPUT / f'{throw}_{name}.png')
+        bpy.ops.render.render(write_still=True)
+        print(f'  {throw} {name}: ' + ' '.join(f'{p:.2f}' for p in PHASES))
+
+print(f'\nRendered throw contact sheets to {OUTPUT}')

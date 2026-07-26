@@ -41,21 +41,49 @@ const MAX_ZOOM = 7;
 const CAPTURE_STEP = 1 / 60;
 const LOG_LIMIT = 22;
 const RESTART_DELAY = 2.5;
-/** Cardinal spacing of a team's starting line, and its distance from centre. */
+/** Cardinal spacing of a team's starting line. */
 const LINE_SPACING = 2.7;
-const LINE_STANDOFF = 7.5;
 
 const TEAMS = [
   { corporation: "Helios", accent: 0x32b9ff, tag: "H", side: -1 },
   { corporation: "Vanguard", accent: 0xff4f57, tag: "V", side: 1 },
 ] as const;
 
-const MATCHUPS: Record<string, readonly [number, number]> = {
-  "1v1": [1, 1],
-  "2v2": [2, 2],
-  "3v2": [3, 2],
-  "3v3": [3, 3],
-  "5v5": [5, 5],
+/**
+ * A matchup is per-team counts of swordsmen and hurlers, plus how far apart the
+ * two lines start and how far the camera pulls back. A hurler works from about
+ * sixteen metres, so a fight involving one needs both a longer approach and a
+ * wider view than two swordsmen walking into each other do.
+ */
+type Matchup = {
+  teams: readonly [Roster, Roster];
+  standoff: number;
+  zoom: number;
+};
+type Roster = { melee: number; hurlers: number };
+
+const MATCHUPS: Record<string, Matchup> = {
+  "1v1": { teams: [{ melee: 1, hurlers: 0 }, { melee: 1, hurlers: 0 }], standoff: 7.5, zoom: 3.2 },
+  "2v2": { teams: [{ melee: 2, hurlers: 0 }, { melee: 2, hurlers: 0 }], standoff: 7.5, zoom: 3.2 },
+  "3v2": { teams: [{ melee: 3, hurlers: 0 }, { melee: 2, hurlers: 0 }], standoff: 7.5, zoom: 3.2 },
+  "3v3": { teams: [{ melee: 3, hurlers: 0 }, { melee: 3, hurlers: 0 }], standoff: 7.5, zoom: 3.2 },
+  "5v5": { teams: [{ melee: 5, hurlers: 0 }, { melee: 5, hurlers: 0 }], standoff: 7.5, zoom: 3.2 },
+  // One hurler against one sword: the whole point of the unit in one fight.
+  // It opens at maximum range and is walked down through all three throws.
+  "1h v 1": {
+    teams: [{ melee: 0, hurlers: 1 }, { melee: 1, hurlers: 0 }], standoff: 9.5, zoom: 1.7,
+  },
+  // Two hurlers trading at standoff: nothing but big wind-ups.
+  "1h v 1h": {
+    teams: [{ melee: 0, hurlers: 1 }, { melee: 0, hurlers: 1 }], standoff: 9, zoom: 1.7,
+  },
+  // Screened: the swords hold the line while the rocks come over the top.
+  "2h+2 v 4": {
+    teams: [{ melee: 2, hurlers: 2 }, { melee: 4, hurlers: 0 }], standoff: 10, zoom: 1.6,
+  },
+  "2h v 3": {
+    teams: [{ melee: 0, hurlers: 2 }, { melee: 3, hurlers: 0 }], standoff: 10, zoom: 1.6,
+  },
 };
 
 type LogEntry = { time: number; kind: string; text: string };
@@ -132,7 +160,7 @@ let verdictTime = 0;
 const labels = new Map<number, string>();
 const log: LogEntry[] = [];
 const tally = {
-  swing: 0, block: 0, glance: 0, hit: 0, whiff: 0, riposte: 0, plan: 0, damage: 0,
+  swing: 0, throw: 0, block: 0, glance: 0, hit: 0, whiff: 0, riposte: 0, plan: 0, damage: 0,
 };
 let cues = new Map<number, CombatCue>();
 
@@ -162,20 +190,29 @@ function startMatch(): void {
   // A separate stream for temperaments keeps a fighter's personality stable
   // when only the director's rolls change.
   const spawnRandom = createSeededRandom(seed * 2654435761 + 17);
-  const counts = MATCHUPS[matchup];
+  const setup = MATCHUPS[matchup];
+  camera.zoom = Number(params.get("zoom") ?? setup.zoom);
+  camera.updateProjectionMatrix();
 
   TEAMS.forEach((team, teamIndex) => {
-    const count = counts[teamIndex];
+    const roster = setup.teams[teamIndex];
+    const count = roster.melee + roster.hurlers;
     for (let index = 0; index < count; index += 1) {
-      const unit = createRigwalker(rigwalkerAsset, team.accent, team.corporation, spawnRandom);
+      // Hurlers take the back of the line, so a mixed team reads as a screen
+      // with the throwers behind it rather than an even mix walking forward.
+      const hurler = index >= roster.melee;
+      const unit = createRigwalker(
+        rigwalkerAsset, team.accent, team.corporation, spawnRandom,
+        { role: hurler ? "hurler" : "melee" },
+      );
       const lateral = (index - (count - 1) / 2) * LINE_SPACING;
-      const x = team.side * LINE_STANDOFF;
+      const x = team.side * (setup.standoff + (hurler ? 3.5 : 0));
       unit.group.position.set(x, terrainHeightAt(x, lateral) + 0.2, lateral);
       // Walk in rather than starting inside awareness range, so the approach
       // and the first sizing-up read as part of the fight.
       unit.moveTo(new THREE.Vector3(team.side * 1.6, 0, lateral * 0.35));
       battle.spawn(unit);
-      labels.set(unit.combatId, `${team.tag}${index + 1}`);
+      labels.set(unit.combatId, `${team.tag}${hurler ? "R" : ""}${index + 1}`);
     }
   });
 
@@ -212,6 +249,9 @@ function advance(delta: number): void {
       event.type,
       event.type === "swing"
         ? `${attacker} → ${defender} · ${event.line} · ${event.strategy}`
+        : event.type === "throw"
+          ? `${attacker} lets go a ${event.strategy} at ${defender} · ` +
+            `${event.projectile?.speed} m/s · ${event.projectile?.flightTime.toFixed(2)} s`
         : event.type === "plan"
           ? `${attacker} commits to ${event.strategy}`
         : event.type === "riposte"
@@ -302,7 +342,7 @@ function renderReadout(): void {
       `#${(accentByCorporation.get(unit.corporation) ?? 0xffb35d).toString(16).padStart(6, "0")}`,
     );
     card.innerHTML =
-      `<span class="name">${labelOf(unit)}</span>` +
+      `<span class="name">${labelOf(unit)}${unit.role === "hurler" ? " ⟡" : ""}</span>` +
       `<span class="hp"><span style="width:${(unit.health / unit.maxHealth) * 100}%"></span></span>` +
       `<span class="line"><b>${Math.ceil(unit.health)} HP</b> · ${unit.combatProfile.temperament}` +
       `${target ? ` · vs ${labelOf(target)} @ ${unit.group.position.distanceTo(target.group.position).toFixed(2)} m` : ""}</span>` +
@@ -391,8 +431,8 @@ window.addEventListener("keydown", (event) => {
     stepRequested = true;
   } else if (event.code === "KeyR") {
     startMatch();
-  } else if (/^Digit[1-5]$/.test(event.code)) {
-    matchup = Object.keys(MATCHUPS)[Number(event.code.slice(5)) - 1];
+  } else if (/^Digit[1-9]$/.test(event.code)) {
+    matchup = Object.keys(MATCHUPS)[Number(event.code.slice(5)) - 1] ?? matchup;
     syncMatchupButtons();
     startMatch();
   } else if (/^Key[WASD]$/.test(event.code)) {

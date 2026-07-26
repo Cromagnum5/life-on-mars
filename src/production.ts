@@ -3,6 +3,11 @@ import { createRigwalker, type Rigwalker } from "./rigwalker";
 import type { RigwalkerAsset } from "./rigwalker-assets";
 
 const PRODUCTION_SECONDS = 20;
+/**
+ * Every third Rigwalker off the line is a hurler. A mixed field is the point:
+ * the swords walk in while the rocks come from behind them.
+ */
+const HURLER_EVERY = 3;
 const DOOR_SPEED = 1.4;
 const DOOR_HEIGHT = 2.9;
 const OPEN_DOOR_SCALE = 0.12;
@@ -28,6 +33,7 @@ export class AssemblyBayProduction {
   private readonly rallyPoint: THREE.Vector3;
   private readonly accent: number;
   private readonly corporation: string;
+  private produced = 0;
   private phase: ProductionPhase = "producing";
   private productionElapsed = 0;
   private phaseElapsed = 0;
@@ -124,7 +130,11 @@ export class AssemblyBayProduction {
   }
 
   private spawnRigwalker(): void {
-    const rigwalker = createRigwalker(this.rigwalkerAsset, this.accent, this.corporation);
+    this.produced += 1;
+    const rigwalker = createRigwalker(
+      this.rigwalkerAsset, this.accent, this.corporation, Math.random,
+      { role: this.produced % HURLER_EVERY === 0 ? "hurler" : "melee" },
+    );
     rigwalker.group.position.set(
       this.spawnPosition.x,
       this.terrainHeightAt(this.spawnPosition.x, this.spawnPosition.y) + 0.2,

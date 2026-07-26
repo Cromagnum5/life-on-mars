@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { TRAIL_BRIGHTNESS, writeTrailColors, writeTrailSample } from "./effects";
+import {
+  TRAIL_BRIGHTNESS,
+  rockArcHeight,
+  rockFlightPoint,
+  writeTrailColors,
+  writeTrailSample,
+} from "./effects";
+import { THROW_PROFILES } from "./combat";
 
 const MAX = 4;
 
@@ -73,5 +80,46 @@ describe("writeTrailColors", () => {
     writeTrailColors(colors, new THREE.Color(1, 1, 1), MAX);
     const newest = (MAX - 1) * 6;
     expect(colors[newest]).toBeLessThan(colors[newest + 3]);
+  });
+});
+
+describe("a thrown rock's flight", () => {
+  const from = new THREE.Vector3(0, 2.6, 0);
+  const to = new THREE.Vector3(0, 2.4, 14);
+  const out = new THREE.Vector3();
+
+  it("leaves the hand and arrives at the target", () => {
+    expect(rockFlightPoint(from, to, 1, 0, out).toArray()).toEqual(from.toArray());
+    expect(rockFlightPoint(from, to, 1, 1, out).toArray()).toEqual(to.toArray());
+  });
+
+  it("clamps rather than sailing past the target if it is fed a late frame", () => {
+    expect(rockFlightPoint(from, to, 1, 1.4, out).toArray()).toEqual(to.toArray());
+    expect(rockFlightPoint(from, to, 1, -0.2, out).toArray()).toEqual(from.toArray());
+  });
+
+  it("rides highest halfway across, by the arc it was given", () => {
+    const straightAt = (progress: number) =>
+      from.y + (to.y - from.y) * progress;
+    expect(rockFlightPoint(from, to, 1.2, 0.5, out).y)
+      .toBeCloseTo(straightAt(0.5) + 1.2, 5);
+    // Symmetric, and lower at the ends than in the middle.
+    const quarter = rockFlightPoint(from, to, 1.2, 0.25, out).y - straightAt(0.25);
+    const threeQuarters = rockFlightPoint(from, to, 1.2, 0.75, out).y - straightAt(0.75);
+    expect(quarter).toBeCloseTo(threeQuarters, 5);
+    expect(quarter).toBeGreaterThan(0);
+    expect(quarter).toBeLessThan(1.2);
+  });
+
+  it("loops a slow toss and flattens a fast hurl", () => {
+    const hurl = rockArcHeight(THROW_PROFILES.hurl.speed);
+    const pitch = rockArcHeight(THROW_PROFILES.pitch.speed);
+    const toss = rockArcHeight(THROW_PROFILES.toss.speed);
+    // Every one of these is thrown far harder than the distance needs, so real
+    // ballistics would draw three flat lines. The arc is drawn from how slow the
+    // throw is instead, which is what makes the speed difference visible.
+    expect(hurl).toBeLessThan(pitch);
+    expect(pitch).toBeLessThan(toss);
+    expect(hurl).toBeGreaterThan(0);
   });
 });

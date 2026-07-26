@@ -1,5 +1,11 @@
 export type CombatTemperament = "bold" | "reactive" | "patient" | "adaptive";
 
+/** What a fighter does for a living. Melee cuts; a hurler throws rocks. */
+export type CombatRole = "melee" | "hurler";
+
+/** The three throws, longest first. A hurler picks one from the current gap. */
+export type ThrowType = "hurl" | "pitch" | "toss";
+
 export type CombatStrategy =
   | "rush"
   | "react"
@@ -7,11 +13,15 @@ export type CombatStrategy =
   | "feint"
   | "distance-trap"
   | "beat"
-  | "riposte";
+  | "riposte"
+  | ThrowType;
 
 export type AttackLine = "overhead" | "forehand" | "backhand" | "flank" | "rising";
 export type CombatAction = "idle" | "size-up" | "attack" | "block" | "hit" | "recover" | "defeated";
-export type CombatMovement = "hold" | "close" | "retreat" | "angle-left" | "angle-right";
+export type CombatMovement =
+  | "hold" | "close" | "retreat" | "angle-left" | "angle-right"
+  /** Planted: a throw in flight cannot also be a shuffle. */
+  | "plant";
 export type CombatOutcome = "pending" | "blocked" | "glancing" | "hit" | "whiff";
 
 export type CombatProfile = {
@@ -49,6 +59,8 @@ export type CombatantSnapshot = {
   x: number;
   z: number;
   profile: CombatProfile;
+  /** Absent means melee, so existing callers need no change. */
+  role?: CombatRole;
 };
 
 /**
@@ -57,7 +69,22 @@ export type CombatantSnapshot = {
  * one frame still produces exactly one spark and one sound.
  */
 export type CombatEventType =
-  | "swing" | "block" | "glance" | "hit" | "whiff" | "riposte" | "plan";
+  | "swing" | "block" | "glance" | "hit" | "whiff" | "riposte" | "plan" | "throw";
+
+/**
+ * A rock leaving a hurler's hand. It carries its own flight so presentation can
+ * launch a rock that lands on the exact frame the director resolves the strike:
+ * the outcome is already rolled at release, and the impact event replays it.
+ */
+export type ProjectileRelease = {
+  throwType: ThrowType;
+  /** Metres per second. */
+  speed: number;
+  /** Seconds between release and impact. */
+  flightTime: number;
+  /** What the rock will do when it arrives. */
+  outcome: Exclude<CombatOutcome, "pending">;
+};
 
 export type CombatEvent = {
   type: CombatEventType;
@@ -67,6 +94,8 @@ export type CombatEvent = {
   strategy: CombatStrategy;
   side: -1 | 1;
   intensity: number;
+  /** Only on a `throw`. */
+  projectile?: ProjectileRelease;
 };
 
 export type CombatFrame = {
@@ -105,12 +134,24 @@ type Exchange = {
   swingAnnounced: boolean;
   chainDepth: number;
   preferredDistance: number;
+  /** Null for a cut. Set means the exchange is a thrown rock. */
+  throwType: ThrowType | null;
+  /** Beyond this the attacker has to walk in; a cut and a hurl differ hugely. */
+  attackRange: number;
+  /** Phase of the throwing motion at which the rock leaves the hand. */
+  releasePhase: number;
+  released: boolean;
+  /** Exchange time the rock lands at, or null while it is still in hand. */
+  impactAt: number | null;
+  impactAnnounced: boolean;
 };
 
 type Encounter = {
   a: number;
   b: number;
   support: boolean;
+  /** A hurler shelling `b`. One-sided, never promoted, never riposted. */
+  ranged: boolean;
   exchange: Exchange;
 };
 
@@ -123,7 +164,16 @@ export const STRATEGY_LABELS: Record<CombatStrategy, string> = {
   "distance-trap": "Baiting range",
   beat: "Beating the guard",
   riposte: "Riposting",
+  hurl: "Winding up a hurl",
+  pitch: "Pitching",
+  toss: "Tossing close",
 };
+
+export const THROW_TYPES: readonly ThrowType[] = ["hurl", "pitch", "toss"];
+
+export function isThrow(strategy: CombatStrategy | null): strategy is ThrowType {
+  return strategy === "hurl" || strategy === "pitch" || strategy === "toss";
+}
 
 const AWARENESS_RANGE = 8.5;
 // Kept clear of MAX_FIGHT_DISTANCE so a pair drifting around its preferred
@@ -136,6 +186,85 @@ export const MIN_FIGHT_DISTANCE = 2.6;
 export const MAX_FIGHT_DISTANCE = 3.65;
 /** Spacing a pair settles at when nothing biases the plan toward reach. */
 export const BASE_FIGHT_DISTANCE = 3.05;
+
+/**
+ * Shoulder-to-shoulder span of the Rigwalker skeleton: `create_rigwalker.py`
+ * puts the arm bones at x = ±0.67. Throw ranges are quoted in these, so the
+ * band a hurler works in is stated in the unit the model itself defines.
+ */
+export const SHOULDER_WIDTH = 1.34;
+/** Twelve shoulder widths. The farthest a rock is thrown, and the best place to be. */
+export const LONG_THROW_RANGE = SHOULDER_WIDTH * 12;
+/** Twice a sword Rigwalker's strike distance. */
+export const MEDIUM_THROW_RANGE = ATTACK_RANGE * 2;
+/** Inside a sword's reach: the throw made with somebody already on top of you. */
+export const SHORT_THROW_RANGE = ATTACK_RANGE;
+/**
+ * Where a hurler tries to stand. Held short of the maximum so a target drifting
+ * a metre does not push every plan out of range and rewind the wind-up.
+ */
+export const HURLER_FIGHT_DISTANCE = LONG_THROW_RANGE - 1.5;
+
+export type ThrowProfile = {
+  /** Longest gap this throw is chosen at. */
+  range: number;
+  /** Seconds spent judging the throw, as a base plus a random span. */
+  measure: readonly [number, number];
+  /** Seconds the throwing motion itself runs. */
+  motion: number;
+  /** Phase of that motion at which the rock leaves the hand. */
+  release: number;
+  /** Seconds of recovery afterwards, extended if the rock is still in the air. */
+  recovery: number;
+  /** Metres per second the rock travels. */
+  speed: number;
+  damage: number;
+  /** Chance the rock is swatted aside, and the chance it misses outright. */
+  deflect: number;
+  miss: number;
+  /** How loudly the release and the landing read. */
+  intensity: number;
+};
+
+/**
+ * The three throws. A hurler is deadliest at the top of its range: the hurl is
+ * slow to execute but lands roughly a third more damage per second than the
+ * pitch and twice the toss, and it is the most accurate of the three. Crowd a
+ * hurler and it is reduced to flicking pebbles at a swordsman's chest.
+ */
+export const THROW_PROFILES: Record<ThrowType, ThrowProfile> = {
+  hurl: {
+    range: LONG_THROW_RANGE, measure: [0.45, 0.35], motion: 1.15, release: 0.58,
+    recovery: 0.55, speed: 26, damage: 38, deflect: 0.06, miss: 0.07, intensity: 1,
+  },
+  pitch: {
+    range: MEDIUM_THROW_RANGE, measure: [0.22, 0.22], motion: 0.62, release: 0.44,
+    recovery: 0.35, speed: 17, damage: 19, deflect: 0.13, miss: 0.13, intensity: 0.7,
+  },
+  toss: {
+    range: SHORT_THROW_RANGE, measure: [0.08, 0.12], motion: 0.3, release: 0.32,
+    recovery: 0.22, speed: 11, damage: 8, deflect: 0.22, miss: 0.2, intensity: 0.45,
+  },
+};
+
+/** Which throw the current gap calls for; null when the target is out of range. */
+export function throwTypeForDistance(distance: number): ThrowType | null {
+  if (distance <= SHORT_THROW_RANGE) return "toss";
+  if (distance <= MEDIUM_THROW_RANGE) return "pitch";
+  if (distance <= LONG_THROW_RANGE) return "hurl";
+  return null;
+}
+
+/** How a rock's arrival reads on the body it lands against. */
+const THROW_LINES: Record<ThrowType, AttackLine> = {
+  hurl: "overhead", pitch: "forehand", toss: "flank",
+};
+
+/**
+ * Slack on the acquire range so a hurler walks the last stretch into throwing
+ * distance rather than standing still just outside it.
+ */
+const ACQUIRE_SLACK = 1.35;
 const MAX_SUPPORTERS_PER_TARGET = 2;
 const LINES: readonly AttackLine[] = ["overhead", "forehand", "backhand", "flank", "rising"];
 const EMPTY_CUE: CombatCue = {
@@ -155,6 +284,23 @@ const EMPTY_CUE: CombatCue = {
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+/**
+ * Being hit outranks whatever the fighter was planning. Several encounters can
+ * write a cue for the same fighter in one frame — a hurler shelling a target
+ * that a teammate is also cutting at — and without this the winner is whichever
+ * encounter happens to be iterated last, so a landed blow can vanish.
+ */
+function writeCue(cues: Map<number, CombatCue>, id: number, cue: CombatCue): void {
+  if (cues.get(id)?.action === "hit" && cue.action !== "hit") return;
+  cues.set(id, cue);
+}
+
+function outcomeEvent(outcome: CombatOutcome): CombatEventType {
+  return outcome === "blocked" ? "block" :
+    outcome === "glancing" ? "glance" :
+    outcome === "whiff" ? "whiff" : "hit";
 }
 
 function weightedChoice<T>(items: readonly T[], weights: readonly number[], random: () => number): T {
@@ -225,7 +371,8 @@ export class CombatDirector {
     for (const [key, encounter] of this.encounters) {
       const a = byId.get(encounter.a);
       const b = byId.get(encounter.b);
-      if (!a || !b || a.corporation === b.corporation || this.distance(a, b) > AWARENESS_RANGE * 1.35) {
+      if (!a || !b || a.corporation === b.corporation ||
+          this.distance(a, b) > this.awareness(a, b) * 1.35) {
         this.encounters.delete(key);
       }
     }
@@ -239,7 +386,14 @@ export class CombatDirector {
     }
     const promotedTargets = new Set<number>();
     for (const encounter of this.encounters.values()) {
-      if (!encounter.support || primaryParticipants.has(encounter.b) || promotedTargets.has(encounter.b)) {
+      // A ranged encounter is never promoted: a hurler and its target are not
+      // trading, and making the pair mutual would hand the target's cue to a
+      // fighter standing twelve metres away. Nor is a swordsman's encounter
+      // *on* a hurler, which would hand the hurler a sword and a riposte —
+      // crowded, a hurler keeps throwing, and the throws get worse.
+      if (!encounter.support || encounter.ranged ||
+          byId.get(encounter.b)?.role === "hurler" ||
+          primaryParticipants.has(encounter.b) || promotedTargets.has(encounter.b)) {
         continue;
       }
       encounter.support = false;
@@ -252,10 +406,12 @@ export class CombatDirector {
     const supportCounts = new Map<number, number>();
     for (const encounter of this.encounters.values()) {
       reserved.add(encounter.a);
-      if (encounter.support) {
-        supportCounts.set(encounter.b, (supportCounts.get(encounter.b) ?? 0) + 1);
-      } else {
+      if (!encounter.support) {
         reserved.add(encounter.b);
+      } else if (!encounter.ranged) {
+        // Rocks arriving from range do not crowd a target the way bodies do, so
+        // a hurler does not spend one of its team's melee support slots.
+        supportCounts.set(encounter.b, (supportCounts.get(encounter.b) ?? 0) + 1);
       }
     }
 
@@ -265,6 +421,9 @@ export class CombatDirector {
         const a = living[aIndex];
         const b = living[bIndex];
         if (a.corporation === b.corporation || reserved.has(a.id) || reserved.has(b.id)) continue;
+        // Hurlers never enter a mutual duel; they take a one-sided encounter of
+        // their own below and are charged rather than traded with.
+        if (a.role === "hurler" || b.role === "hurler") continue;
         const distance = this.distance(a, b);
         if (distance <= AWARENESS_RANGE) candidates.push({ a, b, distance });
       }
@@ -279,27 +438,57 @@ export class CombatDirector {
       reserved.add(candidate.b.id);
     }
 
-    const primaryThreats: Array<{ ally: CombatantSnapshot; target: CombatantSnapshot }> = [];
+    for (const hurler of living) {
+      if (hurler.role !== "hurler" || reserved.has(hurler.id)) continue;
+      const target = living
+        .filter((other) => other.corporation !== hurler.corporation &&
+          this.distance(hurler, other) <= LONG_THROW_RANGE * ACQUIRE_SLACK)
+        // Nearest first, but finish what is already hurt.
+        .sort((left, right) =>
+          this.distance(hurler, left) + (left.health / left.maxHealth) * 2.5 -
+          this.distance(hurler, right) - (right.health / right.maxHealth) * 2.5)[0];
+      if (!target) continue;
+      const encounter = this.createRangedEncounter(hurler, target);
+      this.announcePlan(encounter.exchange, events);
+      this.encounters.set("ranged:" + hurler.id, encounter);
+      reserved.add(hurler.id);
+    }
+
+    const primaryThreats: Array<{
+      ally: CombatantSnapshot; target: CombatantSnapshot; ranged: boolean;
+    }> = [];
     for (const encounter of this.encounters.values()) {
-      if (encounter.support) continue;
       const a = byId.get(encounter.a);
       const b = byId.get(encounter.b);
       if (!a || !b) continue;
-      primaryThreats.push({ ally: a, target: b }, { ally: b, target: a });
+      if (encounter.ranged) {
+        // The fighter being shelled is the ally worth helping, and the hurler is
+        // the thing to walk at.
+        primaryThreats.push({ ally: b, target: a, ranged: true });
+      } else if (!encounter.support) {
+        primaryThreats.push(
+          { ally: a, target: b, ranged: false }, { ally: b, target: a, ranged: false },
+        );
+      }
     }
     for (const helper of living) {
       if (reserved.has(helper.id)) continue;
       const choices = primaryThreats
-        .filter(({ ally, target }) =>
-          ally.corporation === helper.corporation && ally.id !== helper.id &&
+        .filter(({ ally, target, ranged }) =>
+          ally.corporation === helper.corporation &&
+          // A fighter cannot help itself against a swordsman it is already
+          // paired with, but it certainly may charge the hurler shelling it.
+          (ranged || ally.id !== helper.id) &&
           target.corporation !== helper.corporation &&
-          this.distance(helper, target) <= AWARENESS_RANGE * 1.15 &&
+          this.distance(helper, target) <= this.awareness(helper, target) * 1.15 &&
           (supportCounts.get(target.id) ?? 0) < MAX_SUPPORTERS_PER_TARGET)
-        .map(({ ally, target }) => ({
+        .map(({ ally, target, ranged }) => ({
           ally, target,
           score: this.distance(helper, target) +
             (ally.health / ally.maxHealth) * 2 +
-            (target.health / target.maxHealth) * 0.35,
+            (target.health / target.maxHealth) * 0.35 -
+            // Silencing a hurler is worth crossing ground for.
+            (ranged ? 6 : 0),
         }))
         .sort((left, right) => left.score - right.score);
       const choice = choices[0];
@@ -315,10 +504,22 @@ export class CombatDirector {
       const a = byId.get(encounter.a);
       const b = byId.get(encounter.b);
       if (!a || !b) continue;
-      this.advanceEncounter(encounter, a, b, delta, cues, damage, events);
+      if (encounter.ranged) this.advanceThrow(encounter, a, b, delta, cues, damage, events);
+      else this.advanceEncounter(encounter, a, b, delta, cues, damage, events);
     }
 
     return { cues, damage, events };
+  }
+
+  /**
+   * How far apart two fighters can notice each other. A hurler works from the
+   * top of its throwing range, so a pair including one has to stay engaged from
+   * far outside the distance two swordsmen would.
+   */
+  private awareness(a: CombatantSnapshot, b: CombatantSnapshot): number {
+    return a.role === "hurler" || b.role === "hurler"
+      ? Math.max(AWARENESS_RANGE, LONG_THROW_RANGE)
+      : AWARENESS_RANGE;
   }
 
   /**
@@ -337,15 +538,75 @@ export class CombatDirector {
     const initiativeB = b.profile.initiative + b.profile.aggression * 0.45 + this.random() * 0.35;
     const attacker = initiativeA >= initiativeB ? a : b;
     const defender = attacker === a ? b : a;
-    return { a: a.id, b: b.id, support: false, exchange: this.planExchange(attacker, defender, 0) };
+    return {
+      a: a.id, b: b.id, support: false, ranged: false,
+      exchange: this.planExchange(attacker, defender, 0),
+    };
   }
 
   private createSupportEncounter(helper: CombatantSnapshot, target: CombatantSnapshot): Encounter {
     this.ensureFighter(helper.id);
     this.ensureFighter(target.id);
     return {
-      a: helper.id, b: target.id, support: true,
+      a: helper.id, b: target.id, support: true, ranged: false,
       exchange: this.planExchange(helper, target, 0, undefined, true),
+    };
+  }
+
+  private createRangedEncounter(hurler: CombatantSnapshot, target: CombatantSnapshot): Encounter {
+    this.ensureFighter(hurler.id);
+    this.ensureFighter(target.id);
+    return {
+      a: hurler.id, b: target.id, support: true, ranged: true,
+      exchange: this.planThrow(hurler, target),
+    };
+  }
+
+  /**
+   * Picks the throw the current gap calls for and lays out its beats. Out past
+   * the maximum a hurler still commits to a hurl and walks until the target is
+   * inside it, which is what keeps it advancing rather than idling.
+   */
+  private planThrow(attacker: CombatantSnapshot, defender: CombatantSnapshot): Exchange {
+    const state = this.ensureFighter(attacker.id);
+    state.plans += 1;
+    const distance = this.distance(attacker, defender);
+    const throwType = throwTypeForDistance(distance) ?? "hurl";
+    const profile = THROW_PROFILES[throwType];
+    const line = THROW_LINES[throwType];
+    state.recentStrategies.push(throwType);
+    if (state.recentStrategies.length > 2) state.recentStrategies.shift();
+    return {
+      plannerId: attacker.id,
+      attackerId: attacker.id,
+      defenderId: defender.id,
+      strategy: throwType,
+      line,
+      feintLine: null,
+      side: 1,
+      measureDuration: profile.measure[0] + this.random() * profile.measure[1],
+      attackDuration: profile.motion,
+      recoveryDuration: profile.recovery,
+      elapsed: 0,
+      outcome: "pending",
+      damageApplied: false,
+      swingAnnounced: false,
+      chainDepth: 0,
+      // Standing off is the whole job, so a hurler holds its ground near the
+      // top of its range whichever throw it happens to be loading.
+      preferredDistance: Math.max(
+        MEDIUM_THROW_RANGE + 1,
+        Math.min(
+          LONG_THROW_RANGE - 0.6,
+          HURLER_FIGHT_DISTANCE + (this.random() - 0.5) * 1.2,
+        ),
+      ),
+      throwType,
+      attackRange: profile.range,
+      releasePhase: profile.release,
+      released: false,
+      impactAt: null,
+      impactAnnounced: false,
     };
   }
 
@@ -437,7 +698,163 @@ export class CombatDirector {
       swingAnnounced: false,
       chainDepth,
       preferredDistance,
+      throwType: null,
+      attackRange: ATTACK_RANGE,
+      releasePhase: 0,
+      released: false,
+      impactAt: null,
+      impactAnnounced: false,
     };
+  }
+
+  /**
+   * One frame of a hurler's exchange: judge the gap, load the throw, release,
+   * and let the rock fly. Unlike a cut, the strike is resolved when the rock
+   * leaves the hand and only *lands* a flight later, so the impact is checked
+   * before anything else — a rock in the air arrives however the two have moved
+   * since, and even if the target has walked out of throwing range.
+   */
+  private advanceThrow(
+    encounter: Encounter,
+    a: CombatantSnapshot,
+    b: CombatantSnapshot,
+    delta: number,
+    cues: Map<number, CombatCue>,
+    damage: CombatFrame["damage"],
+    events: CombatEvent[],
+  ): void {
+    const exchange = encounter.exchange;
+    const attacker = exchange.attackerId === a.id ? a : b;
+    const defender = exchange.defenderId === a.id ? a : b;
+    const profile = THROW_PROFILES[exchange.throwType!];
+    exchange.elapsed += delta;
+    const distance = this.distance(attacker, defender);
+
+    if (exchange.impactAt !== null && !exchange.impactAnnounced &&
+        exchange.elapsed >= exchange.impactAt) {
+      exchange.impactAnnounced = true;
+      events.push(this.event(exchange, outcomeEvent(exchange.outcome)));
+      if (exchange.outcome === "hit" || exchange.outcome === "glancing") {
+        damage.push({
+          targetId: defender.id,
+          amount: exchange.outcome === "glancing"
+            ? Math.round(profile.damage * 0.35)
+            : profile.damage,
+          outcome: exchange.outcome,
+          side: exchange.side,
+        });
+      }
+      // A rock landing is worth a stagger even while the hurler reloads.
+      if (exchange.outcome !== "whiff") {
+        writeCue(cues, defender.id, this.cue(
+          exchange, attacker.id,
+          exchange.outcome === "blocked" ? "block" : "hit", "hold", 0.5,
+        ));
+      }
+    }
+
+    if (!exchange.released) {
+      const band = throwTypeForDistance(distance);
+      if (band === null) {
+        // Out of range entirely: hold the wind-up and walk the gap down.
+        exchange.elapsed = Math.min(exchange.elapsed, exchange.measureDuration);
+        writeCue(cues, attacker.id, this.cue(exchange, defender.id, "size-up", "close", 0));
+        return;
+      }
+      // While still judging, a changed gap changes the throw. Once the motion
+      // has started the hurler is committed, the way a real thrower is.
+      if (band !== exchange.throwType && exchange.elapsed < exchange.measureDuration) {
+        encounter.exchange = this.planThrow(attacker, defender);
+        this.announcePlan(encounter.exchange, events);
+        writeCue(cues, attacker.id, this.cue(
+          encounter.exchange, defender.id, "size-up", "hold", 0,
+        ));
+        return;
+      }
+    }
+
+    if (exchange.elapsed < exchange.measureDuration) {
+      // Free to shuffle toward the range it wants to work from.
+      writeCue(cues, attacker.id, this.cue(
+        exchange, defender.id, "size-up", "hold",
+        exchange.elapsed / exchange.measureDuration,
+      ));
+      return;
+    }
+
+    const motionElapsed = exchange.elapsed - exchange.measureDuration;
+    if (motionElapsed <= exchange.attackDuration) {
+      const phase = clamp01(motionElapsed / exchange.attackDuration);
+      if (!exchange.released && phase >= exchange.releasePhase) {
+        this.release(exchange, defender, profile, distance, events);
+      }
+      writeCue(cues, attacker.id, this.cue(
+        exchange, defender.id, "attack",
+        // Planted through the throw itself; the feet are doing the work.
+        phase > 0.15 && phase < 0.85 ? "plant" : "hold",
+        phase,
+      ));
+      return;
+    }
+
+    const recoveryPhase = clamp01(
+      (motionElapsed - exchange.attackDuration) / exchange.recoveryDuration,
+    );
+    writeCue(cues, attacker.id, this.cue(exchange, defender.id, "recover", "hold", recoveryPhase));
+    if (recoveryPhase < 1) return;
+    encounter.exchange = this.planThrow(attacker, defender);
+    this.announcePlan(encounter.exchange, events);
+  }
+
+  /**
+   * The rock leaves the hand. The outcome is rolled here rather than on arrival
+   * so the release event can carry it: presentation launches a rock that is
+   * already going to hit or already going to sail past, and the landing is a
+   * replay rather than a second decision.
+   */
+  private release(
+    exchange: Exchange,
+    defender: CombatantSnapshot,
+    profile: ThrowProfile,
+    distance: number,
+    events: CombatEvent[],
+  ): void {
+    exchange.released = true;
+    exchange.swingAnnounced = true;
+    exchange.outcome = this.resolveThrow(profile, defender);
+    const flightTime = Math.max(0.06, distance / profile.speed);
+    exchange.impactAt = exchange.elapsed + flightTime;
+    // The exchange has to outlast the rock, or it would re-plan out from under
+    // a strike still in the air.
+    const motionRemaining =
+      exchange.measureDuration + exchange.attackDuration - exchange.elapsed;
+    exchange.recoveryDuration = Math.max(
+      exchange.recoveryDuration, flightTime - motionRemaining + 0.15,
+    );
+    events.push({
+      ...this.event(exchange, "throw"),
+      projectile: {
+        throwType: exchange.throwType!,
+        speed: profile.speed,
+        flightTime,
+        outcome: exchange.outcome as Exclude<CombatOutcome, "pending">,
+      },
+    });
+  }
+
+  /**
+   * A rock is either swatted aside, missed with, or worn. There is no riposte
+   * to be had against one, so this is a flatter roll than a cut's: the throw's
+   * own accuracy dominates, and the target's defence only shades it.
+   */
+  private resolveThrow(profile: ThrowProfile, defender: CombatantSnapshot): CombatOutcome {
+    const roll = this.random();
+    const missChance = profile.miss + defender.profile.adaptability * 0.06;
+    if (roll < missChance) return "whiff";
+    const deflectChance = missChance + profile.deflect + defender.profile.defense * 0.08;
+    if (roll < deflectChance) return "blocked";
+    if (roll < deflectChance + 0.1) return "glancing";
+    return "hit";
   }
 
   private advanceEncounter(
@@ -457,18 +874,23 @@ export class CombatDirector {
 
     if (distance > ATTACK_RANGE) {
       exchange.elapsed = Math.min(exchange.elapsed, exchange.measureDuration);
-      cues.set(attacker.id, this.cue(exchange, defender.id, "size-up", "close", 0));
+      writeCue(cues, attacker.id, this.cue(exchange, defender.id, "size-up", "close", 0));
       if (!encounter.support) {
-        cues.set(defender.id, this.cue(exchange, attacker.id, "size-up", "hold", 0));
+        writeCue(cues, defender.id, this.cue(exchange, attacker.id, "size-up", "hold", 0));
       }
       return;
     }
 
+    // A supporting attacker waits its turn while the target is busy trading with
+    // somebody else. A hurler is never busy in that sense: it is always mid-throw
+    // at someone twelve metres away, and deferring to that left swordsmen
+    // standing next to a hurler watching it work.
     const occupiedCue = cues.get(defender.id);
-    if (encounter.support && exchange.elapsed >= exchange.measureDuration &&
+    const occupiedByMelee = !isThrow(occupiedCue?.strategy ?? null);
+    if (encounter.support && occupiedByMelee && exchange.elapsed >= exchange.measureDuration &&
         (occupiedCue?.action === "attack" || occupiedCue?.action === "block")) {
       exchange.elapsed = exchange.measureDuration;
-      cues.set(attacker.id, this.cue(
+      writeCue(cues, attacker.id, this.cue(
         exchange, defender.id, "size-up", exchange.side > 0 ? "angle-left" : "angle-right", 1,
       ));
       return;
@@ -480,9 +902,9 @@ export class CombatDirector {
         exchange.strategy === "distance-trap" || exchange.strategy === "react" ? "close" :
         exchange.strategy === "size-up" ? (exchange.side > 0 ? "angle-left" : "angle-right") :
         "hold";
-      cues.set(attacker.id, this.cue(exchange, defender.id, "size-up", attackerMove, phase));
+      writeCue(cues, attacker.id, this.cue(exchange, defender.id, "size-up", attackerMove, phase));
       if (!encounter.support) {
-        cues.set(defender.id, this.cue(
+        writeCue(cues, defender.id, this.cue(
           exchange, attacker.id, "size-up",
           exchange.strategy === "distance-trap" ? "retreat" : phase > 0.55 ? "angle-right" : "hold",
           phase,
@@ -518,9 +940,9 @@ export class CombatDirector {
         exchange.outcome === "whiff" ? "retreat" :
         exchange.strategy === "distance-trap" ? "retreat" :
         "hold";
-      cues.set(attacker.id, this.cue(exchange, defender.id, "attack", "hold", phase));
+      writeCue(cues, attacker.id, this.cue(exchange, defender.id, "attack", "hold", phase));
       if (!encounter.support || (phase >= 0.48 && exchange.outcome !== "whiff")) {
-        cues.set(defender.id, this.cue(exchange, attacker.id, defenderAction, defenderMove, phase));
+        writeCue(cues, defender.id, this.cue(exchange, attacker.id, defenderAction, defenderMove, phase));
       }
       if (!exchange.damageApplied && phase >= 0.54) {
         if (exchange.outcome === "hit" || exchange.outcome === "glancing") {
@@ -545,9 +967,9 @@ export class CombatDirector {
     const recoveryPhase = clamp01(
       (attackElapsed - exchange.attackDuration) / exchange.recoveryDuration,
     );
-    cues.set(attacker.id, this.cue(exchange, defender.id, "recover", "retreat", recoveryPhase));
+    writeCue(cues, attacker.id, this.cue(exchange, defender.id, "recover", "retreat", recoveryPhase));
     if (!encounter.support) {
-      cues.set(defender.id, this.cue(exchange, attacker.id, "recover", "hold", recoveryPhase));
+      writeCue(cues, defender.id, this.cue(exchange, attacker.id, "recover", "hold", recoveryPhase));
     }
     if (recoveryPhase < 1) return;
 
@@ -642,10 +1064,14 @@ export class CombatDirector {
   }
 
   private swingWeight(exchange: Exchange): number {
+    if (exchange.throwType) return THROW_PROFILES[exchange.throwType].intensity;
     return exchange.strategy === "rush" ? 1 : exchange.strategy === "riposte" ? 0.88 : 0.72;
   }
 
   private event(exchange: Exchange, type: CombatEventType): CombatEvent {
+    // A rock's arrival reads as loudly as the throw that sent it, so a swatted
+    // hurl is a bigger moment than a swatted pebble.
+    const weight = exchange.throwType ? this.swingWeight(exchange) : 1;
     return {
       type,
       attackerId: exchange.attackerId,
@@ -655,9 +1081,9 @@ export class CombatDirector {
       side: exchange.side,
       intensity:
         type === "plan" ? 0.55 :
-        type === "block" ? 0.78 :
-        type === "glance" ? 0.42 :
-        type === "whiff" ? 0.3 :
+        type === "block" ? 0.78 * weight :
+        type === "glance" ? 0.42 * weight :
+        type === "whiff" ? 0.3 * weight :
         type === "riposte" ? 0.9 :
         this.swingWeight(exchange),
     };

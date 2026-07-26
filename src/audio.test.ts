@@ -17,12 +17,26 @@ describe("keypad tones", () => {
     expect(keyTones(7)).toEqual([852, 1209]);
   });
 
-  it("gives every strategy its own key", () => {
-    const strategies = Object.keys(STRATEGY_LABELS);
-    const keys = strategies.map((strategy) => STRATEGY_KEYS[strategy]);
+  it("gives every mapped strategy its own key on the pad", () => {
+    const mapped = Object.entries(STRATEGY_KEYS);
+    // Everything on the pad has to name a real plan; a keypad cannot speak the
+    // vocabulary of the fighting if it is keyed to something that never happens.
+    for (const [strategy] of mapped) expect(STRATEGY_LABELS).toHaveProperty(strategy);
+    const keys = mapped.map(([, key]) => key);
     expect(keys.every((key) => key >= 1 && key <= 9)).toBe(true);
-    expect(new Set(keys).size).toBe(strategies.length);
-    expect(new Set(keys.map((key) => keyTones(key).join("+"))).size)
-      .toBe(strategies.length);
+    expect(new Set(keys).size).toBe(mapped.length);
+    expect(new Set(keys.map((key) => keyTones(key).join("+"))).size).toBe(mapped.length);
+  });
+
+  it("covers the sword plans, which are what a keypad has room for", () => {
+    // Nine keys, and the fighting now has ten plans: the hurler's three throws
+    // are what a unit does at range, not a menu a player picks from.
+    for (const strategy of
+      ["rush", "react", "size-up", "feint", "distance-trap", "beat", "riposte"]) {
+      expect(STRATEGY_KEYS[strategy]).toBeGreaterThan(0);
+    }
+    for (const strategy of ["hurl", "pitch", "toss"]) {
+      expect(STRATEGY_KEYS[strategy]).toBeUndefined();
+    }
   });
 });

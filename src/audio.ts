@@ -21,7 +21,9 @@ type SoundName = "swing" | "block" | "glance" | "hit" | "whiff" | "defeat";
  *
  * They are kept for interface sounds, where one press per press is the point;
  * reach them through `playKey`. The strategy mapping is kept with them so a
- * menu built on these keys can speak the same vocabulary as the fighting.
+ * menu built on these keys can speak the same vocabulary as the fighting. It
+ * covers the seven sword plans: a pad has nine keys, and the hurler's three
+ * throws are chosen by the gap rather than picked off a menu.
  */
 const DTMF_ROWS = [697, 770, 852, 941] as const;
 const DTMF_COLUMNS = [1209, 1336, 1477] as const;
