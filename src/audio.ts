@@ -138,13 +138,13 @@ export class CombatAudio {
         break;
       case "hit":
         // A dull structural thud: low body, short bright edge, no ring.
-        this.tone(output, now, { frequency: 168, duration: 0.3, gain: gain * 0.55, type: "sine", drop: 68 });
-        this.tone(output, now, { frequency: 96, duration: 0.24, gain: gain * 0.4, type: "square", drop: 40 });
-        this.noise(output, now, { duration: 0.11, gain: gain * 0.3, filter: 1700, sweep: -1100 });
+        this.tone(output, now, { frequency: 168, duration: 0.3, gain: gain * 0.72, type: "sine", drop: 68 });
+        this.tone(output, now, { frequency: 96, duration: 0.24, gain: gain * 0.52, type: "square", drop: 40 });
+        this.noise(output, now, { duration: 0.11, gain: gain * 0.39, filter: 1700, sweep: -1100 });
         break;
       case "riposte":
       case "plan":
-        this.keypad(output, now, strategy, gain * (name === "riposte" ? 0.3 : 0.2));
+        this.keypad(output, now, strategy, gain * (name === "riposte" ? 0.21 : 0.14));
         break;
       case "defeat":
         this.tone(output, now, { frequency: 122, duration: 0.85, gain: gain * 0.6, type: "sine", drop: 62 });
