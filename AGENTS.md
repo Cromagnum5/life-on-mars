@@ -379,3 +379,29 @@ the fight stops reading, whatever the poses are doing.
   `rigwalker.ts` also applies a positional clearance floor each frame.
 - `src/rigwalker.test.ts` drives movement and planning together, without
   rendering, and pins the spacing a real fight settles at.
+
+## Arriving at a waypoint
+
+A waypoint is a point and a crowd cannot stand on one. Every unit a building
+makes is sent to that building's single rally point, so the clearance floor
+holds all but the first of them a body's width off it. Against an exact
+arrival test they never arrive, and they shove at the point for as long as the
+game runs — visible in play as units that will not settle down after a fight,
+because a fight is what puts them all back on the road at once.
+
+- Arrival is therefore two tests. Standing on the point
+  (`ARRIVAL_DISTANCE`) still counts, and so does being stopped: no ground made
+  up for `CROWD_ARRIVAL_SECONDS`, somebody within `CROWD_BLOCK_DISTANCE`
+  standing between the unit and the point, and enough bodies already nearer the
+  point to fill the ground still to cover.
+- The fullness test is what keeps it honest. Bodies pack about a clearance
+  apart, so the ground arrived units cover grows with the root of their number;
+  comparing that against the distance left to walk distinguishes a full rally
+  point from a merely busy one.
+- Being stalled and crowded is not enough on its own, and reading it that way
+  is the failure to watch for. A batch walking abreast to one rally point
+  converges as it goes, and funnelling costs it a moment's ground with a
+  neighbour right alongside — units that call that arrival stop a walk short of
+  where they were sent. `src/rigwalker.test.ts` pins both directions.
+- A unit leaving combat starts a fresh approach. Judged against the ground it
+  had made before the fight, it would give up before setting off.

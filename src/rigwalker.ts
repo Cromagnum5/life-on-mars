@@ -79,6 +79,21 @@ const COMBAT_SEPARATION_RADIUS = 2.05;
 const UNIT_CLEARANCE = 1.15;
 const COMBAT_CLEARANCE = 1.85;
 const OBSTACLE_LOOKAHEAD = 1.4;
+/** Close enough to the waypoint to be standing on it. */
+const ARRIVAL_DISTANCE = 0.08;
+/**
+ * A waypoint is a point, but a crowd cannot stand on one. Every unit a building
+ * makes is sent to the same rally point, and the clearance floor holds all but
+ * the first of them a body's width off it, so an exact arrival test leaves the
+ * rest pressing into the pile for as long as the game runs. How long a unit
+ * goes without getting closer before `isWaypointTakenByCrowd` is asked whether
+ * that is because the ground is full.
+ */
+const CROWD_ARRIVAL_SECONDS = 0.45;
+/** Ground made up over that window that counts as still closing. */
+const CROWD_ARRIVAL_PROGRESS = 0.1;
+/** How near a unit ahead has to be to be the reason for the hold-up. */
+const CROWD_BLOCK_DISTANCE = UNIT_CLEARANCE + 0.35;
 const WALK_CYCLE_SPEED = 8.4;
 const MAX_HEALTH = 100;
 const COMBAT_DISTANCE_DEAD_ZONE = 0.16;
@@ -1121,6 +1136,9 @@ export function createRigwalker(
   }
 
   let destination: THREE.Vector3 | null = null;
+  /** Closest this unit has come to its waypoint, and how long since it improved. */
+  let approachBestDistance = Number.POSITIVE_INFINITY;
+  let approachStallElapsed = 0;
   let health = MAX_HEALTH;
   const combatProfile = createCombatProfile(random);
   let combatTarget: Rigwalker | null = null;
@@ -1214,6 +1232,56 @@ export function createRigwalker(
   function moveTo(nextDestination: THREE.Vector3): void {
     destination = nextDestination.clone();
     destination.y = 0;
+    beginApproach();
+  }
+
+  /** A fresh attempt at the waypoint: nothing achieved yet, nothing given up on. */
+  function beginApproach(): void {
+    approachBestDistance = Number.POSITIVE_INFINITY;
+    approachStallElapsed = 0;
+  }
+
+  /**
+   * Whether the waypoint is taken: somebody alongside is standing between this
+   * unit and it, and the ground in between is full of bodies rather than merely
+   * busy. Being nearer the waypoint is what orders a crowd: the innermost unit
+   * has nobody ahead of it, so it reaches the point and stops, and each unit
+   * behind settles against the one in front rather than waiting on a neighbour
+   * that is waiting back.
+   *
+   * Stalling alone is not enough. A batch walking abreast at one rally point
+   * converges, and funnelling costs it a moment's ground with a neighbour right
+   * there — a crowd it is not, and units that read it as one stop half a map
+   * short of where they were sent.
+   */
+  function isWaypointTakenByCrowd(
+    nearbyUnits: readonly Rigwalker[],
+    distanceToWaypoint: number,
+  ): boolean {
+    if (!destination) return false;
+    let blocked = false;
+    let ahead = 0;
+    for (const other of nearbyUnits) {
+      if (other === rigwalker || !other.isAlive) continue;
+      const otherToWaypoint = Math.hypot(
+        destination.x - other.group.position.x,
+        destination.z - other.group.position.z,
+      );
+      if (otherToWaypoint >= distanceToWaypoint) continue;
+      ahead += 1;
+      if (blocked) continue;
+      const gap = Math.hypot(
+        group.position.x - other.group.position.x,
+        group.position.z - other.group.position.z,
+      );
+      if (gap <= CROWD_BLOCK_DISTANCE) blocked = true;
+    }
+    // Bodies pack about a clearance apart, so the ground already-arrived units
+    // cover grows with the root of how many of them got there first. Compared
+    // against the distance still to go, that is a fullness test: a handful of
+    // units scattered across a long walk leaves plenty of room to keep going.
+    return blocked &&
+      distanceToWaypoint <= UNIT_CLEARANCE * (0.5 + Math.sqrt(ahead));
   }
 
   function setSelected(selected: boolean): void {
@@ -1381,8 +1449,12 @@ export function createRigwalker(
     activeStrategy = inCombat ? combatCue?.strategy ?? null : null;
     if (throwType) lastThrowType = throwType;
     swinging = inCombat && attackPhase >= 0;
-    if (!inCombat && wasInCombat && combatBones) {
-      resetCombatPose(combatBones);
+    if (!inCombat && wasInCombat) {
+      if (combatBones) resetCombatPose(combatBones);
+      // A fight leaves a unit somewhere it did not choose, so the walk back to
+      // the waypoint is a new approach. Judging it against the ground it had
+      // made before the fight would have it give up before it set off.
+      beginApproach();
     }
     wasInCombat = inCombat;
     if (weaponVisual) weaponVisual.visible = inCombat;
@@ -1464,13 +1536,28 @@ export function createRigwalker(
       );
       const distance = movement.length();
 
-      if (distance > 0.08) {
-        moving = true;
-        travelSpeed = MOVE_SPEED;
-        movement.normalize();
-        desiredMovement.copy(movement);
-      } else {
+      if (distance <= ARRIVAL_DISTANCE) {
         destination = null;
+      } else {
+        if (distance < approachBestDistance - CROWD_ARRIVAL_PROGRESS) {
+          approachBestDistance = distance;
+          approachStallElapsed = 0;
+        } else {
+          approachBestDistance = Math.min(approachBestDistance, distance);
+          approachStallElapsed += delta;
+        }
+
+        if (
+          approachStallElapsed > CROWD_ARRIVAL_SECONDS &&
+          isWaypointTakenByCrowd(nearbyUnits, distance)
+        ) {
+          destination = null;
+        } else {
+          moving = true;
+          travelSpeed = MOVE_SPEED;
+          movement.normalize();
+          desiredMovement.copy(movement);
+        }
       }
     }
 
