@@ -2,10 +2,15 @@
 
 ## Current checkpoint
 
-Branch `three-swords-then-a-hurler`, clean tree, two commits ahead of `main`:
-`5e2b8c5` (`Send the swords out three at a time`) and `d661abb` (`Give the
-hurlers a building of their own`). `main` is at `ac71199` and is 4 commits ahead of `origin/main`;
-nothing is pushed, and both merging and pushing are the user's call.
+`main` at `d661abb` (`Give the hurlers a building of their own`), clean tree.
+`three-swords-then-a-hurler` has been fast-forward merged in and still points at
+the same commit; deleting it is the user's call. `main` is 7 commits ahead of
+`origin/main`; nothing is pushed, and pushing is the user's call.
+
+Merged from that branch, oldest first:
+
+- `5e2b8c5` Send the swords out three at a time
+- `d661abb` Give the hurlers a building of their own
 
 Earlier session commits, oldest first:
 
