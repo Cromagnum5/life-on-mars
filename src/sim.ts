@@ -30,8 +30,18 @@ import "./sim.css";
  *   t=9.5        run headless to that sim time and render one frame
  *   step=0.0166  fixed timestep used by `t`
  *   hud=0        hide the panels for a clean render
+ *   on=HR1       ride one fighter by its label instead of the centre of the
+ *                fight, which is what makes a pose judgeable: at a zoom that
+ *                fills the frame with a body, the centroid frames nobody
+ *   feet=1       show each fighter's feet in its own frame, after every pose
+ *                layer, so a stance can be read as numbers off the same frame
  *   contacts=1   log where each strike throws its sparks, in the attacker's
  *                own frame, for checking that a swing lands on the opponent
+ *
+ * Everything here renders through the game's own renderer, so a frame captured
+ * from a URL is the frame that URL shows in a browser. That is the only way to
+ * settle an argument about a pose: the Blender tools draw a hand-ported pose
+ * that stops short of `applyBalancePose`, and the game never looks like them.
  */
 
 const ARENA_SIZE = 72;
@@ -152,6 +162,12 @@ let matchup = params.get("matchup") ?? "1v1";
 let seed = Number(params.get("seed") ?? 1);
 let speed = Number(params.get("speed") ?? 1);
 const showContacts = params.get("contacts") === "1";
+/** Label of the one fighter the camera rides, e.g. `on=HR1`. */
+const pinnedLabel = params.get("on");
+const showFeet = params.get("feet") === "1";
+const footProbe = new THREE.Vector3();
+const footFrame = new THREE.Quaternion();
+const footTilt = new THREE.Quaternion();
 let paused = false;
 let stepRequested = false;
 let simTime = 0;
@@ -305,14 +321,55 @@ function updateCamera(delta: number): void {
   const living = battle.units.filter((unit) => unit.isAlive);
   if (followInput.checked && living.length > 0) {
     centroid.set(0, 0, 0);
-    for (const unit of living) centroid.add(unit.group.position);
-    centroid.divideScalar(living.length);
+    // `on=HR1` pins the view to one fighter instead of the centre of the fight.
+    // Judging a pose needs the unit to fill the frame, and at any useful zoom
+    // the centroid of two fighters twelve metres apart frames neither of them.
+    const pinned = pinnedLabel
+      ? living.find((unit) => labels.get(unit.combatId) === pinnedLabel)
+      : undefined;
+    if (pinned) {
+      centroid.copy(pinned.group.position);
+    } else {
+      for (const unit of living) centroid.add(unit.group.position);
+      centroid.divideScalar(living.length);
+    }
     centroid.y = 0;
     // Damped so a defeat that moves the centroid does not snap the view.
     focus.lerp(centroid, 1 - Math.exp(-3.2 * delta));
   }
   camera.position.copy(focus).add(cameraOffset);
   camera.lookAt(focus);
+}
+
+/**
+ * Where a fighter's feet actually are, in its own frame: +z is the way it is
+ * facing, y is off the ground. Read off the posed skeleton after every layer
+ * has been applied, which is the point — `applyThrowPose` is only the first of
+ * three, and the Blender tools stop after it. A stance argued from those tools
+ * is a stance nobody is looking at.
+ */
+function describeFeet(unit: Rigwalker): string {
+  const reach: number[] = [];
+  const parts: string[] = [];
+  for (const name of ["foot.L", "foot.R"]) {
+    // The glTF conversion drops the dots from some exporters, so try both -
+    // the same fallback `findCombatBones` uses.
+    const bone = unit.group.getObjectByName(name) ??
+      unit.group.getObjectByName(name.replaceAll(".", ""));
+    if (!bone) return " · feet ?";
+    footFrame.copy(unit.group.quaternion).invert();
+    bone.getWorldPosition(footProbe).sub(unit.group.position).applyQuaternion(footFrame);
+    const ankle = footProbe.clone();
+    // Along the foot bone is toward the toe. A toe below the ankle is a heel
+    // in the air, which is what "up on its toes" means as a number.
+    bone.getWorldQuaternion(footTilt);
+    footProbe.set(0, 1, 0).applyQuaternion(footTilt).applyQuaternion(footFrame);
+    reach.push(ankle.z);
+    parts.push(`${name.slice(-1)} ${ankle.z >= 0 ? "+" : ""}${ankle.z.toFixed(2)}` +
+      ` h${ankle.y.toFixed(2)} toe${footProbe.y >= 0 ? "+" : ""}${footProbe.y.toFixed(2)}`);
+  }
+  const split = reach[0] - reach[1];
+  return ` · feet ${parts.join("  ")}  split ${split >= 0 ? "+" : ""}${split.toFixed(2)}`;
 }
 
 function describeCue(cue: CombatCue | undefined): { action: string; detail: string } {
@@ -346,7 +403,7 @@ function renderReadout(): void {
       `<span class="hp"><span style="width:${(unit.health / unit.maxHealth) * 100}%"></span></span>` +
       `<span class="line"><b>${Math.ceil(unit.health)} HP</b> · ${unit.combatProfile.temperament}` +
       `${target ? ` · vs ${labelOf(target)} @ ${unit.group.position.distanceTo(target.group.position).toFixed(2)} m` : ""}</span>` +
-      `<span class="line"><b>${action}</b> · ${detail}</span>` +
+      `<span class="line"><b>${action}</b> · ${detail}${showFeet ? describeFeet(unit) : ""}</span>` +
       `<span class="phase"><span style="width:${(cue?.phase ?? 0) * 100}%"></span></span>`;
     return card;
   }));
