@@ -112,6 +112,25 @@ def drive(throw, phase):
     return {name: beat(phase, windows[name]) for name in windows}
 
 
+def hurl_step(throw, phase):
+    """The port of hurlStep. Keep in step with src/rigwalker.ts.
+
+    Metres the body travels forward during a hurl, and metres the hips come
+    down for it. In the game these are an offset of the model inside its group;
+    here they translate the whole actor, which is the same thing.
+
+    `reach` is measured against the root bone and so is deliberately blind to
+    the forward part: what it measures is how far the arm swings through the
+    body, not how far the body goes. Foot height is *not* blind to the drop,
+    which is the whole reason the drop exists.
+    """
+    if throw != 'hurl' or phase < 0:
+        return (0.0, 0.0)
+    d = drive(throw, phase)
+    return (.28 * d['stride'] + .34 * d['whip'] + .26 * d['follow'],
+            .04 * d['stride'] + .05 * d['whip'] + .05 * d['follow'])
+
+
 def arm_pose(throw, phase):
     """The port of throwArmPose. Keep in step with src/rigwalker.ts."""
     if phase < 0:
@@ -127,6 +146,8 @@ def arm_pose(throw, phase):
 
 bpy.ops.wm.read_factory_settings(use_empty=True)
 RESTS = {}
+# rig -> (parent empty, its resting x), so a hurl's step can move the actor.
+STANCES = {}
 
 
 def import_hurler(label, at_x):
@@ -153,6 +174,8 @@ def import_hurler(label, at_x):
         if obj.name.endswith('Broadsword'):
             obj.hide_viewport = obj.hide_render = True
     root.location = (at_x, 0, 0)
+    # Held so `pose_throw` can walk the whole actor forward for a hurl's step.
+    STANCES[rig] = (root, at_x)
     rock = bpy.data.objects.new(f'{label}_Rock', ROCK_MESH)
     bpy.context.scene.collection.objects.link(rock)
     return {'rig': rig, 'objects': objects, 'root': root, 'rock': rock}
@@ -220,16 +243,17 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
         offset(rig, 'chest', .03 + .16 * draw - .30 * follow, .44 * chest, .05 * draw - .08 * follow)
         offset(rig, 'neck', .08 - .06 * follow, -.5 * chest, 0)
         offset(rig, 'head', -.03 + .08 * aim, -.35 * chest, 0)
+        sight = max(draw, stride)
         offset(rig, 'upper_arm.L',
-               -.3 - .60 * draw - .55 * stride + .75 * whip + .30 * follow - .35 * aim,
-               0, -.1 - .25 * stride + .2 * follow)
+               -.42 - .98 * sight + 1.42 * whip + .34 * follow - .4 * aim,
+               0, -.12 - .22 * sight + .2 * follow)
         offset(rig, 'lower_arm.L',
-               -.35 - .35 * draw - .35 * stride + .55 * whip + .45 * follow - .3 * aim, 0, -.05)
+               -.1 - .06 * sight + .6 * whip + .4 * follow - .05 * aim, 0, -.05)
         offset(rig, 'hand.L', -.06, 0, 0)
-        set_legs(rig, -.06 + .14 * draw - .16 * stride - .14 * whip - .10 * follow,
-                 .24 + .16 * draw + .14 * stride + .08 * whip + .14 * follow,
-                 .06 + .16 * draw + .13 * stride + .07 * whip + .04 * follow,
-                 .24 + .18 * draw + .07 * stride + .07 * whip + .06 * follow)
+        set_legs(rig, -.06 + .1 * draw - .4 * stride + .26 * whip + .12 * follow,
+                 .24 + .16 * draw + .2 * stride + .1 * follow,
+                 .06 + .16 * draw + .2 * stride + .12 * whip + .06 * follow,
+                 .24 + .18 * draw + .02 * stride + .04 * whip + .08 * follow)
     elif throw == 'pitch':
         coil = .95 * draw + .7 * stride - .95 * whip - .4 * follow
         offset(rig, 'root', -.1 * draw + .18 * whip + .24 * follow, .16 * coil,
@@ -239,7 +263,7 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
         offset(rig, 'neck', .08, -.32 * coil, 0)
         offset(rig, 'head', -.03 + .06 * aim, -.24 * coil, 0)
         offset(rig, 'upper_arm.L', -.32 - .3 * draw + .75 * whip + .5 * follow, 0, -.08)
-        offset(rig, 'lower_arm.L', -.5 - .2 * draw + .55 * whip + .45 * follow, 0, -.05)
+        offset(rig, 'lower_arm.L', -.18 - .04 * draw + .55 * whip + .45 * follow, 0, -.05)
         offset(rig, 'hand.L', -.06, 0, 0)
         set_legs(rig, -.02 + .06 * draw - .1 * whip - .08 * follow,
                  .24 + .08 * draw + .06 * whip + .09 * follow,
@@ -253,7 +277,7 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
         offset(rig, 'neck', .08, -.2 * coil, 0)
         offset(rig, 'head', -.03, -.16 * coil, 0)
         offset(rig, 'upper_arm.L', -.34 + .3 * whip + .2 * follow, 0, -.1)
-        offset(rig, 'lower_arm.L', -.62 + .3 * whip + .2 * follow, 0, -.06)
+        offset(rig, 'lower_arm.L', -.22 + .3 * whip + .2 * follow, 0, -.06)
         offset(rig, 'hand.L', -.06, 0, 0)
         set_legs(rig, -.02 - .08 * whip, .26 + .14 * draw + .1 * whip,
                  .02 + .08 * whip, .26 + .18 * draw + .14 * whip)
@@ -262,8 +286,14 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
         add_offset(rig, 'root', 0, ready * .16, -ready * .05)
         add_offset(rig, 'chest', 0, ready * .12, 0)
         add_offset(rig, 'neck', 0, -ready * .16, 0)
-        add_offset(rig, 'upper_arm.L', -ready * (.1 + aim * .5), 0, 0)
-        add_offset(rig, 'lower_arm.L', -ready * (.25 + aim * .35), 0, 0)
+        add_offset(rig, 'upper_arm.L', -ready * (.42 + aim * .18), 0, -ready * .18)
+        add_offset(rig, 'lower_arm.L', -ready * .1, 0, 0)
+
+    # The step. Applied to the whole actor, after the pose: forward along the
+    # axis the fighter faces, and down onto the stride.
+    root, at_x = STANCES[rig]
+    forward, drop = hurl_step(throw, phase)
+    root.location = (at_x, -forward, -drop)
 
 
 def rock_world(actor):

@@ -42,7 +42,9 @@ export type Rigwalker = {
   getBladeVelocity: (out: THREE.Vector3) => THREE.Vector3;
   /** Writes the blade's hilt and tip in world space; false when it has no weapon. */
   sampleBlade: (hilt: THREE.Vector3, tip: THREE.Vector3) => boolean;
-  applyCombatDamage: (damage: number, side: -1 | 1) => void;
+  applyCombatDamage: (
+    damage: number, side: -1 | 1, line?: THREE.Vector3 | null,
+  ) => void;
   moveTo: (destination: THREE.Vector3) => void;
   setSelected: (selected: boolean) => void;
   update: (
@@ -118,6 +120,16 @@ const HURLER_BACKPEDAL_SPEED = 1.5;
 /** How long a wreck stays on the battlefield, and its final sink. */
 const CORPSE_SECONDS = 3.4;
 const CORPSE_SINK_SECONDS = 0.8;
+/**
+ * How far a killing rock carries the body along its own line as it goes over.
+ * Enough that the rock is visibly what put it down, short enough that the wreck
+ * still lies inside the ground it was holding.
+ */
+const DEFEAT_KNOCKDOWN_DRIFT = 0.4;
+/** A cut topples a fighter sideways, about its own forward axis. */
+const DEFEAT_LOCAL_ROLL_AXIS = new THREE.Vector3(0, 0, 1);
+/** Standing still: what every throw but the hurl does with its feet. */
+const EMPTY_HURL_STEP: HurlStep = { forward: 0, drop: 0 };
 /** Fraction of an attack during which a feint shows its false line. */
 const FEINT_REVEAL_PHASE = 0.3;
 
@@ -529,6 +541,51 @@ function throwDrive(throwType: ThrowType, phase: number): ThrowDrive {
   };
 }
 
+/** Where the body goes during a hurl: forward along the throw, and down. */
+export type HurlStep = { forward: number; drop: number };
+
+const hurlStepScratch: HurlStep = { forward: 0, drop: 0 };
+
+/**
+ * The step a hurl takes, in metres.
+ *
+ * The legs stride in angle, but angles alone leave a thrower rooted over one
+ * spot and up on their toes — a long throw is thrown off the back leg through a
+ * planted front foot, and the body has to actually go somewhere for that to
+ * read. The director owns where a hurler stands, so this is carried as an
+ * offset of the model inside its group rather than as movement.
+ *
+ * `drop` is not decoration. There is no IK on these legs: a leg swung back
+ * about the hip carries its foot up with it, so splitting the stance far enough
+ * to hold a plant floats both feet unless the hips come down by roughly what
+ * the split costs. Dropping them is also just what a stride does.
+ *
+ * Both ride the same beats as the pose, so they cannot drift apart from it, and
+ * both are pure functions of the phase so `tools/render_rigwalker_throw.py` can
+ * port them. Because `follow` fades out by the end of the motion the body walks
+ * itself back to the spot it holds, which is what the recovery is for.
+ *
+ * Only the hurl travels: a pitch is thrown off a planted stance and a toss is
+ * gone before the body has moved.
+ */
+export function hurlStep(throwType: ThrowType, phase: number): HurlStep {
+  const out = hurlStepScratch;
+  if (throwType !== "hurl" || phase < 0) {
+    out.forward = 0;
+    out.drop = 0;
+    return out;
+  }
+  const { stride, whip, follow } = throwDrive(throwType, phase);
+  // Stride and whip are both at full at the moment of release, so these read as
+  // a sum that peaks there at about 0.6 m rather than as three separate pushes.
+  out.forward = 0.28 * stride + 0.34 * whip + 0.26 * follow;
+  // Only as deep as the split costs. Going further looks like a better stride
+  // and measures as a worse one: it buries the front sole and drags the release
+  // down under the pitch's, which is the ordering the throws are read by.
+  out.drop = 0.04 * stride + 0.05 * whip + 0.05 * follow;
+  return out;
+}
+
 /**
  * A rock arriving is shaped like a cut arriving, so the reaction is shared with
  * the sword pose rather than rewritten. Added on top of a finished pose.
@@ -599,22 +656,35 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
     setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08 - 0.06 * follow, -0.5 * chest, 0);
     setBoneOffset(bones.head, bones.bodyRest.head, -0.03 + 0.08 * aim, -0.35 * chest, 0);
 
-    // The aiming arm: raised at the target through the wind, then pulled down
-    // hard into the ribs, which is what the throwing shoulder rotates around.
+    // The aiming arm sights down its whole length at the target through the
+    // wind, then folds hard into the ribs, which is what the throwing shoulder
+    // rotates around. The rig's rest elbow is straight, so any bend here is a
+    // bend the viewer sees: keeping `lowerArmL` near zero through the wind is
+    // the difference between a thrower sighting on someone and a thrower
+    // holding a bent forearm up in front of their chest.
+    //
+    // It runs on the larger of the two wind beats rather than their sum. Draw
+    // and stride overlap, and adding them lifts the arm over the head halfway
+    // through the wind — the same trap the throwing arm's keys exist to avoid.
+    const sight = Math.max(draw, stride);
     setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
-      -0.3 - 0.6 * draw - 0.55 * stride + 0.75 * whip + 0.3 * follow - 0.35 * aim,
-      0, -0.1 - 0.25 * stride + 0.2 * follow);
+      -0.42 - 0.98 * sight + 1.42 * whip + 0.34 * follow - 0.4 * aim,
+      0, -0.12 - 0.22 * sight + 0.2 * follow);
     setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
-      -0.35 - 0.35 * draw - 0.35 * stride + 0.55 * whip + 0.45 * follow - 0.3 * aim,
+      -0.1 - 0.06 * sight + 0.6 * whip + 0.4 * follow - 0.05 * aim,
       0, -0.05);
     setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
 
-    // Left leg strides out and takes the weight; the right trails and its knee
-    // folds instead of its heel lifting.
-    const upperL = -0.06 + 0.14 * draw - 0.16 * stride - 0.14 * whip - 0.1 * follow + combatStep;
-    const lowerL = 0.24 + 0.16 * draw + 0.14 * stride + 0.08 * whip + 0.14 * follow;
-    const upperR = 0.06 + 0.16 * draw + 0.13 * stride + 0.07 * whip + 0.04 * follow - combatStep;
-    const lowerR = 0.24 + 0.18 * draw + 0.07 * stride + 0.07 * whip + 0.06 * follow;
+    // The legs have to absorb `hurlLunge`, or the body slides over two feet
+    // that travel with it. The left reaches out on the stride and then sweeps
+    // back under the hips as the body passes over the plant; the right extends
+    // behind to hold the ground it is driving off. Neither knee straightens
+    // past its base bend — there is no IK here, so a straight leg puts the
+    // sole through the terrain.
+    const upperL = -0.06 + 0.1 * draw - 0.4 * stride + 0.26 * whip + 0.12 * follow + combatStep;
+    const lowerL = 0.24 + 0.16 * draw + 0.2 * stride + 0.1 * follow;
+    const upperR = 0.06 + 0.16 * draw + 0.2 * stride + 0.12 * whip + 0.06 * follow - combatStep;
+    const lowerR = 0.24 + 0.18 * draw + 0.02 * stride + 0.04 * whip + 0.08 * follow;
     setLegs(bones, upperL, lowerL, upperR, lowerR);
   } else if (throwType === "pitch") {
     const coil = 0.95 * draw + 0.7 * stride - 0.95 * whip - 0.4 * follow;
@@ -627,11 +697,12 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
     setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08, -0.32 * coil, 0);
     setBoneOffset(bones.head, bones.bodyRest.head, -0.03 + 0.06 * aim, -0.24 * coil, 0);
 
-    // The free arm only counterbalances; there is no time to aim with it.
+    // The free arm only counterbalances; there is no time to aim with it. Its
+    // elbow stays loose for the same reason the hurl's does.
     setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
       -0.32 - 0.3 * draw + 0.75 * whip + 0.5 * follow, 0, -0.08);
     setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
-      -0.5 - 0.2 * draw + 0.55 * whip + 0.45 * follow, 0, -0.05);
+      -0.18 - 0.04 * draw + 0.55 * whip + 0.45 * follow, 0, -0.05);
     setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
 
     const upperL = -0.02 + 0.06 * draw - 0.1 * whip - 0.08 * follow + combatStep;
@@ -653,7 +724,7 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
     setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
       -0.34 + 0.3 * whip + 0.2 * follow, 0, -0.1);
     setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
-      -0.62 + 0.3 * whip + 0.2 * follow, 0, -0.06);
+      -0.22 + 0.3 * whip + 0.2 * follow, 0, -0.06);
     setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
 
     const upperL = -0.02 - 0.08 * whip + combatStep;
@@ -666,12 +737,16 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
   // Bladed and settled between throws: rock hand low at the hip, free hand up
   // across the chest, weight slightly back. Distinct at a glance from a
   // swordsman's guard, which is what tells the two units apart on the field.
+  //
+  // The free hand is carried up by the shoulder and across by its Z, not by
+  // folding the elbow — a folded elbow at this height reads as a gesture rather
+  // than a guard, and it is the pose a hurler holds for longest.
   if (ready > 0.001) {
     addBoneOffset(bones.root, 0, ready * 0.16, -ready * 0.05);
     addBoneOffset(bones.chest, 0, ready * 0.12, 0);
     addBoneOffset(bones.neck, 0, -ready * 0.16, 0);
-    addBoneOffset(bones.upperArmL, -ready * (0.1 + aim * 0.5), 0, 0);
-    addBoneOffset(bones.lowerArmL, -ready * (0.25 + aim * 0.35), 0, 0);
+    addBoneOffset(bones.upperArmL, -ready * (0.42 + aim * 0.18), 0, -ready * 0.18);
+    addBoneOffset(bones.lowerArmL, -ready * 0.1, 0, 0);
   }
 
   addHitReaction(bones, line, hitPhase, intensity);
@@ -1062,6 +1137,12 @@ export function createRigwalker(
 
   let mixer: THREE.AnimationMixer | null = null;
   let combatBones: CombatBones | null = null;
+  // The skinned model, held so a throw can carry the body forward inside the
+  // group without moving the position the director holds the unit at. Local +Z
+  // is forward: the group's yaw is built from `atan2(direction.x, direction.z)`.
+  let modelRoot: THREE.Object3D | null = null;
+  let lungeOffset = 0;
+  let lungeDrop = 0;
   let weaponVisual: THREE.Object3D | null = null;
   let idleAction: THREE.AnimationAction | null = null;
   let walkAction: THREE.AnimationAction | null = null;
@@ -1079,6 +1160,7 @@ export function createRigwalker(
       }
     });
     group.add(model);
+    modelRoot = model;
     combatBones = findCombatBones(model);
     weaponVisual = role === "hurler" ? null : model.getObjectByName("Broadsword") ?? null;
     if (weaponVisual) weaponVisual.visible = false;
@@ -1164,6 +1246,12 @@ export function createRigwalker(
   const defeatStartRotation = new THREE.Quaternion();
   const defeatTargetRotation = new THREE.Quaternion();
   const defeatRoll = new THREE.Quaternion();
+  const defeatAxis = new THREE.Vector3();
+  /** Where the corpse stood when it died, and how far the blow carries it. */
+  const defeatStart = new THREE.Vector3();
+  const defeatDrift = new THREE.Vector3();
+  /** The line the last blow arrived on, or null when it did not have one. */
+  let impactLine: THREE.Vector3 | null = null;
   let wasInCombat = false;
   let observedCombatTargetId: number | null = null;
   let observedEnemyDistance = Number.POSITIVE_INFINITY;
@@ -1348,11 +1436,19 @@ export function createRigwalker(
     }
   }
 
-  function applyCombatDamage(damage: number, side: -1 | 1): void {
+  /**
+   * `line` is the horizontal direction the blow travelled in, given only when
+   * the blow had one — a thrown rock. A cut does not: it arrives from a fighter
+   * standing right there, and its own line is already carried by `side`.
+   */
+  function applyCombatDamage(
+    damage: number, side: -1 | 1, line: THREE.Vector3 | null = null,
+  ): void {
     if (health <= 0) return;
     // The visible reaction is driven by the cue each frame; this only records
     // the impulse the balance controller needs and the side to topple toward.
     hitReactionSide = side;
+    impactLine = line ? (impactLine ?? new THREE.Vector3()).copy(line) : null;
     pendingBalanceImpactX += side * Math.min(0.38, 0.16 + damage / MAX_HEALTH * 0.55);
     pendingBalanceImpactZ -= Math.min(0.24, damage / MAX_HEALTH * 0.4);
     health = Math.max(0, health - damage);
@@ -1363,11 +1459,24 @@ export function createRigwalker(
       selectionRing.visible = false;
       defeatElapsed = 0;
       defeatStartRotation.copy(group.quaternion);
-      defeatRoll.setFromAxisAngle(
-        new THREE.Vector3(0, 0, 1),
-        hitReactionSide * 1.32,
-      );
-      defeatTargetRotation.copy(defeatStartRotation).multiply(defeatRoll);
+      defeatStart.copy(group.position);
+      if (impactLine) {
+        // Knocked down by the rock rather than folding up on the spot: tip the
+        // body's up-axis over onto the line the rock came in on, and carry it a
+        // little way along that line as it goes.
+        //
+        // The axis is `up × line`, so rotating about it swings up towards the
+        // line; the roll is applied on the left of the start rotation because
+        // it is a world direction, not one of the corpse's own axes.
+        defeatAxis.set(0, 1, 0).cross(impactLine).normalize();
+        defeatRoll.setFromAxisAngle(defeatAxis, 1.32);
+        defeatTargetRotation.copy(defeatRoll).multiply(defeatStartRotation);
+        defeatDrift.copy(impactLine).multiplyScalar(DEFEAT_KNOCKDOWN_DRIFT);
+      } else {
+        defeatRoll.setFromAxisAngle(DEFEAT_LOCAL_ROLL_AXIS, hitReactionSide * 1.32);
+        defeatTargetRotation.copy(defeatStartRotation).multiply(defeatRoll);
+        defeatDrift.set(0, 0, 0);
+      }
     }
   }
 
@@ -1389,6 +1498,10 @@ export function createRigwalker(
         defeatTargetRotation,
         fallProgress,
       );
+      // Carried along the blow on the same curve it topples on, so the body
+      // travels while it is going over rather than after it has landed.
+      group.position.x = defeatStart.x + defeatDrift.x * fallProgress;
+      group.position.z = defeatStart.z + defeatDrift.z * fallProgress;
       // The wreck lies where it fell, then settles into the dust. Materials are
       // shared between clones, so sinking is how a corpse leaves without
       // fading every other Rigwalker with it.
@@ -1751,6 +1864,22 @@ export function createRigwalker(
         }
       }
       if (combatBones) applyBalancePose(combatBones, balancePose, inCombat);
+    }
+
+    // The step the hurl takes. Damped rather than written straight through: the
+    // curve returns to zero on its own by the end of the motion, but a throw
+    // re-planned mid-wind drops the phase to -1 in a single frame, and without
+    // this the body would teleport back rather than settle.
+    if (modelRoot) {
+      const step = combatTarget && role === "hurler" && throwType
+        ? hurlStep(throwType, attackPhase)
+        : EMPTY_HURL_STEP;
+      lungeOffset = THREE.MathUtils.damp(lungeOffset, step.forward, 18, delta);
+      lungeDrop = THREE.MathUtils.damp(lungeDrop, step.drop, 18, delta);
+      modelRoot.position.set(0, -lungeDrop, lungeOffset);
+      // The bar rides the body it belongs to. The selection ring does not: it
+      // marks the ground the unit holds, which is the thing that has not moved.
+      healthBar.position.z = lungeOffset;
     }
 
     // Sampled after the pose is applied so the direction reflects this frame's

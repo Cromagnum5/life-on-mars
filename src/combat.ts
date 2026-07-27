@@ -100,7 +100,16 @@ export type CombatEvent = {
 
 export type CombatFrame = {
   cues: Map<number, CombatCue>;
-  damage: Array<{ targetId: number; amount: number; outcome: "glancing" | "hit"; side: -1 | 1 }>;
+  damage: Array<{
+    targetId: number;
+    /** Who landed it, so presentation can work out which way the blow came from. */
+    sourceId: number;
+    amount: number;
+    outcome: "glancing" | "hit";
+    side: -1 | 1;
+    /** A rock rather than a cut: it carries a direction, and it knocks down. */
+    thrown: boolean;
+  }>;
   events: CombatEvent[];
 };
 
@@ -235,7 +244,7 @@ export type ThrowProfile = {
 export const THROW_PROFILES: Record<ThrowType, ThrowProfile> = {
   hurl: {
     range: LONG_THROW_RANGE, measure: [0.45, 0.35], motion: 1.15, release: 0.58,
-    recovery: 0.55, speed: 26, damage: 38, deflect: 0.06, miss: 0.07, intensity: 1,
+    recovery: 0.55, speed: 32.5, damage: 38, deflect: 0.06, miss: 0.07, intensity: 1,
   },
   pitch: {
     range: MEDIUM_THROW_RANGE, measure: [0.22, 0.22], motion: 0.62, release: 0.44,
@@ -744,11 +753,13 @@ export class CombatDirector {
       if (exchange.outcome === "hit" || exchange.outcome === "glancing") {
         damage.push({
           targetId: defender.id,
+          sourceId: attacker.id,
           amount: exchange.outcome === "glancing"
             ? Math.round(profile.damage * 0.35)
             : profile.damage,
           outcome: exchange.outcome,
           side: exchange.side,
+          thrown: true,
         });
       }
       // A rock landing is worth a stagger even while the hurler reloads.
@@ -961,9 +972,11 @@ export class CombatDirector {
             24;
           damage.push({
             targetId: defender.id,
+            sourceId: attacker.id,
             amount: exchange.outcome === "glancing" ? Math.round(base * 0.35) : base,
             outcome: exchange.outcome,
             side: exchange.side,
+            thrown: false,
           });
         }
         exchange.damageApplied = true;

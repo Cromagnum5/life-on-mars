@@ -23,7 +23,11 @@ const MAX_ROCKS = 24;
  */
 const ROCK_ARC_BASE = 0.35;
 const ROCK_ARC_SLOWNESS = 1.6;
-/** Reference speed the arc is scaled against: the fastest throw in the game. */
+/**
+ * Fixed reference the loop is measured against, not read from any one throw.
+ * The hurl is thrown harder than this, so it sits pinned at the flat base and
+ * only the two slower throws loop — which is the whole point of the scale.
+ */
 const ROCK_REFERENCE_SPEED = 26;
 /** Blade samples held in a ribbon; longer smears the arc, shorter tightens it. */
 const TRAIL_SAMPLES = 7;

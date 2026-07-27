@@ -121,7 +121,7 @@ cache of them on its hip. It picks one of three throws from the current gap:
 
 | throw | band | speed | damage | motion |
 | --- | --- | --- | --- | --- |
-| `hurl` | to 12 shoulder widths, 16.08 m | 26 m/s | 38 | 1.15 s |
+| `hurl` | to 12 shoulder widths, 16.08 m | 32.5 m/s | 38 | 1.15 s |
 | `pitch` | to twice sword reach, 8.6 m | 17 m/s | 19 | 0.62 s |
 | `toss` | inside sword reach, 4.3 m | 11 m/s | 8 | 0.30 s |
 

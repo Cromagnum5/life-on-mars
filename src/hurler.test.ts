@@ -16,7 +16,7 @@ import {
   type CombatantSnapshot,
 } from "./combat";
 import { createSeededRandom } from "./random";
-import { createRigwalker, type Rigwalker } from "./rigwalker";
+import { createRigwalker, hurlStep, type Rigwalker } from "./rigwalker";
 
 /**
  * What the hurler is supposed to be, checked rather than asserted in a comment:
@@ -157,6 +157,47 @@ describe("throw ranges", () => {
   it("stands off near the top of its range rather than at the edge of it", () => {
     expect(HURLER_FIGHT_DISTANCE).toBeLessThan(LONG_THROW_RANGE);
     expect(HURLER_FIGHT_DISTANCE).toBeGreaterThan(MEDIUM_THROW_RANGE);
+  });
+});
+
+describe("the step a hurl takes", () => {
+  const sample = (phase: number) => {
+    const { forward, drop } = hurlStep("hurl", phase);
+    return { forward, drop };
+  };
+
+  it("only the long throw travels", () => {
+    for (const phase of [0, 0.3, 0.44, 0.58, 0.8]) {
+      expect(hurlStep("pitch", phase).forward).toBe(0);
+      expect(hurlStep("toss", phase).forward).toBe(0);
+    }
+  });
+
+  it("plants forward through the stride and is back on its spot by the end", () => {
+    // A hurler holds the ground the director gave it, so the step is a loan.
+    // Anything left over at phase 1 is a body that has to be snapped back.
+    expect(sample(-1).forward).toBe(0);
+    expect(sample(0).forward).toBe(0);
+    expect(sample(1).forward).toBeCloseTo(0, 5);
+    expect(sample(1).drop).toBeCloseTo(0, 5);
+    // Rising through the wind, furthest out as the rock leaves.
+    expect(sample(0.44).forward).toBeGreaterThan(sample(0.3).forward);
+    expect(sample(THROW_PROFILES.hurl.release).forward)
+      .toBeGreaterThan(sample(0.44).forward);
+    // Half a body-width: enough to read at RTS scale, short enough that the
+    // hurler is still standing in the band it was told to hold.
+    expect(sample(THROW_PROFILES.hurl.release).forward).toBeGreaterThan(0.5);
+    expect(sample(THROW_PROFILES.hurl.release).forward).toBeLessThan(0.7);
+  });
+
+  it("brings the hips down with it, or the split stance floats the feet", () => {
+    // There is no IK on these legs: a leg swung back about the hip takes its
+    // foot up with it. The drop is what pays for the split, so it has to be
+    // there wherever the body has travelled.
+    for (const phase of [0.44, 0.58, 0.72]) {
+      expect(sample(phase).drop).toBeGreaterThan(0);
+      expect(sample(phase).drop).toBeLessThan(sample(phase).forward);
+    }
   });
 });
 

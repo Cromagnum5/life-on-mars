@@ -77,6 +77,7 @@ export class BattleRuntime {
   private readonly deathFlash = new THREE.Vector3();
   private readonly rockOrigin = new THREE.Vector3();
   private readonly rockLanding = new THREE.Vector3();
+  private readonly rockLine = new THREE.Vector3();
   /** Dust off a ground strike goes up and out, not along a blade. */
   private readonly dustUp = new THREE.Vector3(0, 1, 0);
   private readonly orderedEvents: CombatEvent[] = [];
@@ -129,7 +130,20 @@ export class BattleRuntime {
     const byId = new Map(this.units.map((unit) => [unit.combatId, unit]));
     this.presentEvents(frame.events, byId);
     for (const event of frame.damage) {
-      byId.get(event.targetId)?.applyCombatDamage(event.amount, event.side);
+      const target = byId.get(event.targetId);
+      if (!target) continue;
+      // A rock carries a direction and a cut does not. Handing the target the
+      // line the rock came in on is what lets a killing throw knock it over
+      // backwards instead of toppling it to its own right every time.
+      const source = event.thrown ? byId.get(event.sourceId) : undefined;
+      const line = source
+        ? this.rockLine
+          .copy(target.group.position).sub(source.group.position).setY(0)
+        : null;
+      target.applyCombatDamage(
+        event.amount, event.side,
+        line && line.lengthSq() > 0.0001 ? line.normalize() : null,
+      );
     }
 
     this.frameDefeats.length = 0;

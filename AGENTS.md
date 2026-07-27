@@ -314,7 +314,16 @@ in, so moving `ATTACK_RANGE` or rebuilding the model moves them too.
 - Arc height is drawn from how *slow* a throw is, not from ballistics. All
   three are thrown far harder than their distance needs, so honest physics
   gives three flat lines; looping the slow ones is what makes the speed
-  difference visible.
+  difference visible. `ROCK_REFERENCE_SPEED` is a fixed reference rather than
+  the fastest throw: the hurl is thrown past it and sits pinned at the flat
+  base, and raising it to match would loop the other two more.
+- **A killing rock knocks its target down along its own line.** Damage carries
+  `sourceId` and `thrown`, presentation turns those into a world direction, and
+  the corpse tips its up-axis onto that line and is carried a little way down
+  it. A cut has no line worth carrying — it lands from a fighter standing right
+  there — so it keeps the sideways roll off `side`. Before this every rock kill
+  in the game toppled the same way, because `planThrow` has no side to give and
+  hardcodes `1`.
 
 ## Throw animation validation
 
@@ -337,6 +346,8 @@ wrong, and it checks things that were each caught by it in practice:
 - release heights fall off with the throw: hurl, then pitch, then toss;
 - feet stay near the ground (a thrower's rear heel lifts, so the limit is
   looser than the sword's, but they may not leave it);
+- release heights fall off with the throw, which is also what catches a hurl
+  crouched too deep into its own stride;
 - consecutive phases are distinguishable at RTS scale;
 - the pose settles back to the ready stance.
 
@@ -355,7 +366,15 @@ Three traps worth knowing before touching it:
   arm runs on `THROW_ARM_KEYS`, because the shoulder only holds the arm above
   shoulder height through a narrow band of angles and a sum of beats walks out
   of that band between two good poses. Adding a beat term to the throwing arm
-  reintroduces the dropped elbow the keys exist to avoid.
+  reintroduces the dropped elbow the keys exist to avoid. The aiming arm has
+  the same problem for a smaller reason — draw and stride overlap — so it runs
+  on the larger of the two rather than their sum.
+- **A leg swung back takes its foot up with it.** There is no IK: the pose is
+  bone rotations over a body whose height comes from the terrain. So the hurl's
+  step splits the stance and then pays for it, and `hurlStep` returns a `drop`
+  alongside its `forward` for exactly that. Widen a stance without it and the
+  feet float; overpay and the front sole goes under the ground and the release
+  height sinks below the pitch's.
 - **Clear the imported animation data before rendering.** The GLB carries
   Idle, Walk and CombatIdle, and Blender re-applies whichever is assigned every
   time it renders a frame. Miss this and the measurements are right while every
