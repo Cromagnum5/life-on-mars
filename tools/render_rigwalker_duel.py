@@ -39,9 +39,13 @@ for rig in (rigA,rigB):
 scene=bpy.context.scene; scene.frame_start=1; scene.frame_end=168; scene.render.fps=24
 
 def offset(rig,name,xyz):
+    # 'ZYX', not 'XYZ': Three.js composes its default XYZ Euler as qx*qy*qz,
+    # which is the order Blender calls ZYX. A bone given two non-zero angles at
+    # once lands somewhere else under Blender's own 'XYZ', so posing with that
+    # would validate and draw a duel the game never renders.
     b=rig.pose.bones.get(name)
     if not b:return
-    q=Euler(xyz,'XYZ').to_quaternion()
+    q=Euler(xyz,'ZYX').to_quaternion()
     b.rotation_quaternion=rests[rig][name] @ q
 
 def pose_combat(rig, phase, side=1, guarding=0, hit=0):

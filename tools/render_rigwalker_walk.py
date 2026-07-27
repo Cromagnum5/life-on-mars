@@ -39,9 +39,13 @@ camera.rotation_euler = (Vector((0, 0, 1.8)) - camera.location).to_track_quat('-
 scene.camera = camera
 
 def add_offset(name, xyz):
+    # 'ZYX', not 'XYZ': Three.js composes its default XYZ Euler as qx*qy*qz,
+    # which is the order Blender calls ZYX. A bone given two non-zero angles at
+    # once lands somewhere else under Blender's own 'XYZ', so posing with that
+    # would draw a walk the game never renders.
     bone = rig.pose.bones.get(name)
     if bone is not None:
-        bone.rotation_quaternion = bone.rotation_quaternion @ Euler(xyz, 'XYZ').to_quaternion()
+        bone.rotation_quaternion = bone.rotation_quaternion @ Euler(xyz, 'ZYX').to_quaternion()
 
 def overlay(lean_x, lean_z, stance, crouch, step, side):
     # Walking stays on the authored clip until foot-aware balance is available.

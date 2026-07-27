@@ -321,18 +321,31 @@ wrong, and it checks things that were each caught by it in practice:
 
 - the rock ends up in front of the body at release, not behind it;
 - the wind-up actually travels (1.5 m for a hurl, 0.5 m for a toss);
-- release heights order overhand > three-quarter > underhand;
+- the rock comes over the top of the head, and the elbow stays above the
+  shoulder from the moment the rock clears it until the release — that pair is
+  what "overhand" means as a claim about the whole arc rather than one pose;
+- release heights fall off with the throw: hurl, then pitch, then toss;
 - feet stay near the ground (a thrower's rear heel lifts, so the limit is
   looser than the sword's, but they may not leave it);
 - consecutive phases are distinguishable at RTS scale;
 - the pose settles back to the ready stance.
 
-Two traps worth knowing before touching it:
+Three traps worth knowing before touching it:
 
+- **Blender's Euler `XYZ` is not Three.js's.** Three.js composes its default
+  XYZ as `qx*qy*qz`; Blender calls that order `ZYX`. All three Blender tools
+  pose with `'ZYX'` for that reason. Get this wrong and any bone carrying two
+  non-zero angles is validated and drawn in a pose the game never renders —
+  which is what happened, silently, until it was caught.
 - **Bone axis signs are measured, not guessed.** They are listed in the comment
   above `applyThrowPose`; the Z-up to Y-up conversion moves them, and the
   Euler order means a shoulder's abduction changes what its elevation does.
   When a pose fights back, measure a single axis at a time rather than reason.
+- **The throwing arm is keyed, not summed.** The body runs on beats, but the
+  arm runs on `THROW_ARM_KEYS`, because the shoulder only holds the arm above
+  shoulder height through a narrow band of angles and a sum of beats walks out
+  of that band between two good poses. Adding a beat term to the throwing arm
+  reintroduces the dropped elbow the keys exist to avoid.
 - **Clear the imported animation data before rendering.** The GLB carries
   Idle, Walk and CombatIdle, and Blender re-applies whichever is assigned every
   time it renders a frame. Miss this and the measurements are right while every

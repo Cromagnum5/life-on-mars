@@ -341,6 +341,12 @@ function applyCombatPose(bones: CombatBones, input: CombatPoseInput): void {
  *
  * X reads the same on both arms; Y and Z mirror, which is the same rule the
  * sword lines follow.
+ *
+ * Those readings are one axis at a time. Two at once do not add up, because
+ * these are Euler angles: `setBoneOffset` composes them in Three.js's default
+ * XYZ order, so the later axes turn in a frame the earlier ones have already
+ * moved. It matters most for the shoulder, where the arm is only ever above
+ * the shoulder through a narrow band of angles — see `THROW_ARM_KEYS`.
  */
 
 type ThrowPoseInput = {
@@ -375,30 +381,120 @@ const THROW_BEATS: Record<ThrowType, Record<keyof ThrowDrive, Beat>> = {
   // A long wind: a full coil, a stride that opens the hips while the shoulders
   // stay shut, then everything unwinds at once.
   hurl: {
-    draw: [0, 0.3, 0.34, 0.5],
-    stride: [0.3, 0.46, 0.52, 0.64],
-    // The whip is deliberately still climbing at the release phase, so the rock
-    // leaves near the top of the arc rather than after the arm has come down.
-    whip: [0.46, 0.6, 0.8, 0.94],
-    follow: [0.66, 0.8, 0.9, 1],
+    draw: [0, 0.26, 0.4, 0.56],
+    stride: [0.26, 0.44, 0.58, 0.76],
+    // The whip peaks on the release phase, so the body is squarest to the
+    // target at the moment the rock leaves rather than after it.
+    whip: [0.4, 0.58, 0.58, 0.82],
+    follow: [0.58, 0.74, 0.86, 1],
   },
   // No stride and half the coil: a shoulder pitch thrown off a planted stance.
   pitch: {
-    draw: [0, 0.24, 0.26, 0.4],
-    stride: [0.18, 0.3, 0.34, 0.46],
-    whip: [0.3, 0.44, 0.52, 0.7],
-    follow: [0.44, 0.58, 0.8, 1],
+    draw: [0, 0.2, 0.3, 0.44],
+    stride: [0.18, 0.32, 0.44, 0.62],
+    whip: [0.28, 0.44, 0.44, 0.68],
+    follow: [0.44, 0.6, 0.84, 1],
   },
-  // Barely a wind at all: the elbow and the wrist do all of it.
+  // Barely a wind at all: the arm is up and gone before the body has moved.
   toss: {
-    draw: [0, 0.18, 0.2, 0.34],
-    stride: [0.1, 0.2, 0.24, 0.36],
-    whip: [0.2, 0.32, 0.4, 0.58],
+    draw: [0, 0.12, 0.18, 0.3],
+    stride: [0.08, 0.18, 0.3, 0.46],
+    whip: [0.18, 0.32, 0.32, 0.52],
     // Kept moving through the whole recovery: a flick that freezes after the
     // release reads as a dropped frame at RTS scale.
-    follow: [0.32, 0.44, 0.62, 0.95],
+    follow: [0.32, 0.46, 0.74, 0.95],
   },
 };
+
+/**
+ * One pose of the throwing arm, as offsets from the imported rest pose.
+ *
+ * The rest of the body is driven by beats, summing a coefficient per bone. The
+ * throwing arm cannot be: the shoulder only holds the arm above shoulder height
+ * through a narrow band of Euler angles, and summing a cocked pose against a
+ * released one walks straight out of that band on the way between them. The arm
+ * comes out hanging at the hip halfway through, which is exactly the dropped
+ * elbow that made these throws read as sidearm. Keys placed along the arc keep
+ * the arm inside the band the whole way.
+ *
+ * Every key was solved against the imported skeleton for a written-down hand
+ * and elbow position, by `tools/render_rigwalker_throw.py`, which also checks
+ * that the shipped numbers still trace the arc.
+ */
+type ThrowArmKey = {
+  /** Phase this pose lands on. Keys are in order and the ends are the ready pose. */
+  at: number;
+  upperX: number;
+  upperY: number;
+  upperZ: number;
+  lowerX: number;
+  handX: number;
+};
+
+/** Bladed and settled: rock hand low at the hip, elbow loose. */
+const READY_THROW_ARM: ThrowArmKey = {
+  at: 0, upperX: -0.35, upperY: 0, upperZ: -0.3, lowerX: -0.45, handX: 0,
+};
+
+/**
+ * The arc, one entry per pose the hand passes through: the rock gathers back
+ * and low, comes up cocked beside the ear with the elbow already above the
+ * shoulder, tops out above the head, leaves the hand out in front and high,
+ * then rides down and across the body. The three throws trace the same arc,
+ * differing in how early they get there and how far they carry it.
+ */
+const THROW_ARM_KEYS: Record<ThrowType, readonly ThrowArmKey[]> = {
+  hurl: [
+    READY_THROW_ARM,
+    { at: 0.14, upperX: -0.89, upperY: 0.17, upperZ: -0.79, lowerX: 1.35, handX: 0.45 },
+    { at: 0.3, upperX: -1.25, upperY: 1.62, upperZ: -1.23, lowerX: 1.7, handX: 0.55 },
+    { at: 0.48, upperX: -1.6, upperY: 1.7, upperZ: -1.52, lowerX: 1.15, handX: 0.35 },
+    { at: 0.58, upperX: -1.47, upperY: 1.49, upperZ: -1.42, lowerX: 0.2, handX: -0.35 },
+    { at: 0.7, upperX: -0.98, upperY: 0.94, upperZ: -0.77, lowerX: 0.55, handX: 0.05 },
+    { at: 0.85, upperX: -0.32, upperY: 0.5, upperZ: -0.2, lowerX: 1, handX: 0.25 },
+    { ...READY_THROW_ARM, at: 1 },
+  ],
+  pitch: [
+    READY_THROW_ARM,
+    { at: 0.1, upperX: -0.92, upperY: -0.14, upperZ: -1.16, lowerX: 1.3, handX: 0.45 },
+    { at: 0.24, upperX: -1.5, upperY: 1.62, upperZ: -0.84, lowerX: 1.65, handX: 0.5 },
+    { at: 0.38, upperX: -1.64, upperY: 1.68, upperZ: -1.67, lowerX: 1.1, handX: 0.3 },
+    { at: 0.44, upperX: -1.33, upperY: 1.56, upperZ: -1.31, lowerX: 0.3, handX: -0.3 },
+    { at: 0.58, upperX: -0.78, upperY: 1.1, upperZ: -0.69, lowerX: 0.6, handX: 0.05 },
+    { at: 0.8, upperX: -0.32, upperY: 0.45, upperZ: -0.24, lowerX: 1, handX: 0.2 },
+    { ...READY_THROW_ARM, at: 1 },
+  ],
+  toss: [
+    READY_THROW_ARM,
+    { at: 0.16, upperX: -1.1, upperY: 0.6, upperZ: -1.56, lowerX: 1.75, handX: 0.55 },
+    { at: 0.26, upperX: -1.69, upperY: 1.49, upperZ: -1.64, lowerX: 1.35, handX: 0.35 },
+    { at: 0.32, upperX: -1.15, upperY: 1.44, upperZ: -1.26, lowerX: 0.65, handX: -0.2 },
+    { at: 0.46, upperX: -0.63, upperY: 1.05, upperZ: -0.79, lowerX: 0.75, handX: 0.05 },
+    { at: 0.7, upperX: -0.34, upperY: 0.4, upperZ: -0.32, lowerX: 0.95, handX: 0.2 },
+    { ...READY_THROW_ARM, at: 1 },
+  ],
+};
+
+const throwArmScratch: ThrowArmKey = { ...READY_THROW_ARM };
+
+/** The arm pose partway between the two keys the phase falls between. */
+function throwArmPose(throwType: ThrowType, phase: number): ThrowArmKey {
+  const out = throwArmScratch;
+  if (phase < 0) return Object.assign(out, READY_THROW_ARM);
+  const keys = THROW_ARM_KEYS[throwType];
+  let index = 0;
+  while (index < keys.length - 2 && phase > keys[index + 1].at) index += 1;
+  const from = keys[index];
+  const to = keys[index + 1];
+  const blend = smoothRange(phase, from.at, to.at);
+  out.at = phase;
+  out.upperX = from.upperX + (to.upperX - from.upperX) * blend;
+  out.upperY = from.upperY + (to.upperY - from.upperY) * blend;
+  out.upperZ = from.upperZ + (to.upperZ - from.upperZ) * blend;
+  out.lowerX = from.lowerX + (to.lowerX - from.lowerX) * blend;
+  out.handX = from.handX + (to.handX - from.handX) * blend;
+  return out;
+}
 
 function throwDrive(throwType: ThrowType, phase: number): ThrowDrive {
   const beats = THROW_BEATS[throwType];
@@ -432,20 +528,23 @@ function addHitReaction(
 }
 
 /**
- * The hurler's three throws. Each is one continuous motion driven by the same
- * four beats, and each is a different way of getting a rock moving:
+ * The hurler's three throws. All three are the same overhand motion — the rock
+ * goes back and up, the elbow leads it above the shoulder, the hand comes over
+ * the top and lets go out in front and high, and the arm rides down across the
+ * body — and they differ in how much of the fighter goes into it:
  *
- * - `hurl` is the whole body. The rock is drawn back past the ear over a coiled
- *   torso, the left arm points out at the target, the front foot strides, the
- *   hips open ahead of the shoulders, and the arm slings over the top with the
- *   wrist last. It is slow, and it is why standing off is worth it.
- * - `pitch` is the arm and shoulder only, thrown from a three-quarter slot off
- *   a planted stance. Half the coil, no stride, no aiming arm.
- * - `toss` is a flick from the hip: elbow and wrist, underhand, weight centred,
- *   done before the wind-up of a hurl would have finished.
+ * - `hurl` is the whole body. A full coil, the left arm pointing out at the
+ *   target, a front-foot stride, hips opening ahead of the shoulders, and the
+ *   arm slinging over last. It is slow, and it is why standing off is worth it.
+ * - `pitch` is thrown off a planted stance: half the coil, no stride, no aiming
+ *   arm, the arm doing the work.
+ * - `toss` is a dart. The arm is up and gone before the body has moved, done
+ *   before the wind-up of a hurl would have finished.
  *
- * Everything is written as an offset from the imported rest pose, and every
- * foot angle cancels the joints above it so the soles stay flat on the ground.
+ * The body runs on the four beats. The arm runs on `THROW_ARM_KEYS`, for the
+ * reason given there. Everything is written as an offset from the imported rest
+ * pose, and every foot angle cancels the joints above it so the soles stay flat
+ * on the ground.
  */
 function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
   const { throwType, attackPhase, aimPhase, line, hitPhase, intensity, combatStep } = input;
@@ -454,81 +553,62 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
   const aim = aimPhase >= 0 ? smoothRange(aimPhase, 0, 0.45) : 0;
   const ready = 1 - Math.max(draw, stride, whip, follow);
 
+  const arm = throwArmPose(throwType, attackPhase);
+  setBoneOffset(bones.upperArmR, bones.armRest.upperArmR, arm.upperX, arm.upperY, arm.upperZ);
+  setBoneOffset(bones.lowerArmR, bones.armRest.lowerArmR, arm.lowerX, 0, 0);
+  setBoneOffset(bones.handR, bones.armRest.handR, arm.handX, 0, 0);
+
   if (throwType === "hurl") {
     // Hips lead the shoulders. The separation between the two during the stride
     // is what makes a throw read as a throw rather than an arm swing.
     const hip = 0.85 * draw + 0.15 * stride - 0.9 * whip - 0.6 * follow;
     const chest = 1 * draw + 0.9 * stride - 1 * whip - 0.5 * follow;
     setBoneOffset(bones.root, bones.bodyRest.root,
-      -0.16 * draw + 0.04 * stride + 0.1 * whip + 0.12 * follow,
+      -0.16 * draw + 0.04 * stride + 0.16 * whip + 0.3 * follow,
       0.34 * hip,
       -0.14 * draw - 0.08 * stride + 0.08 * whip + 0.12 * follow);
     setBoneOffset(bones.spine, bones.bodyRest.spine,
-      0.04 + 0.1 * draw - 0.22 * follow, 0.3 * chest, 0.06 * draw - 0.05 * follow);
+      0.04 + 0.1 * draw - 0.26 * follow, 0.3 * chest, 0.06 * draw - 0.05 * follow);
+    // Finishes bent over the front leg, the way a thrown-out arm ends.
     setBoneOffset(bones.chest, bones.bodyRest.chest,
-      0.03 + 0.16 * draw - 0.26 * follow, 0.44 * chest, 0.05 * draw - 0.08 * follow);
+      0.03 + 0.16 * draw - 0.3 * follow, 0.44 * chest, 0.05 * draw - 0.08 * follow);
     // The eyes stay on the target through a coil of nearly sixty degrees.
     setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08 - 0.06 * follow, -0.5 * chest, 0);
     setBoneOffset(bones.head, bones.bodyRest.head, -0.03 + 0.08 * aim, -0.35 * chest, 0);
 
-    setBoneOffset(bones.upperArmR, bones.armRest.upperArmR,
-      -0.35 + 1.35 * draw + 1.05 * stride - 1.55 * whip + 0.85 * follow,
-      0.85 * draw + 0.7 * stride - 1.1 * whip - 0.5 * follow,
-      -0.3 - 0.55 * draw - 0.15 * stride - 0.35 * whip + 0.95 * follow);
-    setBoneOffset(bones.lowerArmR, bones.armRest.lowerArmR,
-      -0.45 + 1.5 * draw + 1.35 * stride - 0.25 * whip + 0.55 * follow,
-      0, 0.2 * draw + 0.45 * follow);
-    // Last link in the chain, and the fastest: the wrist is still cocked at the
-    // top of the whip and has snapped through by the time the rock is gone.
-    setBoneOffset(bones.handR, bones.armRest.handR,
-      0.55 * draw + 0.4 * stride - 0.85 * whip - 0.25 * follow,
-      0, -0.2 * draw + 0.3 * follow);
-
     // The aiming arm: raised at the target through the wind, then pulled down
     // hard into the ribs, which is what the throwing shoulder rotates around.
     setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
-      -0.3 - 1.35 * draw - 1.45 * stride + 1.15 * whip + 0.9 * follow - 0.35 * aim,
+      -0.3 - 0.6 * draw - 0.55 * stride + 0.75 * whip + 0.3 * follow - 0.35 * aim,
       0, -0.1 - 0.25 * stride + 0.2 * follow);
     setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
-      -0.35 - 0.55 * draw - 0.6 * stride + 0.9 * whip + 1 * follow - 0.3 * aim,
+      -0.35 - 0.35 * draw - 0.35 * stride + 0.55 * whip + 0.45 * follow - 0.3 * aim,
       0, -0.05);
     setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
 
     // Left leg strides out and takes the weight; the right trails and its knee
     // folds instead of its heel lifting.
-    const upperL = -0.06 + 0.14 * draw - 0.22 * stride - 0.22 * whip - 0.14 * follow + combatStep;
+    const upperL = -0.06 + 0.14 * draw - 0.16 * stride - 0.14 * whip - 0.1 * follow + combatStep;
     const lowerL = 0.24 + 0.16 * draw + 0.14 * stride + 0.08 * whip + 0.14 * follow;
-    const upperR = 0.06 + 0.2 * draw + 0.26 * stride + 0.16 * whip + 0.07 * follow - combatStep;
-    const lowerR = 0.24 + 0.26 * draw + 0.1 * stride + 0.1 * whip + 0.08 * follow;
+    const upperR = 0.06 + 0.16 * draw + 0.13 * stride + 0.07 * whip + 0.04 * follow - combatStep;
+    const lowerR = 0.24 + 0.18 * draw + 0.07 * stride + 0.07 * whip + 0.06 * follow;
     setLegs(bones, upperL, lowerL, upperR, lowerR);
   } else if (throwType === "pitch") {
     const coil = 0.95 * draw + 0.7 * stride - 0.95 * whip - 0.4 * follow;
     setBoneOffset(bones.root, bones.bodyRest.root,
-      -0.1 * draw + 0.22 * whip + 0.3 * follow, 0.16 * coil, -0.08 * draw + 0.1 * follow);
+      -0.1 * draw + 0.18 * whip + 0.24 * follow, 0.16 * coil, -0.08 * draw + 0.1 * follow);
     setBoneOffset(bones.spine, bones.bodyRest.spine,
-      0.04 + 0.05 * draw - 0.12 * follow, 0.17 * coil, 0);
+      0.04 + 0.05 * draw - 0.16 * follow, 0.17 * coil, 0);
     setBoneOffset(bones.chest, bones.bodyRest.chest,
-      0.03 + 0.08 * draw - 0.16 * follow, 0.24 * coil, 0);
+      0.03 + 0.08 * draw - 0.22 * follow, 0.24 * coil, 0);
     setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08, -0.32 * coil, 0);
     setBoneOffset(bones.head, bones.bodyRest.head, -0.03 + 0.06 * aim, -0.24 * coil, 0);
 
-    // A three-quarter slot: the elbow stays out at shoulder height rather than
-    // going over the top, so the arc is visibly flatter than a hurl's.
-    setBoneOffset(bones.upperArmR, bones.armRest.upperArmR,
-      -0.35 + 0.85 * draw + 0.62 * stride - 1.05 * whip - 0.5 * follow,
-      0.5 * draw + 0.4 * stride - 0.7 * whip - 0.3 * follow,
-      -0.85 - 0.3 * draw + 1.15 * whip + 0.7 * follow);
-    setBoneOffset(bones.lowerArmR, bones.armRest.lowerArmR,
-      -0.45 + 1.1 * draw + 0.95 * stride - 0.7 * whip + 0.4 * follow,
-      0, 0.15 * draw + 0.3 * follow);
-    setBoneOffset(bones.handR, bones.armRest.handR,
-      0.4 * draw + 0.3 * stride - 0.6 * whip - 0.15 * follow, 0, 0.2 * follow);
-
     // The free arm only counterbalances; there is no time to aim with it.
     setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
-      -0.32 - 0.3 * draw + 0.45 * whip + 0.55 * follow, 0, -0.08);
+      -0.32 - 0.3 * draw + 0.75 * whip + 0.5 * follow, 0, -0.08);
     setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
-      -0.5 - 0.2 * draw + 0.35 * whip + 0.45 * follow, 0, -0.05);
+      -0.5 - 0.2 * draw + 0.55 * whip + 0.45 * follow, 0, -0.05);
     setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
 
     const upperL = -0.02 + 0.06 * draw - 0.1 * whip - 0.08 * follow + combatStep;
@@ -540,25 +620,17 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
     const coil = 0.5 * draw - 0.45 * whip - 0.2 * follow;
     setBoneOffset(bones.root, bones.bodyRest.root,
       0.06 * draw + 0.12 * whip + 0.14 * follow, 0.1 * coil, 0);
-    setBoneOffset(bones.spine, bones.bodyRest.spine, 0.04 + 0.06 * draw, 0.12 * coil, 0);
-    setBoneOffset(bones.chest, bones.bodyRest.chest, 0.03 + 0.05 * draw, 0.16 * coil, 0);
+    setBoneOffset(bones.spine, bones.bodyRest.spine,
+      0.04 + 0.06 * draw - 0.08 * follow, 0.12 * coil, 0);
+    setBoneOffset(bones.chest, bones.bodyRest.chest,
+      0.03 + 0.05 * draw - 0.12 * follow, 0.16 * coil, 0);
     setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08, -0.2 * coil, 0);
     setBoneOffset(bones.head, bones.bodyRest.head, -0.03, -0.16 * coil, 0);
 
-    // Underhand from the hip. The shoulder barely travels; the read is the
-    // elbow opening and the wrist flicking up, so both are given full range.
-    setBoneOffset(bones.upperArmR, bones.armRest.upperArmR,
-      -0.05 + 0.55 * draw + 0.35 * stride - 0.8 * whip - 0.55 * follow,
-      0.2 * draw - 0.3 * whip,
-      -0.34 - 0.14 * draw + 0.1 * whip + 0.3 * follow);
-    setBoneOffset(bones.lowerArmR, bones.armRest.lowerArmR,
-      -0.3 + 0.5 * draw + 0.35 * stride - 0.15 * whip + 0.25 * follow,
-      0, 0.08 * draw);
-    setBoneOffset(bones.handR, bones.armRest.handR,
-      0.7 * draw + 0.5 * stride - 1.05 * whip - 0.2 * follow, 0, 0.1 * follow);
-
-    setBoneOffset(bones.upperArmL, bones.armRest.upperArmL, -0.34 + 0.14 * whip, 0, -0.1);
-    setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL, -0.62 + 0.12 * whip, 0, -0.06);
+    setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
+      -0.34 + 0.3 * whip + 0.2 * follow, 0, -0.1);
+    setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
+      -0.62 + 0.3 * whip + 0.2 * follow, 0, -0.06);
     setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
 
     const upperL = -0.02 - 0.08 * whip + combatStep;

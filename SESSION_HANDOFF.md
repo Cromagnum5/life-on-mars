@@ -41,15 +41,17 @@ by anything that closes on it.
 
 ## The animations, and how they were got right
 
-Three throws, each a different way of getting a rock moving, driven by the same
-four beats (draw, stride, whip, follow) with different timings and amplitudes:
+All three throws are overhand, the way a baseball is thrown: the rock gathers
+back and low, the elbow leads it up above the shoulder, the hand comes over the
+top and lets go out in front and high, and the arm rides down across the body.
+They differ in how much of the fighter goes into it. The body is driven by four
+beats (draw, stride, whip, follow); the arm is keyed, for the reason below.
 
-- **hurl** — full body. Rock drawn back past the ear over a coiled torso, left
-  arm pointing out at the target, front foot striding, hips opening ahead of the
-  shoulders, arm slinging over the top with the wrist last.
-- **pitch** — arm and shoulder only, off a planted stance. Half the coil, no
-  stride, no aiming arm.
-- **toss** — a flick from the hip. Elbow and wrist, underhand, weight centred.
+- **hurl** — full body. A coiled torso, left arm pointing out at the target,
+  front foot striding, hips opening ahead of the shoulders, arm slinging over
+  last. Releases at 3.88 m, roughly a metre above the head.
+- **pitch** — off a planted stance. Half the coil, no stride, no aiming arm.
+- **toss** — a dart. The arm is up and gone before the body has moved.
 
 None of this was written from first principles. The bone axes were **measured**
 first, one rotation at a time on the imported GLB, because the Z-up to Y-up
@@ -71,9 +73,35 @@ Everything it currently checks, it caught at least once:
    because Blender re-applies the GLB's own actions on every render. Clearing
    the animation data is the fix, and the tool now does it.
 
-Final geometry: release heights 2.81 / 2.51 / 1.65 m (overhand, three-quarter,
-underhand), foot drift under 0.31 m, recovery error 0.0 degrees. The sword duel
-still validates unchanged at 0.069 m drift and 0.00 degrees.
+Final geometry: release heights 3.88 / 3.71 / 3.46 m, all of them above the
+head, foot drift under 0.19 m, recovery error 0.0 degrees. The sword duel still
+validates at 0.069 m drift and 0.00 degrees.
+
+### Why the arm is keyed and the body is not
+
+The first version of these throws summed beat coefficients for every bone,
+including the throwing arm, and read as sidearm. Two things were wrong, and
+both are the kind that measure clean and look wrong:
+
+1. **Blender's Euler `XYZ` is not Three.js's.** Three.js composes its default
+   XYZ as `qx*qy*qz`; Blender calls that order `ZYX`. Every Blender tool here
+   was posing with Blender's `'XYZ'`, so any bone with two non-zero angles —
+   which is every shoulder in a throw — was measured and rendered in a pose the
+   game never drew. All three tools now pose with `'ZYX'`.
+2. **A sum of beats cannot trace this arc.** On this rig the arm is only above
+   shoulder height through a narrow band of shoulder angles. Blending from a
+   cocked pose to a released one walks straight out of that band in between:
+   halfway through, the arm is hanging at the hip with the elbow below the
+   shoulder, and the throw reads as a sling round the side however good the two
+   end poses are. `THROW_ARM_KEYS` places poses along the arc instead, each one
+   solved against the imported skeleton for a written-down hand *and elbow*
+   position. Constraining the elbow is the part that matters: the hand alone can
+   be put in the right place by an arm wrapped any number of ways.
+
+The tool now checks the arc rather than the release pose — the rock has to clear
+the head, and once it is above the shoulder the elbow has to stay above it too,
+sampled every hundredth of a phase because the dropped-elbow dip lives between
+two good keys and a coarse sweep steps over it.
 
 ## Architecture notes worth preserving
 
