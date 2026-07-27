@@ -6,8 +6,10 @@ Branch `rigwalker-hurler`, off `main` at `c644c70`. The whole session is one
 feature: a second Rigwalker that throws rocks. Nothing is pushed; merging and
 pushing are the user's call.
 
-Production remains one Rigwalker every 20 seconds, and every third one off the
-line is now a Hurler.
+The Assembly Bay opens every 20 seconds, and what comes out alternates: two
+swords abreast, then a single Hurler, repeating. `PRODUCTION_ORDER` in
+`production.ts` is the whole of it; `production.test.ts` pins the order, the
+cadence, and that a pair walks clear of the door instead of jamming it.
 
 Run these checks after further combat changes:
 

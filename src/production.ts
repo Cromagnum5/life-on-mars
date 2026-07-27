@@ -1,13 +1,24 @@
 import * as THREE from "three";
 import { createRigwalker, type Rigwalker } from "./rigwalker";
+import type { CombatRole } from "./combat";
 import type { RigwalkerAsset } from "./rigwalker-assets";
 
 const PRODUCTION_SECONDS = 20;
 /**
- * Every third Rigwalker off the line is a hurler. A mixed field is the point:
- * the swords walk in while the rocks come from behind them.
+ * What comes out of the door, one entry per opening, repeating. A pair of
+ * swords, then a hurler behind them: a mixed field is the point, and arriving
+ * in that order is what lets the swords be in front when the rocks start.
  */
-const HURLER_EVERY = 3;
+const PRODUCTION_ORDER: readonly (readonly CombatRole[])[] = [
+  ["melee", "melee"],
+  ["hurler"],
+];
+/**
+ * How far apart a batch stands as it comes out, across the line it walks. Wider
+ * than the separation radius, so a pair is not shoving itself apart on the
+ * doorstep, and well inside the 5.5 m door.
+ */
+const ABREAST_SPACING = 1.5;
 const DOOR_SPEED = 1.4;
 const DOOR_HEIGHT = 2.9;
 const OPEN_DOOR_SCALE = 0.12;
@@ -33,7 +44,7 @@ export class AssemblyBayProduction {
   private readonly rallyPoint: THREE.Vector3;
   private readonly accent: number;
   private readonly corporation: string;
-  private produced = 0;
+  private batch = 0;
   private phase: ProductionPhase = "producing";
   private productionElapsed = 0;
   private phaseElapsed = 0;
@@ -78,7 +89,7 @@ export class AssemblyBayProduction {
       this.doorOpen = Math.min(1, this.doorOpen + DOOR_SPEED * delta);
       this.applyDoorPose();
       if (this.doorOpen >= 1) {
-        this.spawnRigwalker();
+        this.spawnBatch();
         this.phase = "exiting";
         this.phaseElapsed = 0;
         this.productionElapsed = 0;
@@ -129,21 +140,39 @@ export class AssemblyBayProduction {
       this.closedDoorY + (DOOR_HEIGHT / 2) * (1 - scale);
   }
 
-  private spawnRigwalker(): void {
-    this.produced += 1;
-    const rigwalker = createRigwalker(
-      this.rigwalkerAsset, this.accent, this.corporation, Math.random,
-      { role: this.produced % HURLER_EVERY === 0 ? "hurler" : "melee" },
-    );
-    rigwalker.group.position.set(
-      this.spawnPosition.x,
-      this.terrainHeightAt(this.spawnPosition.x, this.spawnPosition.y) + 0.2,
-      this.spawnPosition.y,
-    );
-
-    rigwalker.moveTo(this.rallyPoint);
-    this.units.push(rigwalker);
-    this.scene.add(rigwalker.group);
+  /** Everything this opening of the door is for: one entry of the order. */
+  private spawnBatch(): void {
+    const roles = PRODUCTION_ORDER[this.batch % PRODUCTION_ORDER.length];
+    this.batch += 1;
+    // Abreast of each other rather than stacked, laid out across the way they
+    // are about to walk, so a pair comes out of the bay as a pair.
+    const across = this.exitLine();
+    for (const [index, role] of roles.entries()) {
+      const offset = (index - (roles.length - 1) / 2) * ABREAST_SPACING;
+      const x = this.spawnPosition.x + across.x * offset;
+      const z = this.spawnPosition.y + across.y * offset;
+      const rigwalker = createRigwalker(
+        this.rigwalkerAsset, this.accent, this.corporation, Math.random, { role },
+      );
+      rigwalker.group.position.set(x, this.terrainHeightAt(x, z) + 0.2, z);
+      rigwalker.moveTo(this.rallyPoint);
+      this.units.push(rigwalker);
+      this.scene.add(rigwalker.group);
+    }
   }
 
+  /**
+   * The direction across the walk out of the door, on the ground plane. A rally
+   * point sitting on the spawn leaves nothing to be across of, so that falls
+   * back to world X rather than dividing by zero.
+   */
+  private exitLine(): THREE.Vector2 {
+    const forward = new THREE.Vector2(
+      this.rallyPoint.x - this.spawnPosition.x,
+      this.rallyPoint.z - this.spawnPosition.y,
+    );
+    if (forward.lengthSq() < 1e-6) return new THREE.Vector2(1, 0);
+    forward.normalize();
+    return new THREE.Vector2(-forward.y, forward.x);
+  }
 }

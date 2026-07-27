@@ -68,9 +68,9 @@ Avoid the name “Optimus” because of its strong association with Transformers
 ## First playable slice
 
 The initial slice has a small bounded Martian map and three pre-placed
-buildings. The Assembly Bay produces one Rigwalker every 30 seconds. Units come
-out through its spawn door, can be selected with left click, and receive move
-orders with right click. The Reactor and Extractor initially generate simple
+buildings. The Assembly Bay opens every 20 seconds. Units come out through its
+spawn door, can be selected with left click, and receive move orders with right
+click. The Reactor and Extractor initially generate simple
 power/resource values over time.
 
 Do not expand the first slice into construction, combat, enemies, complex
@@ -98,9 +98,10 @@ a compact control hint, and distinct primitive models for the Reactor, Assembly
 Bay, Extractor, and Rigwalker. The Rigwalker has an articulated procedural walk
 cycle, can be selected with left click, and accepts terrain movement orders with
 right click. It turns smoothly, follows the terrain, and returns to idle on
-arrival. The Assembly Bay produces a new independently controllable Rigwalker
-every 30 seconds: its shutter opens, the unit walks from inside to a clear rally
-point, and the shutter closes. Selected units show an orange ring, movement
+arrival. The Assembly Bay opens every 20 seconds: its shutter rises, the batch
+walks from inside to a clear rally point, and the shutter closes. The batches
+alternate — two swords together, then a single hurler, repeating — so the line
+puts the melee out in front of the rocks. Selected units show an orange ring, movement
 orders pulse on the terrain, and the operations HUD reports power, ore, unit
 count, selection, and Assembly Bay progress. Units support single-click and
 left-drag marquee selection, with group orders arranged into a loose formation.
@@ -127,9 +128,8 @@ third Rigwalker, so the game fields a mixed line without new interface.
 ## Current playtest
 
 The nine-step vertical slice has been manually playtested and feels good. The
-current soak test is to leave the game running while the Assembly Bay produces
-one Rigwalker every 30 seconds, then observe movement and interaction with many
-units on screen.
+current soak test is to leave the game running while the Assembly Bays keep
+producing, then observe movement and interaction with many units on screen.
 
 Before optimizing, measure the actual failure mode. Likely scaling pressure
 points are:
@@ -145,8 +145,10 @@ points are:
 - Local steering is lightweight rather than full pathfinding. Dense crowds may
   reveal oscillation or congestion around building footprints.
 
-Do not change the established WASD/wheel camera controls or the 30-second
-production interval as part of performance work. Preserve left-click selection,
+Do not change the established WASD/wheel camera controls or the production
+cadence as part of performance work. The 20-second interval and the two-swords
+then-one-hurler order in `PRODUCTION_ORDER` are the user's calls, not tuning
+knobs. Preserve left-click selection,
 drag-box multi-selection, right-click orders, randomized rally points, and the
 Blender-model fallback behavior unless playtest evidence calls for a specific
 change.
