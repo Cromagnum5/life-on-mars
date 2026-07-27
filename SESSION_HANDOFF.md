@@ -3,8 +3,8 @@
 ## Current checkpoint
 
 Branch `three-swords-then-a-hurler`, clean tree, two commits ahead of `main`:
-`5e2b8c5` (`Send the swords out three at a time`) and the Stoneworks commit on
-top of it. `main` is at `ac71199` and is 4 commits ahead of `origin/main`;
+`5e2b8c5` (`Send the swords out three at a time`) and `d661abb` (`Give the
+hurlers a building of their own`). `main` is at `ac71199` and is 4 commits ahead of `origin/main`;
 nothing is pushed, and both merging and pushing are the user's call.
 
 Earlier session commits, oldest first:
