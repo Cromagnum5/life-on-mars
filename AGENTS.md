@@ -331,6 +331,22 @@ in, so moving `ATTACK_RANGE` or rebuilding the model moves them too.
 sword. It ports `applyThrowPose` onto the real imported GLB, measures, and only
 then renders. **Keep the port in step with `src/rigwalker.ts`.**
 
+**It is the wrong instrument for a stance.** The port stops at
+`applyThrowPose`; the game runs `applyBalancePose` after it. So the tool is
+authoritative about the arm and about what the throw asks the legs for, and it
+is not authoritative about where a foot lands on screen — it once passed a
+foot-drift check at 0.195 m while the shipped rear foot floated 0.41 m. For
+anything about feet, weight or silhouette, measure the renderer that draws it:
+
+```sh
+EXTRA='zoom=6&on=HR1&feet=1' tools/capture_sim.sh /tmp/sheet "1h v 1" 3 1.95
+```
+
+`on=` rides one fighter by label, `feet=1` prints each foot in that fighter's
+own frame after every layer, and the script echoes every URL it builds — so the
+frame in the screenshot and the frame in someone's browser are the same frame,
+and can be pointed at rather than described.
+
 ```sh
 blender --background --python tools/render_rigwalker_throw.py
 ```
@@ -374,7 +390,26 @@ Three traps worth knowing before touching it:
   step splits the stance and then pays for it, and `hurlStep` returns a `drop`
   alongside its `forward` for exactly that. Widen a stance without it and the
   feet float; overpay and the front sole goes under the ground and the release
-  height sinks below the pitch's.
+  height sinks below the pitch's. Three things lift that rear foot, in order of
+  size: **the folded knee**, the root pitch, and the hip sweep. A bent knee
+  behind the body is worth more than the whole sweep, which is why the rear leg
+  drives *straight* — straightening it is free, and crouching to pay for a
+  folded one costs release height the throws are ordered by.
+- **The root bone sits on the ground, not at the hips.** Pitching it forward is
+  not bending at the waist: it swings the whole skeleton about the fighter's
+  soles, and the rear foot, being behind that pivot, goes up. Bend the spine and
+  the chest instead — they pivot where a spine does. Half of "standing on its
+  toes" was a root pitch of 0.3 rad.
+- **Only one layer can own the legs.** `applyBalancePose` runs on top of the
+  throw pose, and its crouch and recovery steps are authored for a fighter that
+  is only standing. Layered onto a stride they lifted the rear foot 0.17 m and
+  closed the split back up, so `hurlStep` reports an `engagement` and the
+  balance layer's leg authority is `1 - engagement`. Its lean and hit reaction
+  are never scaled — those are the body's, whatever the feet were told to do.
+- **A hurler stands bladed, not square.** The throw is under a second of a cycle
+  over two seconds long, so the stance it waits in *is* the unit as far as
+  anyone watching is concerned. `HURLER_STANCE` is in all three branches, held
+  through the hurl and given back as the two shorter throws plant to square.
 - **Clear the imported animation data before rendering.** The GLB carries
   Idle, Walk and CombatIdle, and Blender re-applies whichever is assigned every
   time it renders a frame. Miss this and the measurements are right while every

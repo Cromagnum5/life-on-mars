@@ -161,10 +161,8 @@ describe("throw ranges", () => {
 });
 
 describe("the step a hurl takes", () => {
-  const sample = (phase: number) => {
-    const { forward, drop } = hurlStep("hurl", phase);
-    return { forward, drop };
-  };
+  const sample = (phase: number) => hurlStep("hurl", phase);
+  const release = THROW_PROFILES.hurl.release;
 
   it("only the long throw travels", () => {
     for (const phase of [0, 0.3, 0.44, 0.58, 0.8]) {
@@ -179,25 +177,39 @@ describe("the step a hurl takes", () => {
     expect(sample(-1).forward).toBe(0);
     expect(sample(0).forward).toBe(0);
     expect(sample(1).forward).toBeCloseTo(0, 5);
-    expect(sample(1).drop).toBeCloseTo(0, 5);
-    // Rising through the wind, furthest out as the rock leaves.
+    // Rising through the wind, furthest out around the moment the rock leaves.
     expect(sample(0.44).forward).toBeGreaterThan(sample(0.3).forward);
-    expect(sample(THROW_PROFILES.hurl.release).forward)
-      .toBeGreaterThan(sample(0.44).forward);
-    // Half a body-width: enough to read at RTS scale, short enough that the
-    // hurler is still standing in the band it was told to hold.
-    expect(sample(THROW_PROFILES.hurl.release).forward).toBeGreaterThan(0.5);
-    expect(sample(THROW_PROFILES.hurl.release).forward).toBeLessThan(0.7);
+    expect(sample(release).forward).toBeGreaterThan(sample(0.44).forward);
   });
 
-  it("brings the hips down with it, or the split stance floats the feet", () => {
-    // There is no IK on these legs: a leg swung back about the hip takes its
-    // foot up with it. The drop is what pays for the split, so it has to be
-    // there wherever the body has travelled.
-    for (const phase of [0.44, 0.58, 0.72]) {
-      expect(sample(phase).drop).toBeGreaterThan(0);
-      expect(sample(phase).drop).toBeLessThan(sample(phase).forward);
-    }
+  it("travels only as far as the legs can hold their feet down", () => {
+    // Not a taste number. There is no IK: the hips are pinned to the terrain
+    // and a foot cannot reach out and stay on the ground, so every centimetre
+    // of travel is charged to the rear leg's reach and paid back as crouch.
+    // Half a body-width asks for nearly 0.2 m of it, and a hurl crouched that
+    // deep releases lower than a pitch — which inverts the ordering the three
+    // throws are read by, and which `render_rigwalker_throw.py` fails on.
+    expect(sample(release).forward).toBeGreaterThan(0.25);
+    expect(sample(release).forward).toBeLessThan(0.35);
+  });
+
+  it("pays for the bladed stance in full while it is only standing", () => {
+    // Waiting out a gap, both feet are flat: nothing is happening that earns a
+    // lifted heel, so the hips owe the whole cost of standing across the line.
+    expect(sample(-1).engagement).toBe(0);
+    expect(sample(-1).drop).toBeGreaterThan(0);
+    // And the stance is owed whether or not a throw is loaded, so the two
+    // slower throws stand in it too.
+    expect(hurlStep("toss", -1).drop).toBeCloseTo(sample(-1).drop, 5);
+  });
+
+  it("hands the legs to the throw and takes them back", () => {
+    // What `applyBalancePose` reads to know whose stance it is. Its crouch and
+    // recovery steps belong to a fighter that is only standing; layered onto a
+    // stride they lifted the rear foot clear of the ground.
+    expect(sample(-1).engagement).toBe(0);
+    expect(sample(release).engagement).toBeCloseTo(1, 5);
+    expect(sample(1).engagement).toBeCloseTo(0, 5);
   });
 });
 

@@ -129,7 +129,7 @@ const DEFEAT_KNOCKDOWN_DRIFT = 0.4;
 /** A cut topples a fighter sideways, about its own forward axis. */
 const DEFEAT_LOCAL_ROLL_AXIS = new THREE.Vector3(0, 0, 1);
 /** Standing still: what every throw but the hurl does with its feet. */
-const EMPTY_HURL_STEP: HurlStep = { forward: 0, drop: 0 };
+const EMPTY_HURL_STEP: HurlStep = { forward: 0, drop: 0, engagement: 0 };
 /** Fraction of an attack during which a feint shows its false line. */
 const FEINT_REVEAL_PHASE = 0.3;
 
@@ -231,18 +231,27 @@ function addBoneOffset(bone: THREE.Bone, x: number, y: number, z: number): void 
   bone.quaternion.multiply(boneOffsetQuaternion);
 }
 
-function applyBalancePose(bones: CombatBones, pose: BalancePose, inCombat: boolean): void {
+/**
+ * `legAuthority` is how much of the legs this layer still owns: 1 when the
+ * fighter is only standing, down to 0 when a throw has authored the stance
+ * itself. The lean and the hit reaction are never scaled — those are the
+ * body's, whatever the feet have been told to do.
+ */
+function applyBalancePose(
+  bones: CombatBones, pose: BalancePose, inCombat: boolean, legAuthority = 1,
+): void {
   if (!inCombat) return;
 
-  const leftStep = pose.stepSide < 0 ? pose.step : 0;
-  const rightStep = pose.stepSide > 0 ? pose.step : 0;
+  const authority = Math.max(0, Math.min(1, legAuthority));
+  const leftStep = (pose.stepSide < 0 ? pose.step : 0) * authority;
+  const rightStep = (pose.stepSide > 0 ? pose.step : 0) * authority;
   addBoneOffset(bones.root, pose.leanZ * 0.72, 0, -pose.leanX * 0.8);
   addBoneOffset(bones.spine, pose.leanZ * 0.34, 0, -pose.leanX * 0.28);
   addBoneOffset(bones.chest, -pose.leanZ * 0.16, 0, pose.leanX * 0.12);
   addBoneOffset(bones.neck, -pose.leanZ * 0.34, 0, pose.leanX * 0.38);
   addBoneOffset(bones.head, -pose.leanZ * 0.3, 0, pose.leanX * 0.3);
-  const stance = pose.stance * 1.2;
-  const crouch = pose.crouch + pose.step * 0.05;
+  const stance = pose.stance * 1.2 * authority;
+  const crouch = (pose.crouch + pose.step * 0.05) * authority;
   addBoneOffset(bones.upperLegL, crouch - leftStep * 0.28, 0, stance + leftStep * 0.22);
   addBoneOffset(bones.lowerLegL, crouch * 1.45 + leftStep * 0.48, 0, 0);
   addBoneOffset(bones.footL, -crouch * 1.15 - leftStep * 0.2, 0, -stance * 0.8);
@@ -541,13 +550,90 @@ function throwDrive(throwType: ThrowType, phase: number): ThrowDrive {
   };
 }
 
-/** Where the body goes during a hurl: forward along the throw, and down. */
-export type HurlStep = { forward: number; drop: number };
-
-const hurlStepScratch: HurlStep = { forward: 0, drop: 0 };
+/**
+ * How far the hurler stands bladed: the lead leg this far forward of square and
+ * the rear leg this far behind it. A thrower waiting out a gap stands across
+ * the line it throws on, and this is the pose it holds for most of a fight —
+ * the throw itself is under a second of a cycle over two seconds long. Standing
+ * square for the rest of it read as a fighter at attention.
+ */
+const HURLER_STANCE = 0.2;
+/** The two leg bones, read off the rig. What a reach costs is a fact about these. */
+const THIGH_LENGTH = 0.79;
+const SHIN_LENGTH = 0.72;
+/**
+ * How far the rear foot is allowed off the ground before the hips pay for it.
+ * A thrower's rear heel does lift, and pretending otherwise is what forces the
+ * crouch deep enough to drag the release down under the pitch's.
+ */
+const HEEL_LIFT = 0.1;
 
 /**
- * The step a hurl takes, in metres.
+ * Where the body goes during a hurl: forward along the throw, and down. Plus
+ * how much of the fighter the throw currently owns, which is what tells the
+ * balance controller to keep its hands off the legs.
+ */
+export type HurlStep = { forward: number; drop: number; engagement: number };
+
+const hurlStepScratch: HurlStep = { forward: 0, drop: 0, engagement: 0 };
+
+/**
+ * How far behind the hips the rear leg is carrying its foot, in radians.
+ *
+ * Shared with `hurlStep` rather than written out twice, because the hip drop is
+ * derived from this angle: the two have to be the same number or the hips pay
+ * for a reach the leg is not making.
+ */
+function hurlRearLeg(draw: number, stride: number, whip: number, follow: number): number {
+  return 0.06 + HURLER_STANCE + 0.1 * draw + 0.04 * stride + 0.02 * whip - 0.04 * follow;
+}
+
+/**
+ * How far the root pitches forward through a hurl, in radians.
+ *
+ * The root bone sits on the ground, not at the hips, so pitching it forward is
+ * not bending at the waist — it swings the whole skeleton about the fighter's
+ * feet, and the rear foot, being behind the pivot, goes up. That is half of why
+ * a hurler was standing on its toes. The bend that reads as bending lives in
+ * the spine and chest, which pivot where a spine actually does.
+ */
+function hurlRootPitch(draw: number, stride: number, whip: number, follow: number): number {
+  return -0.1 * draw + 0.02 * stride + 0.08 * whip + 0.14 * follow;
+}
+
+/**
+ * How much the rear knee is folded through a hurl, in radians.
+ *
+ * It folds to gather and then drives straight, which is both what a thrower
+ * does and what keeps the foot down: a bent knee behind the body is the single
+ * largest thing lifting that foot, worth more than the whole hip sweep. Paying
+ * for a folded rear leg with a deeper crouch instead costs the release height
+ * the throws are ordered by — straightening it is free.
+ */
+function hurlRearKnee(draw: number, stride: number, whip: number, follow: number): number {
+  return STANDING_KNEE + 0.16 * draw - 0.18 * stride - 0.06 * whip + 0.06 * follow;
+}
+
+/**
+ * How far a leg at these angles carries its ankle up off the ground, and how
+ * far back. Two bones swinging about a hip, worked out rather than approximated
+ * with one: the knee is half the lift at a thrower's angles, and guessing it
+ * away is what left the rear foot hanging.
+ */
+function ankleLift(upper: number, knee: number): number {
+  return THIGH_LENGTH * (1 - Math.cos(upper)) + SHIN_LENGTH * (1 - Math.cos(upper + knee));
+}
+
+function ankleReach(upper: number, knee: number): number {
+  return THIGH_LENGTH * Math.sin(upper) + SHIN_LENGTH * Math.sin(upper + knee);
+}
+
+/** The knee every fighter stands with bent, and what that already costs. */
+const STANDING_KNEE = 0.24;
+const STANDING_LIFT = ankleLift(0.06, STANDING_KNEE);
+
+/**
+ * The step a hurl takes, in metres, and the hip drop that pays for it.
  *
  * The legs stride in angle, but angles alone leave a thrower rooted over one
  * spot and up on their toes — a long throw is thrown off the back leg through a
@@ -555,34 +641,55 @@ const hurlStepScratch: HurlStep = { forward: 0, drop: 0 };
  * read. The director owns where a hurler stands, so this is carried as an
  * offset of the model inside its group rather than as movement.
  *
- * `drop` is not decoration. There is no IK on these legs: a leg swung back
- * about the hip carries its foot up with it, so splitting the stance far enough
- * to hold a plant floats both feet unless the hips come down by roughly what
- * the split costs. Dropping them is also just what a stride does.
+ * How far it can go is not a taste question. There is no IK here: the hips are
+ * pinned to the terrain and the legs are two rigid bones, so a foot cannot
+ * reach out and stay down — it travels an arc, and the only way to keep it on
+ * the ground is to bring the hips to meet it. A leg reaching `d` from under the
+ * hip lifts its foot by `LEG_REACH * (1 - cos θ)`, and that is what `drop` pays
+ * back, less the heel lift a thrower is entitled to.
  *
- * Both ride the same beats as the pose, so they cannot drift apart from it, and
- * both are pure functions of the phase so `tools/render_rigwalker_throw.py` can
- * port them. Because `follow` fades out by the end of the motion the body walks
+ * The bill is why the travel is what it is. Half a body-width of step asks the
+ * rear leg to reach about 0.9 m, which costs nearly 0.2 m of crouch — and a
+ * hurl crouched that deep releases lower than a pitch, which inverts the
+ * ordering the three throws are read by. What is here is the largest step the
+ * rig can take with its feet still on the ground.
+ *
+ * Everything is a pure function of the phase so `tools/render_rigwalker_throw.py`
+ * can port it, and rides the same beats as the pose so the two cannot drift
+ * apart. Because `follow` fades out by the end of the motion the body walks
  * itself back to the spot it holds, which is what the recovery is for.
  *
  * Only the hurl travels: a pitch is thrown off a planted stance and a toss is
- * gone before the body has moved.
+ * gone before the body has moved. The drop is not conditional, because the
+ * bladed stance is not — it is owed whenever the hurler is standing in it.
  */
 export function hurlStep(throwType: ThrowType, phase: number): HurlStep {
   const out = hurlStepScratch;
-  if (throwType !== "hurl" || phase < 0) {
-    out.forward = 0;
-    out.drop = 0;
-    return out;
-  }
-  const { stride, whip, follow } = throwDrive(throwType, phase);
+  const { draw, stride, whip, follow } = throwDrive(throwType, phase);
+  const hurling = throwType === "hurl" && phase >= 0;
   // Stride and whip are both at full at the moment of release, so these read as
-  // a sum that peaks there at about 0.6 m rather than as three separate pushes.
-  out.forward = 0.28 * stride + 0.34 * whip + 0.26 * follow;
-  // Only as deep as the split costs. Going further looks like a better stride
-  // and measures as a worse one: it buries the front sole and drags the release
-  // down under the pitch's, which is the ordering the throws are read by.
-  out.drop = 0.04 * stride + 0.05 * whip + 0.05 * follow;
+  // a sum that peaks just past it rather than as three separate pushes.
+  out.forward = hurling ? 0.13 * stride + 0.15 * whip + 0.22 * follow : 0;
+  // A pitch and a toss barely move their legs, so their rear leg is the stance
+  // itself and their drop is the standing one.
+  out.engagement = phase < 0 ? 0 : Math.max(draw, stride, whip, follow);
+  const rear = hurling
+    ? hurlRearLeg(draw, stride, whip, follow)
+    // A pitch and a toss give the stance back as they throw, so what they owe
+    // for it goes with it.
+    : 0.06 + HURLER_STANCE * (1 - out.engagement);
+  const knee = hurling ? hurlRearKnee(draw, stride, whip, follow) : STANDING_KNEE;
+  const pitch = hurling ? hurlRootPitch(draw, stride, whip, follow) : 0;
+  // Two bills, both owed to the rear foot: the arc its own leg carries it up,
+  // and the arc the root pitch swings it up through, it being behind that
+  // pivot. The second is easy to forget and was the larger of the two. Both are
+  // measured against a leg already standing, or the crouch every fighter stands
+  // in gets charged for twice.
+  const lift = ankleLift(rear, knee) - STANDING_LIFT +
+    ankleReach(rear, knee) * Math.sin(pitch);
+  // The heel is only allowed off the ground while the throw is actually
+  // running. Standing, a thrower has both feet flat, and the hips pay in full.
+  out.drop = Math.max(0, lift - HEEL_LIFT * out.engagement);
   return out;
 }
 
@@ -644,14 +751,18 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
     const hip = 0.85 * draw + 0.15 * stride - 0.9 * whip - 0.6 * follow;
     const chest = 1 * draw + 0.9 * stride - 1 * whip - 0.5 * follow;
     setBoneOffset(bones.root, bones.bodyRest.root,
-      -0.16 * draw + 0.04 * stride + 0.16 * whip + 0.3 * follow,
+      hurlRootPitch(draw, stride, whip, follow),
       0.34 * hip,
       -0.14 * draw - 0.08 * stride + 0.08 * whip + 0.12 * follow);
+    // The bend the root gave up, taken by the joints that can afford it: these
+    // pivot at the waist and the ribs rather than at the soles.
     setBoneOffset(bones.spine, bones.bodyRest.spine,
-      0.04 + 0.1 * draw - 0.26 * follow, 0.3 * chest, 0.06 * draw - 0.05 * follow);
+      0.04 + 0.1 * draw + 0.06 * whip - 0.14 * follow,
+      0.3 * chest, 0.06 * draw - 0.05 * follow);
     // Finishes bent over the front leg, the way a thrown-out arm ends.
     setBoneOffset(bones.chest, bones.bodyRest.chest,
-      0.03 + 0.16 * draw - 0.3 * follow, 0.44 * chest, 0.05 * draw - 0.08 * follow);
+      0.03 + 0.16 * draw + 0.06 * whip - 0.18 * follow,
+      0.44 * chest, 0.05 * draw - 0.08 * follow);
     // The eyes stay on the target through a coil of nearly sixty degrees.
     setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08 - 0.06 * follow, -0.5 * chest, 0);
     setBoneOffset(bones.head, bones.bodyRest.head, -0.03 + 0.08 * aim, -0.35 * chest, 0);
@@ -681,10 +792,11 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
     // behind to hold the ground it is driving off. Neither knee straightens
     // past its base bend — there is no IK here, so a straight leg puts the
     // sole through the terrain.
-    const upperL = -0.06 + 0.1 * draw - 0.4 * stride + 0.26 * whip + 0.12 * follow + combatStep;
-    const lowerL = 0.24 + 0.16 * draw + 0.2 * stride + 0.1 * follow;
-    const upperR = 0.06 + 0.16 * draw + 0.2 * stride + 0.12 * whip + 0.06 * follow - combatStep;
-    const lowerR = 0.24 + 0.18 * draw + 0.02 * stride + 0.04 * whip + 0.08 * follow;
+    const upperL = -0.06 - HURLER_STANCE +
+      0.08 * draw - 0.22 * stride + 0.16 * whip - 0.06 * follow + combatStep;
+    const lowerL = 0.24 + 0.14 * draw + 0.1 * stride + 0.06 * follow;
+    const upperR = hurlRearLeg(draw, stride, whip, follow) - combatStep;
+    const lowerR = hurlRearKnee(draw, stride, whip, follow);
     setLegs(bones, upperL, lowerL, upperR, lowerR);
   } else if (throwType === "pitch") {
     const coil = 0.95 * draw + 0.7 * stride - 0.95 * whip - 0.4 * follow;
@@ -705,9 +817,14 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
       -0.18 - 0.04 * draw + 0.55 * whip + 0.45 * follow, 0, -0.05);
     setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
 
-    const upperL = -0.02 + 0.06 * draw - 0.1 * whip - 0.08 * follow + combatStep;
+    // Bladed while it waits, square once it throws: a pitch is thrown off a
+    // planted stance, and its legs are authored for that. Carrying the stance
+    // into the motion floats its rear foot the way the hurl's used to.
+    const upperL = -0.02 - HURLER_STANCE * ready +
+      0.06 * draw - 0.1 * whip - 0.08 * follow + combatStep;
     const lowerL = 0.24 + 0.08 * draw + 0.06 * whip + 0.09 * follow;
-    const upperR = 0.02 + 0.1 * draw + 0.08 * whip + 0.04 * follow - combatStep;
+    const upperR = 0.02 + HURLER_STANCE * ready +
+      0.1 * draw + 0.08 * whip + 0.04 * follow - combatStep;
     const lowerR = 0.24 + 0.14 * draw + 0.13 * whip + 0.17 * follow;
     setLegs(bones, upperL, lowerL, upperR, lowerR);
   } else {
@@ -727,9 +844,9 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
       -0.22 + 0.3 * whip + 0.2 * follow, 0, -0.06);
     setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
 
-    const upperL = -0.02 - 0.08 * whip + combatStep;
+    const upperL = -0.02 - HURLER_STANCE * ready - 0.08 * whip + combatStep;
     const lowerL = 0.26 + 0.14 * draw + 0.1 * whip;
-    const upperR = 0.02 + 0.08 * whip - combatStep;
+    const upperR = 0.02 + HURLER_STANCE * ready + 0.08 * whip - combatStep;
     const lowerR = 0.26 + 0.18 * draw + 0.14 * whip;
     setLegs(bones, upperL, lowerL, upperR, lowerR);
   }
@@ -1825,6 +1942,16 @@ export function createRigwalker(
 
     fallbackVisual?.update(delta, elapsed, moving);
 
+    // Where the throw is putting the body, read once: the pose, the balance
+    // layer's remaining authority over the legs, and the model offset all have
+    // to come from the same answer or they fight each other.
+    // Matched to the condition `applyThrowPose` runs under, not to whether a
+    // throw is loaded — the drop pays for the bladed stance, and the hurler is
+    // standing in that whenever it is posed as one.
+    const step = combatTarget && role === "hurler"
+      ? hurlStep(throwType ?? lastThrowType, attackPhase)
+      : EMPTY_HURL_STEP;
+
     if (mixer) {
       const nextAction = combatTarget ? combatAction ?? idleAction : moving ? walkAction : idleAction;
       if (nextAction && nextAction !== activeAction) {
@@ -1863,7 +1990,14 @@ export function createRigwalker(
           });
         }
       }
-      if (combatBones) applyBalancePose(combatBones, balancePose, inCombat);
+      // A throw authors its own stance, down to which foot carries the weight.
+      // The balance controller's crouch and recovery steps are for a fighter
+      // that is only standing; layered onto a stride they lifted the rear foot
+      // clear of the ground and closed the split back up. Its lean and its hit
+      // reactions still apply — it is only the legs it has to let go of.
+      if (combatBones) {
+        applyBalancePose(combatBones, balancePose, inCombat, 1 - step.engagement);
+      }
     }
 
     // The step the hurl takes. Damped rather than written straight through: the
@@ -1871,9 +2005,6 @@ export function createRigwalker(
     // re-planned mid-wind drops the phase to -1 in a single frame, and without
     // this the body would teleport back rather than settle.
     if (modelRoot) {
-      const step = combatTarget && role === "hurler" && throwType
-        ? hurlStep(throwType, attackPhase)
-        : EMPTY_HURL_STEP;
       lungeOffset = THREE.MathUtils.damp(lungeOffset, step.forward, 18, delta);
       lungeDrop = THREE.MathUtils.damp(lungeDrop, step.drop, 18, delta);
       modelRoot.position.set(0, -lungeDrop, lungeOffset);

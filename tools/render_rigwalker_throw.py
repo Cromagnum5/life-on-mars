@@ -11,6 +11,16 @@ the shoulder the entire way through, because the rig will happily blend between
 two good poses by dropping the elbow to the hip in between, which is what makes
 a throw read as sidearm.
 
+WHAT THIS TOOL CANNOT SEE. It ports `applyThrowPose` and stops there. The game
+runs `applyBalancePose` on top of it, which adds a crouch, a lean, and recovery
+steps that this knows nothing about. So these numbers are the truth about the
+arm and about what the throw *asks* the legs for, and they are not the truth
+about where a foot ends up on screen. That gap once passed a foot-drift check
+at 0.195 m while the shipped rear foot floated 0.41 m off the ground. For a
+stance, measure the thing that draws it:
+
+    EXTRA='zoom=6&on=HR1&feet=1' tools/capture_sim.sh /tmp/sheet "1h v 1" 3 1.95
+
 Run from the repository root:
     blender --background --python tools/render_rigwalker_throw.py
 """
@@ -112,6 +122,42 @@ def drive(throw, phase):
     return {name: beat(phase, windows[name]) for name in windows}
 
 
+HURLER_STANCE = .20
+THIGH_LENGTH = .79
+SHIN_LENGTH = .72
+HEEL_LIFT = .10
+STANDING_KNEE = .24
+
+
+def hurl_rear_leg(d):
+    """Port of hurlRearLeg."""
+    return (.06 + HURLER_STANCE + .1 * d['draw'] + .04 * d['stride'] +
+            .02 * d['whip'] - .04 * d['follow'])
+
+
+def hurl_rear_knee(d):
+    """Port of hurlRearKnee. Folds to gather, then drives straight."""
+    return (STANDING_KNEE + .16 * d['draw'] - .18 * d['stride'] -
+            .06 * d['whip'] + .06 * d['follow'])
+
+
+def hurl_root_pitch(d):
+    """Port of hurlRootPitch. The root sits on the ground, so keep this small."""
+    return -.1 * d['draw'] + .02 * d['stride'] + .08 * d['whip'] + .14 * d['follow']
+
+
+def ankle_lift(upper, knee):
+    return (THIGH_LENGTH * (1 - math.cos(upper)) +
+            SHIN_LENGTH * (1 - math.cos(upper + knee)))
+
+
+def ankle_reach(upper, knee):
+    return THIGH_LENGTH * math.sin(upper) + SHIN_LENGTH * math.sin(upper + knee)
+
+
+STANDING_LIFT = ankle_lift(.06, STANDING_KNEE)
+
+
 def hurl_step(throw, phase):
     """The port of hurlStep. Keep in step with src/rigwalker.ts.
 
@@ -124,11 +170,16 @@ def hurl_step(throw, phase):
     body, not how far the body goes. Foot height is *not* blind to the drop,
     which is the whole reason the drop exists.
     """
-    if throw != 'hurl' or phase < 0:
-        return (0.0, 0.0)
     d = drive(throw, phase)
-    return (.28 * d['stride'] + .34 * d['whip'] + .26 * d['follow'],
-            .04 * d['stride'] + .05 * d['whip'] + .05 * d['follow'])
+    hurling = throw == 'hurl' and phase >= 0
+    forward = (.13 * d['stride'] + .15 * d['whip'] + .22 * d['follow']) if hurling else 0.0
+    engagement = 0.0 if phase < 0 else max(d.values())
+    rear = hurl_rear_leg(d) if hurling else .06 + HURLER_STANCE * (1 - engagement)
+    knee = hurl_rear_knee(d) if hurling else STANDING_KNEE
+    pitch = hurl_root_pitch(d) if hurling else 0.0
+    lift = (ankle_lift(rear, knee) - STANDING_LIFT +
+            ankle_reach(rear, knee) * math.sin(pitch))
+    return (forward, max(0.0, lift - HEEL_LIFT * engagement))
 
 
 def arm_pose(throw, phase):
@@ -237,10 +288,12 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
     if throw == 'hurl':
         hip = .85 * draw + .15 * stride - .9 * whip - .6 * follow
         chest = 1 * draw + .9 * stride - 1 * whip - .5 * follow
-        offset(rig, 'root', -.16 * draw + .04 * stride + .16 * whip + .30 * follow, .34 * hip,
+        offset(rig, 'root', hurl_root_pitch(d), .34 * hip,
                -.14 * draw - .08 * stride + .08 * whip + .12 * follow)
-        offset(rig, 'spine', .04 + .1 * draw - .26 * follow, .3 * chest, .06 * draw - .05 * follow)
-        offset(rig, 'chest', .03 + .16 * draw - .30 * follow, .44 * chest, .05 * draw - .08 * follow)
+        offset(rig, 'spine', .04 + .1 * draw + .06 * whip - .14 * follow, .3 * chest,
+               .06 * draw - .05 * follow)
+        offset(rig, 'chest', .03 + .16 * draw + .06 * whip - .18 * follow, .44 * chest,
+               .05 * draw - .08 * follow)
         offset(rig, 'neck', .08 - .06 * follow, -.5 * chest, 0)
         offset(rig, 'head', -.03 + .08 * aim, -.35 * chest, 0)
         sight = max(draw, stride)
@@ -250,10 +303,11 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
         offset(rig, 'lower_arm.L',
                -.1 - .06 * sight + .6 * whip + .4 * follow - .05 * aim, 0, -.05)
         offset(rig, 'hand.L', -.06, 0, 0)
-        set_legs(rig, -.06 + .1 * draw - .4 * stride + .26 * whip + .12 * follow,
-                 .24 + .16 * draw + .2 * stride + .1 * follow,
-                 .06 + .16 * draw + .2 * stride + .12 * whip + .06 * follow,
-                 .24 + .18 * draw + .02 * stride + .04 * whip + .08 * follow)
+        set_legs(rig,
+                 -.06 - HURLER_STANCE + .08 * draw - .22 * stride + .16 * whip - .06 * follow,
+                 .24 + .14 * draw + .1 * stride + .06 * follow,
+                 hurl_rear_leg(d),
+                 hurl_rear_knee(d))
     elif throw == 'pitch':
         coil = .95 * draw + .7 * stride - .95 * whip - .4 * follow
         offset(rig, 'root', -.1 * draw + .18 * whip + .24 * follow, .16 * coil,
@@ -265,9 +319,9 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
         offset(rig, 'upper_arm.L', -.32 - .3 * draw + .75 * whip + .5 * follow, 0, -.08)
         offset(rig, 'lower_arm.L', -.18 - .04 * draw + .55 * whip + .45 * follow, 0, -.05)
         offset(rig, 'hand.L', -.06, 0, 0)
-        set_legs(rig, -.02 + .06 * draw - .1 * whip - .08 * follow,
+        set_legs(rig, -.02 - HURLER_STANCE * ready + .06 * draw - .1 * whip - .08 * follow,
                  .24 + .08 * draw + .06 * whip + .09 * follow,
-                 .02 + .1 * draw + .08 * whip + .04 * follow,
+                 .02 + HURLER_STANCE * ready + .1 * draw + .08 * whip + .04 * follow,
                  .24 + .14 * draw + .13 * whip + .17 * follow)
     else:
         coil = .5 * draw - .45 * whip - .2 * follow
@@ -279,8 +333,10 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
         offset(rig, 'upper_arm.L', -.34 + .3 * whip + .2 * follow, 0, -.1)
         offset(rig, 'lower_arm.L', -.22 + .3 * whip + .2 * follow, 0, -.06)
         offset(rig, 'hand.L', -.06, 0, 0)
-        set_legs(rig, -.02 - .08 * whip, .26 + .14 * draw + .1 * whip,
-                 .02 + .08 * whip, .26 + .18 * draw + .14 * whip)
+        set_legs(rig, -.02 - HURLER_STANCE * ready - .08 * whip,
+                 .26 + .14 * draw + .1 * whip,
+                 .02 + HURLER_STANCE * ready + .08 * whip,
+                 .26 + .18 * draw + .14 * whip)
 
     if ready > .001:
         add_offset(rig, 'root', 0, ready * .16, -ready * .05)
