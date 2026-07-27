@@ -47,6 +47,7 @@ Current camera controls are intentionally minimal after playtesting:
 
 - Power building: **Reactor**
 - Robot production building: **Assembly Bay**
+- Hurler production building: **Stoneworks**
 - Mining building: **Extractor**
 - Initial robot unit: **Rigwalker**
 - Ranged Rigwalker variant: **Rigwalker Hurler**, which throws rocks
@@ -67,10 +68,11 @@ Avoid the name “Optimus” because of its strong association with Transformers
 
 ## First playable slice
 
-The initial slice has a small bounded Martian map and three pre-placed
-buildings. The Assembly Bay opens every 20 seconds. Units come out through its
-spawn door, can be selected with left click, and receive move orders with right
-click. The Reactor and Extractor initially generate simple
+The initial slice has a small bounded Martian map and four pre-placed
+buildings. The Assembly Bay and the Stoneworks each open every 20 seconds. Units
+come out through their own spawn doors, can be selected with left click, and
+receive move orders with right click. Each producing building is selectable and
+keeps its own rally point. The Reactor and Extractor initially generate simple
 power/resource values over time.
 
 Do not expand the first slice into construction, combat, enemies, complex
@@ -95,15 +97,17 @@ movement loop feels good.
 Steps 1 through 3 provide a procedurally varied Mars surface, scattered rocks,
 atmospheric lighting and fog, responsive rendering, bounded camera movement,
 a compact control hint, and distinct primitive models for the Reactor, Assembly
-Bay, Extractor, and Rigwalker. The Rigwalker has an articulated procedural walk
+Bay, Stoneworks, Extractor, and Rigwalker. The Rigwalker has an articulated
+procedural walk
 cycle, can be selected with left click, and accepts terrain movement orders with
 right click. It turns smoothly, follows the terrain, and returns to idle on
-arrival. The Assembly Bay opens every 20 seconds: its shutter rises, the batch
-walks from inside to a clear rally point, and the shutter closes. The batches
-alternate — three swords together, then a single hurler, repeating — so the line
-puts the melee out in front of the rocks. Selected units show an orange ring, movement
+arrival. Each producing building opens every 20 seconds: its shutter rises, the
+batch walks from inside to that building's own rally point, and the shutter
+closes. The Assembly Bay sends out three swords abreast and the Stoneworks a
+single Hurler, so the line is mixed by which building made it rather than by
+whose turn it is. Selected units show an orange ring, movement
 orders pulse on the terrain, and the operations HUD reports power, ore, unit
-count, selection, and Assembly Bay progress. Units support single-click and
+count, selection, and production progress. Units support single-click and
 left-drag marquee selection, with group orders arranged into a loose formation.
 Rigwalkers use lightweight local
 steering to maintain personal space and travel around circular building
@@ -122,14 +126,17 @@ per-fighter readout and an event log, and renders headlessly for review.
 
 The Rigwalker Hurler is a second unit built on the same skeleton and the same
 runtime: no sword, a rock in its hand and a cache of them on its hip, and three
-throws picked by how far away its target is. The Assembly Bay produces one every
-fourth Rigwalker, so the game fields a mixed line without new interface.
+throws picked by how far away its target is. It is produced by its own building,
+the Stoneworks, one per opening, so the game fields a mixed line without new
+interface.
 
 ## Current playtest
 
 The nine-step vertical slice has been manually playtested and feels good. The
-current soak test is to leave the game running while the Assembly Bays keep
-producing, then observe movement and interaction with many units on screen.
+current soak test is to leave the game running while all four producing
+buildings keep going, then observe movement and interaction with many units on
+screen. Units now arrive twice as fast as they did from the bays alone, so this
+is worth re-running.
 
 Before optimizing, measure the actual failure mode. Likely scaling pressure
 points are:
@@ -146,10 +153,11 @@ points are:
   reveal oscillation or congestion around building footprints.
 
 Do not change the established WASD/wheel camera controls or the production
-cadence as part of performance work. The 20-second interval and the three-swords
-then-one-hurler order in `PRODUCTION_ORDER` are the user's calls, not tuning
-knobs. Preserve left-click selection,
-drag-box multi-selection, right-click orders, randomized rally points, and the
+cadence as part of performance work. The 20-second interval, the split of
+production across two buildings, and each building's order (`SWORD_ORDER` and
+`HURLER_ORDER` in `production.ts`) are the user's calls, not tuning knobs.
+Preserve left-click selection,
+drag-box multi-selection, right-click orders, per-building rally points, and the
 Blender-model fallback behavior unless playtest evidence calls for a specific
 change.
 

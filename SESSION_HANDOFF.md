@@ -2,12 +2,12 @@
 
 ## Current checkpoint
 
-`main` at `d76b50e` (`Send the swords out in pairs, the hurler alone`), clean
-tree. `rigwalker-hurler` has been merged in and the session's work is all
-committed. `main` is 3 commits ahead of `origin/main`; nothing is pushed, and
-pushing is the user's call.
+Branch `three-swords-then-a-hurler`, clean tree, two commits ahead of `main`:
+`5e2b8c5` (`Send the swords out three at a time`) and the Stoneworks commit on
+top of it. `main` is at `ac71199` and is 4 commits ahead of `origin/main`;
+nothing is pushed, and both merging and pushing are the user's call.
 
-This session's commits, oldest first:
+Earlier session commits, oldest first:
 
 - `e71fb45` Add a Rigwalker that throws rocks
 - `23db02c` Throw the rock overhand
@@ -19,10 +19,19 @@ whole time: the Blender tools were posing in Blender's Euler order rather than
 Three.js's, so they had been validating and drawing poses the game never
 rendered. Read `e71fb45`'s measurements with that in mind.
 
-The Assembly Bay opens every 20 seconds, and what comes out alternates: three
-swords abreast, then a single Hurler, repeating. `PRODUCTION_ORDER` in
-`production.ts` is the whole of it; `production.test.ts` pins the order, the
-cadence, and that a trio walks clear of the door instead of jamming it.
+Production is now split across two buildings per corporation. The Assembly Bay
+opens every 20 seconds and sends out three swords abreast; the new **Stoneworks**
+opens on its own 20-second timer and sends out one Hurler. `SWORD_ORDER` and
+`HURLER_ORDER` in `production.ts` are the whole of it; `production.test.ts` pins
+each order, the cadence, and that a trio walks clear of the door instead of
+jamming it, and `buildings.test.ts` pins the base layout.
+
+Each producing building selects on its own, shows its own ring, and keeps its
+own rally point. All four start rallying to the middle of the map; right-click
+with one selected moves only that building's rally point. Note the throughput
+change that follows from the user's brief: the mix is still three swords to a
+rock, but both doors run at once, so units arrive twice as fast as they did when
+one door alternated.
 
 Run these checks after further combat changes:
 
@@ -157,8 +166,10 @@ playable. Player agency is still out of scope.
    sword's `swing` whoosh, graded by throw. A heave and a rock landing may want
    their own voices — but the standing lesson is that a fight wants its sound
    spent on contact, so add carefully.
-2. Hurlers rally to the same point as everything else, so in the game they walk
-   into melee rather than holding a line behind it.
+2. Hurlers can now be held back: the Stoneworks has its own rally point, so a
+   line behind the swords is a right-click rather than a code change. Whether
+   the default of everything rallying to the middle wants changing is a
+   playtest question.
 3. A hurler that runs out of room has nowhere to go; it backpedals into whatever
    is behind it. Retreating toward its own side would read better than
    retreating in a straight line.

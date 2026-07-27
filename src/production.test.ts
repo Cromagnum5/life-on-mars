@@ -1,13 +1,18 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { AssemblyBayProduction } from "./production";
+import {
+  BuildingProduction,
+  HURLER_ORDER,
+  SWORD_ORDER,
+  type ProductionOrder,
+} from "./production";
 import type { Rigwalker } from "./rigwalker";
 
 /**
- * The Assembly Bay is a timer with a door on it, and what comes through the
- * door is a repeating order rather than one unit. Both halves are worth
- * pinning: a cadence that drifts and a mix that quietly stops alternating
- * both look like nothing at all until a fight is already lopsided.
+ * A producing building is a timer with a door on it, and what comes through
+ * the door is a repeating order rather than one unit. Both halves are worth
+ * pinning: a cadence that drifts and a mix that quietly stops matching its
+ * building both look like nothing at all until a fight is already lopsided.
  */
 
 const STEP = 1 / 60;
@@ -27,17 +32,22 @@ function narrowestGap(units: Rigwalker[]): number {
   return closest;
 }
 
-/** Runs a bay for a while and reports what came out, in order. */
-function runBay(seconds: number): { units: Rigwalker[]; roles: string[] } {
+/** Runs one building for a while and reports what came out, in order. */
+function runBuilding(
+  seconds: number,
+  order: ProductionOrder = SWORD_ORDER,
+): { units: Rigwalker[]; roles: string[] } {
   const scene = new THREE.Scene();
   const door = new THREE.Group();
   door.position.set(0, 2.25, 3.54);
   scene.add(door);
   const units: Rigwalker[] = [];
-  const production = new AssemblyBayProduction(
-    scene, door, units, flat, null,
-    new THREE.Vector2(10, -1.8), new THREE.Vector3(0, 0, 0), 0xffffff, "Helios",
-  );
+  const production = new BuildingProduction({
+    scene, door, units, terrainHeightAt: flat, rigwalkerAsset: null,
+    spawnPosition: new THREE.Vector2(10, -1.8),
+    rallyPoint: new THREE.Vector3(0, 0, 0),
+    accent: 0xffffff, corporation: "Helios", order,
+  });
   for (let elapsed = 0; elapsed < seconds; elapsed += STEP) {
     production.update(STEP);
   }
@@ -51,33 +61,38 @@ function runBay(seconds: number): { units: Rigwalker[]; roles: string[] } {
  */
 const CYCLE_SECONDS = 20 + 1 / 1.4;
 
-describe("assembly bay production", () => {
-  it("alternates three swords with a single hurler", () => {
-    const { roles } = runBay(140);
+describe("building production", () => {
+  it("sends three swords out of the Assembly Bay every opening", () => {
+    const { roles } = runBuilding(140, SWORD_ORDER);
     expect(roles.length).toBeGreaterThanOrEqual(12);
-    // Three, then one, then three, then one: read back as batches rather than
-    // as a flat list, because that is the shape the order is written in.
-    const expected = ["melee", "melee", "melee", "hurler"];
-    roles.forEach((role, index) => {
-      expect(role).toBe(expected[index % expected.length]);
-    });
+    expect(roles.every((role) => role === "melee")).toBe(true);
+    expect(roles.length % 3).toBe(0);
+  });
+
+  it("sends one hurler out of the Stoneworks every opening", () => {
+    // The mix the game fields is now two buildings running side by side rather
+    // than one door alternating, so the ratio is only right if the Stoneworks
+    // turns out exactly one rock-thrower per opening of its own.
+    const { roles } = runBuilding(140, HURLER_ORDER);
+    expect(roles.length).toBeGreaterThanOrEqual(4);
+    expect(roles.every((role) => role === "hurler")).toBe(true);
+    expect(roles).toHaveLength(runBuilding(140, SWORD_ORDER).roles.length / 3);
   });
 
   it("opens the door about every twenty seconds", () => {
-    // Counted in units rather than openings, because the batches are uneven:
-    // three openings is a trio, a hurler and a trio, which is seven units.
-    expect(runBay(CYCLE_SECONDS * 3 + 1).units).toHaveLength(7);
-    expect(runBay(CYCLE_SECONDS * 4 + 1).units).toHaveLength(8);
+    expect(runBuilding(CYCLE_SECONDS * 3 + 1, HURLER_ORDER).units).toHaveLength(3);
+    expect(runBuilding(CYCLE_SECONDS * 4 + 1, HURLER_ORDER).units).toHaveLength(4);
+    expect(runBuilding(CYCLE_SECONDS * 3 + 1, SWORD_ORDER).units).toHaveLength(9);
     // Nothing arrives before the first cycle is up, and the swing is real:
     // twenty seconds in, the door is still opening.
-    expect(runBay(20).units).toHaveLength(0);
-    expect(runBay(CYCLE_SECONDS - 0.1).units).toHaveLength(0);
+    expect(runBuilding(20).units).toHaveLength(0);
+    expect(runBuilding(CYCLE_SECONDS - 0.1).units).toHaveLength(0);
   });
 
   it("walks a trio clear of the door instead of jamming it", () => {
     // The risk in spawning three at once is the batch shoving itself apart on
     // the doorstep and nobody getting anywhere, so this runs them.
-    const { units } = runBay(30);
+    const { units } = runBuilding(30);
     expect(units).toHaveLength(3);
     const rally = new THREE.Vector3(0, 0, 0);
     const start = units.map((unit) => unit.group.position.distanceTo(rally));
@@ -95,7 +110,7 @@ describe("assembly bay production", () => {
   });
 
   it("stands a trio abreast rather than on top of each other", () => {
-    const { units } = runBay(30);
+    const { units } = runBuilding(30);
     expect(units).toHaveLength(3);
     const gap = narrowestGap(units);
     // Far enough apart not to be shoving on the doorstep, close enough to read

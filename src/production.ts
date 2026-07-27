@@ -4,15 +4,16 @@ import type { CombatRole } from "./combat";
 import type { RigwalkerAsset } from "./rigwalker-assets";
 
 const PRODUCTION_SECONDS = 20;
+/** What comes out of a door, one entry per opening, repeating. */
+export type ProductionOrder = readonly (readonly CombatRole[])[];
+/** The Assembly Bay's: three swords abreast, every opening. */
+export const SWORD_ORDER: ProductionOrder = [["melee", "melee", "melee"]];
 /**
- * What comes out of the door, one entry per opening, repeating. Three swords,
- * then a hurler behind them: a mixed field is the point, and arriving in that
- * order is what lets the swords be in front when the rocks start.
+ * The Stoneworks': one Hurler, every opening. The mix that used to alternate
+ * out of a single door now comes out of two doors at once, so the swords are
+ * still three to a rock and no longer arrive a cycle apart from it.
  */
-const PRODUCTION_ORDER: readonly (readonly CombatRole[])[] = [
-  ["melee", "melee", "melee"],
-  ["hurler"],
-];
+export const HURLER_ORDER: ProductionOrder = [["hurler"]];
 /**
  * How far apart a batch stands as it comes out, across the line it walks. Wider
  * than the separation radius, so a batch is not shoving itself apart on the
@@ -32,7 +33,21 @@ export type ProductionStatus = {
   secondsRemaining: number;
 };
 
-export class AssemblyBayProduction {
+export type ProductionOptions = {
+  scene: THREE.Scene;
+  door: THREE.Group;
+  units: Rigwalker[];
+  terrainHeightAt: (x: number, z: number) => number;
+  rigwalkerAsset: RigwalkerAsset | null;
+  spawnPosition: THREE.Vector2;
+  rallyPoint: THREE.Vector3;
+  accent: number;
+  corporation: string;
+  order: ProductionOrder;
+};
+
+/** One building's timer, door, and repeating order of what walks out of it. */
+export class BuildingProduction {
   readonly units: Rigwalker[];
 
   private readonly scene: THREE.Scene;
@@ -44,33 +59,25 @@ export class AssemblyBayProduction {
   private readonly rallyPoint: THREE.Vector3;
   private readonly accent: number;
   private readonly corporation: string;
+  private readonly order: ProductionOrder;
   private batch = 0;
   private phase: ProductionPhase = "producing";
   private productionElapsed = 0;
   private phaseElapsed = 0;
   private doorOpen = 0;
 
-  constructor(
-    scene: THREE.Scene,
-    door: THREE.Group,
-    units: Rigwalker[],
-    terrainHeightAt: (x: number, z: number) => number,
-    rigwalkerAsset: RigwalkerAsset | null,
-    spawnPosition: THREE.Vector2,
-    rallyPoint: THREE.Vector3,
-    accent: number,
-    corporation: string,
-  ) {
-    this.scene = scene;
-    this.door = door;
-    this.units = units;
-    this.terrainHeightAt = terrainHeightAt;
-    this.rigwalkerAsset = rigwalkerAsset;
-    this.spawnPosition = spawnPosition;
-    this.rallyPoint = rallyPoint;
-    this.accent = accent;
-    this.corporation = corporation;
-    this.closedDoorY = door.position.y;
+  constructor(options: ProductionOptions) {
+    this.scene = options.scene;
+    this.door = options.door;
+    this.units = options.units;
+    this.terrainHeightAt = options.terrainHeightAt;
+    this.rigwalkerAsset = options.rigwalkerAsset;
+    this.spawnPosition = options.spawnPosition;
+    this.rallyPoint = options.rallyPoint;
+    this.accent = options.accent;
+    this.corporation = options.corporation;
+    this.order = options.order;
+    this.closedDoorY = options.door.position.y;
   }
 
   update(delta: number): void {
@@ -142,7 +149,7 @@ export class AssemblyBayProduction {
 
   /** Everything this opening of the door is for: one entry of the order. */
   private spawnBatch(): void {
-    const roles = PRODUCTION_ORDER[this.batch % PRODUCTION_ORDER.length];
+    const roles = this.order[this.batch % this.order.length];
     this.batch += 1;
     // Abreast of each other rather than stacked, laid out across the way they
     // are about to walk, so a batch comes out of the bay together.

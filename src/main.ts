@@ -4,10 +4,17 @@ import {
   BUILDING_OBSTACLES,
   BUILDING_SITES,
   createBuildings,
+  type ProducerBuilding,
+  type StarterBase,
 } from "./buildings";
 import { MovementMarkers } from "./feedback";
 import { STRATEGY_LABELS } from "./combat";
-import { AssemblyBayProduction } from "./production";
+import {
+  BuildingProduction,
+  HURLER_ORDER,
+  SWORD_ORDER,
+  type ProductionOrder,
+} from "./production";
 import { createRigwalker } from "./rigwalker";
 import { loadRigwalkerAsset } from "./rigwalker-assets";
 import {
@@ -58,32 +65,31 @@ const battle = new BattleRuntime(scene, {
 });
 const units = battle.units;
 for (const base of corporateBases) {
+  const spawn = base.assemblyBay.spawnPosition;
   const rigwalker = createRigwalker(rigwalkerAsset, base.accent, base.corporation);
   rigwalker.group.position.set(
-    base.spawnPosition.x,
-    terrainHeightAt(base.spawnPosition.x, base.spawnPosition.y) + 0.2,
-    base.spawnPosition.y,
+    spawn.x,
+    terrainHeightAt(spawn.x, spawn.y) + 0.2,
+    spawn.y,
   );
   rigwalker.moveTo(new THREE.Vector3(0, 0, 0));
   battle.spawn(rigwalker);
 }
-const productions = corporateBases.map((base) =>
-  new AssemblyBayProduction(
-    scene,
-    base.assemblyDoor,
-    units,
-    terrainHeightAt,
-    rigwalkerAsset,
-    base.spawnPosition,
-    new THREE.Vector3(0, 0, 0),
-    base.accent,
-    base.corporation,
-  ),
-);
-battle.audio.installUnlockHandlers();
-const movementMarkers = new MovementMarkers(scene);
-const rallyMarkers = corporateBases.map((base) => {
-  const marker = new THREE.Mesh(
+
+/** A building that produces, with the rally point the player set for it. */
+type Producer = {
+  corporation: string;
+  building: ProducerBuilding;
+  production: BuildingProduction;
+  rallyMarker: THREE.Mesh;
+};
+
+function createProducer(
+  base: StarterBase,
+  building: ProducerBuilding,
+  order: ProductionOrder,
+): Producer {
+  const rallyMarker = new THREE.Mesh(
     new THREE.RingGeometry(0.65, 0.82, 32),
     new THREE.MeshBasicMaterial({
       color: base.accent,
@@ -93,16 +99,41 @@ const rallyMarkers = corporateBases.map((base) => {
       side: THREE.DoubleSide,
     }),
   );
-  marker.rotation.x = -Math.PI / 2;
-  marker.visible = false;
-  scene.add(marker);
-  return marker;
-});
+  rallyMarker.rotation.x = -Math.PI / 2;
+  rallyMarker.visible = false;
+  scene.add(rallyMarker);
+  return {
+    corporation: base.corporation,
+    building,
+    rallyMarker,
+    production: new BuildingProduction({
+      scene,
+      door: building.door,
+      units,
+      terrainHeightAt,
+      rigwalkerAsset,
+      spawnPosition: building.spawnPosition,
+      // Every building starts sending its units to the middle of the map, and
+      // each one is moved from there on its own.
+      rallyPoint: new THREE.Vector3(0, 0, 0),
+      accent: base.accent,
+      corporation: base.corporation,
+      order,
+    }),
+  };
+}
+
+const producers = corporateBases.flatMap((base) => [
+  createProducer(base, base.assemblyBay, SWORD_ORDER),
+  createProducer(base, base.stoneworks, HURLER_ORDER),
+]);
+battle.audio.installUnlockHandlers();
+const movementMarkers = new MovementMarkers(scene);
 
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 let selectedRigwalkers: (typeof units)[number][] = [];
-let selectedAssemblyIndex: number | null = null;
+let selectedProducerIndex: number | null = null;
 let selectionDragStart: THREE.Vector2 | null = null;
 let selectionDragging = false;
 
@@ -134,17 +165,17 @@ function selectRigwalkers(
   }
   selectedRigwalkers = nextSelection;
   if (nextSelection.length > 0) {
-    selectAssembly(null);
+    selectProducer(null);
   }
   for (const unit of selectedRigwalkers) {
     unit.setSelected(true);
   }
 }
 
-function selectAssembly(index: number | null): void {
-  selectedAssemblyIndex = index;
-  corporateBases.forEach((base, baseIndex) => {
-    base.assemblySelectionRing.visible = baseIndex === index;
+function selectProducer(index: number | null): void {
+  selectedProducerIndex = index;
+  producers.forEach((producer, producerIndex) => {
+    producer.building.selectionRing.visible = producerIndex === index;
   });
   if (index !== null) {
     selectRigwalkers([]);
@@ -228,7 +259,7 @@ canvas.addEventListener("pointerup", (event) => {
     const top = Math.min(selectionDragStart.y, event.clientY);
     const bottom = Math.max(selectionDragStart.y, event.clientY);
     const projected = new THREE.Vector3();
-    selectAssembly(null);
+    selectProducer(null);
     selectRigwalkers(
       units.filter((unit) => {
         projected.copy(unit.group.position).project(camera);
@@ -252,15 +283,15 @@ canvas.addEventListener("pointerup", (event) => {
     if (selected) {
       selectRigwalkers([selected]);
     } else {
-      const assemblyIndex = corporateBases.findIndex((base) =>
+      const producerIndex = producers.findIndex((producer) =>
         raycaster
-          .intersectObject(base.assemblyBay, true)
-          .some((hit) => hit.object !== base.assemblySelectionRing),
+          .intersectObject(producer.building.group, true)
+          .some((hit) => hit.object !== producer.building.selectionRing),
       );
-      if (assemblyIndex >= 0) {
-        selectAssembly(assemblyIndex);
+      if (producerIndex >= 0) {
+        selectProducer(producerIndex);
       } else {
-        selectAssembly(null);
+        selectProducer(null);
         selectRigwalkers([]);
       }
     }
@@ -278,13 +309,13 @@ canvas.addEventListener("contextmenu", (event) => {
   updatePointer(event);
   const terrainHit = raycaster.intersectObject(terrain, false)[0];
   if (terrainHit) {
-    if (selectedRigwalkers.length === 0 && selectedAssemblyIndex !== null) {
+    if (selectedRigwalkers.length === 0 && selectedProducerIndex !== null) {
       const destination = clearBuildingFootprints(terrainHit.point);
-      productions[selectedAssemblyIndex].setRallyPoint(destination);
-      const marker = rallyMarkers[selectedAssemblyIndex];
-      marker.position.copy(destination);
-      marker.position.y += 0.1;
-      marker.visible = true;
+      const { production, rallyMarker } = producers[selectedProducerIndex];
+      production.setRallyPoint(destination);
+      rallyMarker.position.copy(destination);
+      rallyMarker.position.y += 0.1;
+      rallyMarker.visible = true;
       movementMarkers.add(destination);
       return;
     }
@@ -375,7 +406,7 @@ function describeRigwalker(unit: (typeof units)[number]): string {
 }
 
 function updateHud(elapsed: number): void {
-  const productionStatuses = productions.map((item) => item.getStatus());
+  const productionStatuses = producers.map((producer) => producer.production.getStatus());
   const deploying = productionStatuses.some((status) => status.label === "Deploying");
   const secondsRemaining = Math.min(...productionStatuses.map((status) => status.secondsRemaining));
   powerValue!.textContent = `${120 + Math.floor(elapsed * 0.05)} MWh`;
@@ -387,8 +418,9 @@ function updateHud(elapsed: number): void {
   productionBar!.style.width = `${Math.max(...productionStatuses.map((status) => status.progress)) * 100}%`;
   unitValue!.textContent = units.length.toString();
   selectionValue!.textContent =
-    selectedAssemblyIndex !== null
-      ? `${corporateBases[selectedAssemblyIndex].corporation} Assembly Bay · Set rally with right click`
+    selectedProducerIndex !== null
+      ? `${producers[selectedProducerIndex].corporation} ` +
+        `${producers[selectedProducerIndex].building.label} · Set rally with right click`
       : selectedRigwalkers.length === 0
         ? "None"
       : selectedRigwalkers.length === 1
@@ -402,8 +434,8 @@ const clock = new THREE.Clock();
 function animate(): void {
   const delta = Math.min(clock.getDelta(), 0.05);
   updateCamera(delta);
-  for (const production of productions) {
-    production.update(delta);
+  for (const producer of producers) {
+    producer.production.update(delta);
   }
   movementMarkers.update(delta);
   battle.update(delta, clock.elapsedTime, {
