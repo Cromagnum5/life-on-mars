@@ -5,18 +5,18 @@ import type { RigwalkerAsset } from "./rigwalker-assets";
 
 const PRODUCTION_SECONDS = 20;
 /**
- * What comes out of the door, one entry per opening, repeating. A pair of
- * swords, then a hurler behind them: a mixed field is the point, and arriving
- * in that order is what lets the swords be in front when the rocks start.
+ * What comes out of the door, one entry per opening, repeating. Three swords,
+ * then a hurler behind them: a mixed field is the point, and arriving in that
+ * order is what lets the swords be in front when the rocks start.
  */
 const PRODUCTION_ORDER: readonly (readonly CombatRole[])[] = [
-  ["melee", "melee"],
+  ["melee", "melee", "melee"],
   ["hurler"],
 ];
 /**
  * How far apart a batch stands as it comes out, across the line it walks. Wider
- * than the separation radius, so a pair is not shoving itself apart on the
- * doorstep, and well inside the 5.5 m door.
+ * than the separation radius, so a batch is not shoving itself apart on the
+ * doorstep, and three abreast is 3 m of it — well inside the 5.5 m door.
  */
 const ABREAST_SPACING = 1.5;
 const DOOR_SPEED = 1.4;
@@ -145,7 +145,7 @@ export class AssemblyBayProduction {
     const roles = PRODUCTION_ORDER[this.batch % PRODUCTION_ORDER.length];
     this.batch += 1;
     // Abreast of each other rather than stacked, laid out across the way they
-    // are about to walk, so a pair comes out of the bay as a pair.
+    // are about to walk, so a batch comes out of the bay together.
     const across = this.exitLine();
     for (const [index, role] of roles.entries()) {
       const offset = (index - (roles.length - 1) / 2) * ABREAST_SPACING;

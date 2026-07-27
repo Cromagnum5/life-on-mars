@@ -16,6 +16,17 @@ function flat(): number {
   return 0;
 }
 
+/** The tightest space between any two of them, which is where jamming shows. */
+function narrowestGap(units: Rigwalker[]): number {
+  let closest = Number.POSITIVE_INFINITY;
+  for (const [index, unit] of units.entries()) {
+    for (const other of units.slice(index + 1)) {
+      closest = Math.min(closest, unit.group.position.distanceTo(other.group.position));
+    }
+  }
+  return closest;
+}
+
 /** Runs a bay for a while and reports what came out, in order. */
 function runBay(seconds: number): { units: Rigwalker[]; roles: string[] } {
   const scene = new THREE.Scene();
@@ -41,12 +52,12 @@ function runBay(seconds: number): { units: Rigwalker[]; roles: string[] } {
 const CYCLE_SECONDS = 20 + 1 / 1.4;
 
 describe("assembly bay production", () => {
-  it("alternates a pair of swords with a single hurler", () => {
+  it("alternates three swords with a single hurler", () => {
     const { roles } = runBay(140);
-    expect(roles.length).toBeGreaterThanOrEqual(9);
-    // Two, then one, then two, then one: read back as batches rather than as a
-    // flat list, because that is the shape the order is written in.
-    const expected = ["melee", "melee", "hurler"];
+    expect(roles.length).toBeGreaterThanOrEqual(12);
+    // Three, then one, then three, then one: read back as batches rather than
+    // as a flat list, because that is the shape the order is written in.
+    const expected = ["melee", "melee", "melee", "hurler"];
     roles.forEach((role, index) => {
       expect(role).toBe(expected[index % expected.length]);
     });
@@ -54,20 +65,20 @@ describe("assembly bay production", () => {
 
   it("opens the door about every twenty seconds", () => {
     // Counted in units rather than openings, because the batches are uneven:
-    // three openings is a pair, a hurler and a pair, which is five units.
-    expect(runBay(CYCLE_SECONDS * 3 + 1).units).toHaveLength(5);
-    expect(runBay(CYCLE_SECONDS * 4 + 1).units).toHaveLength(6);
+    // three openings is a trio, a hurler and a trio, which is seven units.
+    expect(runBay(CYCLE_SECONDS * 3 + 1).units).toHaveLength(7);
+    expect(runBay(CYCLE_SECONDS * 4 + 1).units).toHaveLength(8);
     // Nothing arrives before the first cycle is up, and the swing is real:
     // twenty seconds in, the door is still opening.
     expect(runBay(20).units).toHaveLength(0);
     expect(runBay(CYCLE_SECONDS - 0.1).units).toHaveLength(0);
   });
 
-  it("walks a pair clear of the door instead of jamming it", () => {
-    // The risk in spawning two at once is the pair shoving each other on the
-    // doorstep and neither getting anywhere, so this runs them.
+  it("walks a trio clear of the door instead of jamming it", () => {
+    // The risk in spawning three at once is the batch shoving itself apart on
+    // the doorstep and nobody getting anywhere, so this runs them.
     const { units } = runBay(30);
-    expect(units).toHaveLength(2);
+    expect(units).toHaveLength(3);
     const rally = new THREE.Vector3(0, 0, 0);
     const start = units.map((unit) => unit.group.position.distanceTo(rally));
     let closest = Number.POSITIVE_INFINITY;
@@ -75,7 +86,7 @@ describe("assembly bay production", () => {
       for (const unit of units) {
         unit.update(STEP, elapsed, flat, units, [], new THREE.Quaternion());
       }
-      closest = Math.min(closest, units[0].group.position.distanceTo(units[1].group.position));
+      closest = Math.min(closest, narrowestGap(units));
     }
     units.forEach((unit, index) => {
       expect(unit.group.position.distanceTo(rally)).toBeLessThan(start[index] - 2);
@@ -83,19 +94,24 @@ describe("assembly bay production", () => {
     expect(closest).toBeGreaterThan(1);
   });
 
-  it("stands a pair abreast rather than on top of each other", () => {
+  it("stands a trio abreast rather than on top of each other", () => {
     const { units } = runBay(30);
-    expect(units).toHaveLength(2);
-    const [left, right] = units;
-    const gap = left.group.position.distanceTo(right.group.position);
+    expect(units).toHaveLength(3);
+    const gap = narrowestGap(units);
     // Far enough apart not to be shoving on the doorstep, close enough to read
-    // as one pair leaving together.
+    // as one batch leaving together.
     expect(gap).toBeGreaterThan(1.25);
     expect(gap).toBeLessThan(2.5);
-    // Abreast means across the walk, not one in front of the other: both start
-    // the same distance from where they are headed.
-    const rally = new THREE.Vector3(0, 0, 0);
-    expect(left.group.position.distanceTo(rally))
-      .toBeCloseTo(right.group.position.distanceTo(rally), 5);
+    // Abreast means across the walk, not one behind the other: measured along
+    // the way they are headed, all three stand on the same line. Straight-line
+    // distance to the rally point would not say this — the middle of a row of
+    // three is nearer to it than the ends are, while still being abreast.
+    const forward = new THREE.Vector2(0 - 10, 0 - -1.8).normalize();
+    const along = units.map(
+      (unit) => forward.x * unit.group.position.x + forward.y * unit.group.position.z,
+    );
+    for (const distance of along.slice(1)) {
+      expect(distance).toBeCloseTo(along[0], 5);
+    }
   });
 });

@@ -100,7 +100,7 @@ cycle, can be selected with left click, and accepts terrain movement orders with
 right click. It turns smoothly, follows the terrain, and returns to idle on
 arrival. The Assembly Bay opens every 20 seconds: its shutter rises, the batch
 walks from inside to a clear rally point, and the shutter closes. The batches
-alternate — two swords together, then a single hurler, repeating — so the line
+alternate — three swords together, then a single hurler, repeating — so the line
 puts the melee out in front of the rocks. Selected units show an orange ring, movement
 orders pulse on the terrain, and the operations HUD reports power, ore, unit
 count, selection, and Assembly Bay progress. Units support single-click and
@@ -123,7 +123,7 @@ per-fighter readout and an event log, and renders headlessly for review.
 The Rigwalker Hurler is a second unit built on the same skeleton and the same
 runtime: no sword, a rock in its hand and a cache of them on its hip, and three
 throws picked by how far away its target is. The Assembly Bay produces one every
-third Rigwalker, so the game fields a mixed line without new interface.
+fourth Rigwalker, so the game fields a mixed line without new interface.
 
 ## Current playtest
 
@@ -146,7 +146,7 @@ points are:
   reveal oscillation or congestion around building footprints.
 
 Do not change the established WASD/wheel camera controls or the production
-cadence as part of performance work. The 20-second interval and the two-swords
+cadence as part of performance work. The 20-second interval and the three-swords
 then-one-hurler order in `PRODUCTION_ORDER` are the user's calls, not tuning
 knobs. Preserve left-click selection,
 drag-box multi-selection, right-click orders, randomized rally points, and the

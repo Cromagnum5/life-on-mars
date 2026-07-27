@@ -19,10 +19,10 @@ whole time: the Blender tools were posing in Blender's Euler order rather than
 Three.js's, so they had been validating and drawing poses the game never
 rendered. Read `e71fb45`'s measurements with that in mind.
 
-The Assembly Bay opens every 20 seconds, and what comes out alternates: two
+The Assembly Bay opens every 20 seconds, and what comes out alternates: three
 swords abreast, then a single Hurler, repeating. `PRODUCTION_ORDER` in
 `production.ts` is the whole of it; `production.test.ts` pins the order, the
-cadence, and that a pair walks clear of the door instead of jamming it.
+cadence, and that a trio walks clear of the door instead of jamming it.
 
 Run these checks after further combat changes:
 
