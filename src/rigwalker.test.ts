@@ -168,6 +168,45 @@ describe("Rigwalkers sent to one waypoint", () => {
     }
   });
 
+  it("makes room once rather than stepping on the spot", () => {
+    // Reported from play: a unit stutter-stepping as it met a crowd of its own
+    // team. A standing unit that tests the same crowding threshold every frame
+    // starts and stops its walk at frame rate, because a crowd tight enough to
+    // push against is never quite still. Packed far tighter than their personal
+    // space, each of these should take its shuffle and then stand.
+    for (const count of [6, 10, 14]) {
+      const random = createSeededRandom(4);
+      const units: Rigwalker[] = [];
+      for (let index = 0; index < count; index += 1) {
+        const unit = createRigwalker(null, 0xffffff, "Helios", random);
+        const angle = index * 2.399;
+        const radius = 1.4 * Math.sqrt((index + 1) / count);
+        unit.group.position.set(Math.cos(angle) * radius, 0.2, Math.sin(angle) * radius);
+        units.push(unit);
+      }
+
+      const previous = units.map((unit) => unit.group.position.clone());
+      const walking = units.map(() => false);
+      const flips = units.map(() => 0);
+      for (let elapsed = 0; elapsed < 12; elapsed += STEP) {
+        for (const unit of units) {
+          unit.update(STEP, elapsed, flat, units, [], CAMERA);
+        }
+        units.forEach((unit, index) => {
+          const speed = unit.group.position.distanceTo(previous[index]) / STEP;
+          previous[index].copy(unit.group.position);
+          const isWalking = speed > 0.4;
+          if (walking[index] !== isWalking) {
+            walking[index] = isWalking;
+            flips[index] += 1;
+          }
+        });
+      }
+      // Starting to walk and stopping again is two: one shuffle and done.
+      expect(Math.max(...flips)).toBeLessThanOrEqual(2);
+    }
+  });
+
   it("still walks the whole way when only a few are ahead of it", () => {
     // The failure this guards against is the opposite one: a batch converging
     // on a rally point funnels, and a moment's lost ground with a neighbour

@@ -245,6 +245,35 @@ describe("a hurler in an exchange", () => {
   });
 });
 
+describe("a hurler at the edge of its reach", () => {
+  it("keeps hold of a target instead of noticing it over and over", () => {
+    // Reported from play: a unit stutter-stepping under a strobing plan ring.
+    // A hurler jostled by the crowd around it sat on the line where it both
+    // acquires and forgets a target, and took the same encounter every few
+    // frames. Nothing here throws — the whole fight is 21 metres of standing
+    // around, and a plan every frame is the tell.
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const random = createSeededRandom(seed);
+      const director = new CombatDirector(random);
+      const jitter = createSeededRandom(seed + 40);
+      const edge = LONG_THROW_RANGE * 1.35;
+      let plans = 0;
+      for (let elapsed = 0; elapsed < 20; elapsed += STEP) {
+        // Shoved back and forth across the line the way a crowd shoves.
+        const gap = edge + (jitter() - 0.5) * 0.3;
+        const frame = director.update(STEP, [
+          snapshot(1, "A", 0, random, "hurler"),
+          snapshot(2, "B", gap, random, "melee"),
+        ]);
+        plans += frame.events.filter((event) => event.type === "plan").length;
+      }
+      // Acquiring once and holding on is one plan; a couple more is a hurler
+      // changing its mind. Dozens is the encounter churning at frame rate.
+      expect(plans).toBeLessThan(4);
+    }
+  });
+});
+
 describe("a hurler under pressure", () => {
   it("holds near its standoff while it is left alone", () => {
     // Two hurlers have no way to close on each other, so the gap they settle at

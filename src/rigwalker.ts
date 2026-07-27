@@ -71,6 +71,14 @@ const SEPARATION_RADIUS = 1.25;
  */
 const COMBAT_SEPARATION_RADIUS = 2.05;
 /**
+ * Crowding a standing unit will step away from, and the slacker figure it steps
+ * until, as a fraction of the separation radius. One neighbour at the clearance
+ * floor reads about 0.08, so a pair the floor has already resolved stands its
+ * ground rather than shuffling apart on the spot.
+ */
+const SEPARATION_NUDGE = 0.12;
+const SEPARATION_CLEAR = 0.02;
+/**
  * Hard floor on how close two bodies may end a frame. Steering alone cannot
  * hold a crowd apart: several units converging on one target push inward
  * faster than the separation drift pushes back, and they end up occupying the
@@ -1139,6 +1147,8 @@ export function createRigwalker(
   /** Closest this unit has come to its waypoint, and how long since it improved. */
   let approachBestDistance = Number.POSITIVE_INFINITY;
   let approachStallElapsed = 0;
+  /** True while a standing unit is seeing a shuffle for room through to the end. */
+  let shufflingClear = false;
   let health = MAX_HEALTH;
   const combatProfile = createCombatProfile(random);
   let combatTarget: Rigwalker | null = null;
@@ -1561,13 +1571,25 @@ export function createRigwalker(
       }
     }
 
-    if (!moving && separation.lengthSq() > 0.001) {
-      moving = true;
-      travelSpeed = SEPARATION_SPEED;
-      movement.copy(separation).normalize();
-      desiredMovement.copy(movement);
-    } else if (moving && separation.lengthSq() > 0.001) {
-      movement.addScaledVector(separation, 1.35).normalize();
+    if (!moving) {
+      // A standing unit takes a step to make room, but the step is a decision
+      // rather than a per-frame reflex: a crowd is never perfectly still, and
+      // testing the same threshold every frame starts and stops the walk at
+      // frame rate. That is the stutter step. Once it starts making room it
+      // finishes, and it does not start again for a nudge it can stand.
+      const crowding = separation.length();
+      shufflingClear = crowding > (shufflingClear ? SEPARATION_CLEAR : SEPARATION_NUDGE);
+      if (shufflingClear) {
+        moving = true;
+        travelSpeed = SEPARATION_SPEED;
+        movement.copy(separation).divideScalar(crowding);
+        desiredMovement.copy(movement);
+      }
+    } else {
+      shufflingClear = false;
+      if (separation.lengthSq() > 0.001) {
+        movement.addScaledVector(separation, 1.35).normalize();
+      }
     }
 
     if (moving) {

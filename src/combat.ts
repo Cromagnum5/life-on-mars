@@ -263,8 +263,15 @@ const THROW_LINES: Record<ThrowType, AttackLine> = {
 /**
  * Slack on the acquire range so a hurler walks the last stretch into throwing
  * distance rather than standing still just outside it.
+ *
+ * It must stay below `RELEASE_SLACK`. Noticing somebody at the same range you
+ * forget them at is not a range at all: a fighter sitting on that line takes
+ * the encounter, loses it, and takes it again as often as the crowd jostles it,
+ * which reads as a unit stuttering under a strobing plan ring.
  */
-const ACQUIRE_SLACK = 1.35;
+const ACQUIRE_SLACK = 1.15;
+/** Slack on the range an encounter survives to, which sets the hysteresis band. */
+const RELEASE_SLACK = 1.35;
 const MAX_SUPPORTERS_PER_TARGET = 2;
 const LINES: readonly AttackLine[] = ["overhead", "forehand", "backhand", "flank", "rising"];
 const EMPTY_CUE: CombatCue = {
@@ -372,7 +379,7 @@ export class CombatDirector {
       const a = byId.get(encounter.a);
       const b = byId.get(encounter.b);
       if (!a || !b || a.corporation === b.corporation ||
-          this.distance(a, b) > this.awareness(a, b) * 1.35) {
+          this.distance(a, b) > this.awareness(a, b) * RELEASE_SLACK) {
         this.encounters.delete(key);
       }
     }
@@ -480,7 +487,7 @@ export class CombatDirector {
           // paired with, but it certainly may charge the hurler shelling it.
           (ranged || ally.id !== helper.id) &&
           target.corporation !== helper.corporation &&
-          this.distance(helper, target) <= this.awareness(helper, target) * 1.15 &&
+          this.distance(helper, target) <= this.awareness(helper, target) * ACQUIRE_SLACK &&
           (supportCounts.get(target.id) ?? 0) < MAX_SUPPORTERS_PER_TARGET)
         .map(({ ally, target, ranged }) => ({
           ally, target,

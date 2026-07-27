@@ -380,6 +380,30 @@ the fight stops reading, whatever the poses are doing.
 - `src/rigwalker.test.ts` drives movement and planning together, without
   rendering, and pins the spacing a real fight settles at.
 
+## Hysteresis, or the stutter step
+
+A crowd is never quite still, so anything a unit decides by testing one
+threshold against its neighbours every frame will be decided both ways, at
+frame rate. It looks like a unit stepping on the spot, and it has shown up
+twice in play. Both times the fix was a band rather than a line, and both are
+pinned by tests that count how often a unit changes its mind.
+
+- **Making room.** A standing unit steps away from a crowd at
+  `SEPARATION_NUDGE` and keeps stepping until `SEPARATION_CLEAR`. With one
+  threshold it walked and stopped every frame, half-blended through the 0.16 s
+  crossfade into the walk clip. The nudge figure sits deliberately above the
+  crowding a pair resolved by the clearance floor reads, so the common resting
+  state is standing still rather than shuffling.
+- **Noticing an enemy.** `ACQUIRE_SLACK` must stay below `RELEASE_SLACK` in
+  `combat.ts`. They were both 1.35, which for a hurler meant acquiring and
+  forgetting a target at the same 21.7 m: a hurler jostled on that line took
+  the same encounter thirty times a second, and every one of them announced a
+  plan. Sword and support encounters already had a band; only the ranged
+  acquire did not.
+- A plan event is a ring under the fighter, so an encounter that churns strobes.
+  Watch the plan rate, not just the movement, when something looks wrong: at
+  21.7 m that hurler was not moving at all and never threw a rock.
+
 ## Arriving at a waypoint
 
 A waypoint is a point and a crowd cannot stand on one. Every unit a building
