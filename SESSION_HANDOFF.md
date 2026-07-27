@@ -2,9 +2,22 @@
 
 ## Current checkpoint
 
-Branch `rigwalker-hurler`, off `main` at `c644c70`. The whole session is one
-feature: a second Rigwalker that throws rocks. Nothing is pushed; merging and
-pushing are the user's call.
+`main` at `d76b50e` (`Send the swords out in pairs, the hurler alone`), clean
+tree. `rigwalker-hurler` has been merged in and the session's work is all
+committed. `main` is 3 commits ahead of `origin/main`; nothing is pushed, and
+pushing is the user's call.
+
+This session's commits, oldest first:
+
+- `e71fb45` Add a Rigwalker that throws rocks
+- `23db02c` Throw the rock overhand
+- `d76b50e` Send the swords out in pairs, the hurler alone
+
+The first two are one thread. The throws shipped sidearm and were rebuilt
+overhand a session later, which turned up a bug that had been quietly wrong the
+whole time: the Blender tools were posing in Blender's Euler order rather than
+Three.js's, so they had been validating and drawing poses the game never
+rendered. Read `e71fb45`'s measurements with that in mind.
 
 The Assembly Bay opens every 20 seconds, and what comes out alternates: two
 swords abreast, then a single Hurler, repeating. `PRODUCTION_ORDER` in
