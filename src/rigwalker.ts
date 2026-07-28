@@ -677,6 +677,12 @@ const HURL_STEP: Beat = [0.26, 0.46, 0.74, 1];
 const HURL_HEEL: Beat = [0.34, 0.5, 0.6, 0.86];
 const HURL_DRIVE: Beat = [0.4, 0.58, 0.6, 0.86];
 const HURL_HOME: Beat = [0.7, 0.8, 0.9, 1];
+/**
+ * The free arm getting out of the chest's way, which is the same rule one limb
+ * further up: a part has to be clear of the body before it swings through where
+ * the body is. Riding the whip is too late — the whip is the swing.
+ */
+const HURL_OPEN: Beat = [0.34, 0.5, 0.62, 0.86];
 
 /**
  * The legs of a hurl, shared between the pose and the hip drop that pays for
@@ -920,10 +926,17 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
     // It runs on the larger of the two wind beats rather than their sum. Draw
     // and stride overlap, and adding them lifts the arm over the head halfway
     // through the wind — the same trap the throwing arm's keys exist to avoid.
+    //
+    // The opening has to *lead* the swing-back, which is why it gets a beat of
+    // its own rather than riding the whip. Held across the chest while the
+    // shoulder drove it down and back, the elbow went a quarter of a metre
+    // inside the torso — measured, and visible in the game as the arm passing
+    // through the body instead of round it. `HURL_OPEN` gets the arm clear
+    // before the shoulder swings it through, exactly the rule the feet follow.
     const sight = Math.max(draw, stride);
     setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
       -0.4 - 0.72 * sight + 1.35 * whip + 0.34 * follow - 0.34 * aim,
-      0, -0.14 - 0.5 * sight + 0.25 * follow);
+      0, -0.14 - 0.5 * sight + 0.7 * beat(attackPhase, HURL_OPEN) + 0.2 * follow);
     setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
       -0.08 + 0.72 * sight - 0.5 * whip + 0.2 * follow + 0.35 * aim,
       0, -0.05);
@@ -945,8 +958,11 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
 
     // The free arm only counterbalances; there is no time to aim with it. Its
     // elbow stays loose for the same reason the hurl's does.
+    // The small `follow` on the Z is the same fault as the hurl's, caught by
+    // the same check and a hundredth its size: without it the elbow grazes the
+    // torso by 5 mm as the arm settles back into the guard.
     setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
-      -0.32 - 0.3 * draw + 0.75 * whip + 0.5 * follow, 0, -0.08);
+      -0.32 - 0.3 * draw + 0.75 * whip + 0.5 * follow, 0, -0.08 + 0.12 * follow);
     setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
       -0.18 - 0.04 * draw + 0.55 * whip + 0.45 * follow, 0, -0.05);
     setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);

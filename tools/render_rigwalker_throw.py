@@ -157,6 +157,16 @@ def hurl_root_pitch(d):
     return -.06 * g + .04 * d['stride'] + .1 * d['whip'] + .14 * d['follow']
 
 
+OPEN = (.34, .5, .62, .86)
+OPEN_K = .70
+
+
+def free_arm_across(phase, d):
+    """Port of the hurl's free-arm Z. Negative carries it across the chest."""
+    sight = max(d['draw'], d['stride'])
+    return -.14 - .5 * sight + OPEN_K * beat(phase, OPEN) + .2 * d['follow']
+
+
 def hurl_hips(d):
     """Port of hurlHips. The coil, and what the lead leg has to cancel."""
     g = hurl_gather(d)
@@ -345,7 +355,7 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
         sight = max(draw, stride)
         offset(rig, 'upper_arm.L',
                -.4 - .72 * sight + 1.35 * whip + .34 * follow - .34 * aim,
-               0, -.14 - .5 * sight + .25 * follow)
+               0, free_arm_across(phase, d))
         offset(rig, 'lower_arm.L',
                -.08 + .72 * sight - .5 * whip + .2 * follow + .35 * aim, 0, -.05)
         offset(rig, 'hand.L', -.06, 0, 0)
@@ -358,7 +368,8 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
         offset(rig, 'chest', .03 + .08 * draw - .22 * follow, .24 * coil, 0)
         offset(rig, 'neck', .08, -.32 * coil, 0)
         offset(rig, 'head', -.03 + .06 * aim, -.24 * coil, 0)
-        offset(rig, 'upper_arm.L', -.32 - .3 * draw + .75 * whip + .5 * follow, 0, -.08)
+        offset(rig, 'upper_arm.L', -.32 - .3 * draw + .75 * whip + .5 * follow,
+               0, -.08 + .12 * follow)
         offset(rig, 'lower_arm.L', -.18 - .04 * draw + .55 * whip + .45 * follow, 0, -.05)
         offset(rig, 'hand.L', -.06, 0, 0)
         set_legs(rig, .06 + HURLER_STANCE * ready + .06 * draw - .1 * whip - .08 * follow,
@@ -392,6 +403,25 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
     root, at_x = STANCES[rig]
     forward, drop = hurl_step(throw, phase)
     root.location = (at_x, -forward, -drop)
+
+
+def inside_torso(actor, part):
+    """How far a part is *inside* the torso box, in metres. Negative is clear.
+
+    The free arm is the one pose problem a silhouette check cannot catch: it
+    swings across the chest as a counterweight, so the difference between going
+    round the ribs and going through them is a few centimetres of one Euler
+    angle. Measured in the torso's own space rather than against a world box,
+    because the chest is twisted through most of a hurl and an axis-aligned box
+    round a turned chest is a box round nothing.
+    """
+    torso = named('Torso', actor)
+    local = torso.matrix_world.inverted() @ named(part, actor).matrix_world.translation
+    corners = [Vector(c) for c in torso.bound_box]
+    low = Vector((min(c[i] for c in corners) for i in range(3)))
+    high = Vector((max(c[i] for c in corners) for i in range(3)))
+    centre, half = (low + high) / 2, (high - low) / 2
+    return min(half[i] - abs(local[i] - centre[i]) for i in range(3))
 
 
 def rock_world(actor):
@@ -483,6 +513,28 @@ for throw in ('hurl', 'pitch', 'toss'):
     # That one may not leave the ground, or the fighter is skating.
     if drift > 0.32:
         failures.append(f'{throw}: the foot it stands on drifts {drift:.3f} m')
+
+    # The free arm goes round the body, not through it. This is the one pose
+    # fault a silhouette cannot show you and the numbers above cannot either:
+    # the counterweight arm folds across the chest on purpose, so the difference
+    # between clearing the ribs and ploughing through them is a few centimetres
+    # of one Euler angle. Held across while the shoulder drove it down and back,
+    # the elbow sat a quarter of a metre inside the torso for a fifth of the
+    # motion. Sampled finely, because it is a passage and not a pose.
+    buried = []
+    for step_index in range(0, 101):
+        phase = step_index / 100
+        pose_throw(MAIN['rig'], throw, phase)
+        bpy.context.view_layer.update()
+        for part in ('Elbow.L', 'Forearm.L', 'Hand.L'):
+            depth = inside_torso(MAIN, part)
+            if depth > 0:
+                buried.append((depth, part, phase))
+    if buried:
+        depth, part, phase = max(buried)
+        failures.append(f'{throw}: the free arm goes through the body - {part} is '
+                        f'{depth:.3f} m inside the torso at phase {phase:.2f}, and is '
+                        f'inside it at {len(buried)} of 303 samples')
 
     # Overhand, checked across the motion rather than at the release pose.
     # Sampled finely: the sidearm slot the rig falls into is a dip between two
@@ -585,6 +637,21 @@ if recovery > 0.7:
 # one part of this motion the eight validation phases are too coarse for: a foot
 # that skates does it between them, and the arithmetic in `hurlStep` cannot
 # predict it because the body's yaw carries the feet around as well.
+if os.environ.get('ARM'):
+    print('\n=== the free arm through a hurl, depth inside the torso box ===')
+    print('positive is buried; elbow, forearm and hand are each checked')
+    print('   phase  elbow  fore   hand | upperZ')
+    for step_index in range(0, 51):
+        phase = step_index / 50
+        pose_throw(MAIN['rig'], 'hurl', phase)
+        bpy.context.view_layer.update()
+        depths = [inside_torso(MAIN, part)
+                  for part in ('Elbow.L', 'Forearm.L', 'Hand.L')]
+        d = drive('hurl', phase)
+        sight = max(d['draw'], d['stride'])
+        print(f'    {phase:.2f} ' + ' '.join(f'{v:+.3f}' for v in depths) +
+              f' | {free_arm_across(phase, d):+.2f}')
+
 if os.environ.get('FEET'):
     print('\n=== a hurl, foot by foot, against the spot the fighter holds ===')
     print('   phase   fwd |     L    h |     R    h | split')

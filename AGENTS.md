@@ -368,7 +368,9 @@ wrong, and it checks things that were each caught by it in practice:
 - the pose settles back to the ready stance;
 - a hurl is a **step**: the hurler waits with the trailing leg behind it and its
   weight on the throwing-side foot, releases over a lead foot that is in front
-  of the other one, and does not skate that foot while it is planted.
+  of the other one, and does not skate that foot while it is planted;
+- the free arm goes **round** the body rather than through it, checked against
+  the torso's own box at a hundred phases of each throw.
 
 `FEET=1` prints a hurl foot by foot across fifty phases, and `MEASURE=1` stops
 before the renders, which are most of the runtime. A stance question is usually
@@ -405,6 +407,14 @@ Three traps worth knowing before touching it:
   drive wants — and it should, because a foot has to be off the ground before it
   travels or it skates. Fold the knee of the leg holding the fighter up and the
   crouch that pays for it costs release height the throws are ordered by.
+- **A limb has to be clear of the body before it swings through where the body
+  is.** The free arm folds across the chest as a counterweight and then drives
+  down and back, and riding the whip for the opening is too late — the whip *is*
+  the swing. Held across through it, the elbow sat a quarter of a metre inside
+  the torso for a fifth of the motion. `HURL_OPEN` gets it out first. This is
+  the same rule as `HURL_TUCK` one limb up, and it is invisible in a silhouette:
+  it took measuring the arm against the torso's own box to find, which the tool
+  now does for all three throws.
 - **The legs have their own beats, not the body's four.** `HURL_TUCK`,
   `HURL_SWING`, `HURL_STEP`, `HURL_HEEL`, `HURL_DRIVE` and `HURL_HOME` exist
   because each foot has to leave the ground slightly before it travels and land
