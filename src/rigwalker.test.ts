@@ -216,4 +216,28 @@ describe("Rigwalkers sent to one waypoint", () => {
       expect(unit.group.position.distanceTo(waypoint)).toBeLessThan(2.6);
     }
   });
+
+  /**
+   * A seeded fight has to be the same fight whatever else exists. Each unit's
+   * own beat was read off `group.id`, three.js's global object counter, so a
+   * second camera in the sim — or a rock, or a building — silently moved every
+   * fighter in every seed. The sim is a workbench for judging poses against
+   * saved captures; a baseline that drifts when unrelated scenery is added is
+   * worse than no baseline.
+   */
+  it("replays a seeded fight identically however much else is in the scene", () => {
+    const trace = (seed: number): string =>
+      runFight(seed, 2, 6).units
+        .map((unit) => [
+          unit.group.position.x.toFixed(6),
+          unit.group.position.z.toFixed(6),
+          unit.health.toFixed(3),
+        ].join(","))
+        .join(" ");
+
+    const before = trace(11);
+    // Anything constructed moves the global counter, which is the whole point.
+    for (let index = 0; index < 9; index += 1) new THREE.Group();
+    expect(trace(11)).toBe(before);
+  });
 });

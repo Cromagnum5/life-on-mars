@@ -1319,6 +1319,17 @@ export function createRigwalker(
   const group = new THREE.Group();
   group.name = role === "hurler" ? "Rigwalker Hurler" : "Rigwalker";
 
+  /**
+   * What makes this unit step, look and settle on its own beat rather than in
+   * lockstep with the rest of the line. It has to come off the seeded stream:
+   * this was `group.id` — three.js's global object counter — until a second
+   * camera in the sim shifted every id by one and moved every fighter in every
+   * seeded fight. A fight that replays only while nothing else is added to the
+   * scene does not replay. Drawn first, so where a unit falls in the stream is
+   * what decides it, not how much geometry happens to exist by then.
+   */
+  const variation = Math.floor(random() * 997);
+
   const contactShadow = new THREE.Mesh(
     new THREE.CircleGeometry(0.72, 24),
     new THREE.MeshBasicMaterial({
@@ -1827,7 +1838,7 @@ export function createRigwalker(
       const distance = radial.length();
       if (distance < separationRadius) {
         if (distance < 0.001) {
-          const angle = (group.id % 8) * (Math.PI / 4);
+          const angle = (variation % 8) * (Math.PI / 4);
           radial.set(Math.cos(angle), 0, Math.sin(angle));
         } else {
           radial.divideScalar(distance);
@@ -1865,7 +1876,7 @@ export function createRigwalker(
         observedCombatTargetId = combatTarget.combatId;
         observedEnemyDistance = enemyDistance;
         observedFightDistance = fightDistance;
-        distanceObservationElapsed = 0.16 + ((group.id * 37) % 17) / 100;
+        distanceObservationElapsed = 0.16 + ((variation * 37) % 17) / 100;
         distanceObservationCount = 0;
       } else {
         distanceObservationElapsed -= delta;
@@ -1873,8 +1884,8 @@ export function createRigwalker(
           observedEnemyDistance = enemyDistance;
           observedFightDistance = fightDistance;
           distanceObservationCount += 1;
-          const variation = ((group.id * 37 + distanceObservationCount * 61) % 100) / 100;
-          distanceObservationElapsed = 0.18 + variation * 0.24;
+          const spread = ((variation * 37 + distanceObservationCount * 61) % 100) / 100;
+          distanceObservationElapsed = 0.18 + spread * 0.24;
         }
       }
       combatDirection.set(
@@ -2055,7 +2066,7 @@ export function createRigwalker(
       const distance = radial.length();
       if (distance >= clearance) continue;
       if (distance < 0.001) {
-        const angle = (group.id % 8) * (Math.PI / 4);
+        const angle = (variation % 8) * (Math.PI / 4);
         radial.set(Math.cos(angle), 0, Math.sin(angle));
       } else {
         radial.divideScalar(distance);
@@ -2117,7 +2128,7 @@ export function createRigwalker(
       }
       mixer.update(delta);
       if (combatBones && combatTarget) {
-        const combatStep = moving ? Math.sin(elapsed * 5.8 + group.id * 0.7) * 0.24 : 0;
+        const combatStep = moving ? Math.sin(elapsed * 5.8 + variation * 0.7) * 0.24 : 0;
         if (role === "hurler") {
           applyThrowPose(combatBones, {
             // Between throws the hurler still stands like one, so the ready

@@ -247,6 +247,27 @@ event log as text, which is often more useful than the picture.
 Do not point a capture past the end of a fight with auto-restart on; capture
 mode turns it off, because a restart would reset the clock the capture waits on.
 
+### What a seed is worth
+
+A seed fixes the fight. It does not fix anything a unit reads from outside the
+seeded streams, and one thing used to leak in: each Rigwalker's own beat — its
+separation angle, how often it re-reads the distance, the phase of its combat
+step — was read off `group.id`, which is three.js's **global object counter**.
+Every mesh, light, rock, and camera constructed before the units moved it. A
+second camera in the sim shifted every id by one and moved every fighter in
+every seed by about half a metre at six seconds, with an event log and a damage
+tally that matched exactly. A capture sheet compared against that looks like a
+pose regression and is not one.
+
+It now comes off the seeded spawn stream instead (`variation` in
+`createRigwalker`), and `src/rigwalker.test.ts` replays a fight across a shifted
+object counter to keep it that way. `combatId` is still `group.id`, which is
+fine: it is only ever compared and keyed, never counted on.
+
+The rule this leaves: **anything that changes how a unit moves must come from an
+injected random stream**, never from an id, a counter, an array index, or the
+wall clock. Any of those turns a scenery change into a combat change.
+
 ## Combat effects validation
 
 Sparks, flashes, trails, and rings are not covered by the Blender duel tool,
