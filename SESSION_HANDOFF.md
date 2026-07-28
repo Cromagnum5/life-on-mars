@@ -2,19 +2,21 @@
 
 ## Current checkpoint
 
-`settle-at-the-waypoint` at `1a209c3` (`Decide crowding with a band, not a
-line`), clean tree, **not merged**. It branches from `main` at `40b02fa` and is
-2 commits ahead of it. `main` is 8 commits ahead of `origin/main`; nothing is
-pushed, and both merging and pushing are the user's call.
+`main` at `b3e7f5b` (`Wind the hurl up like a spring`), clean tree, **merged**.
+`settle-at-the-waypoint` has been fast-forwarded into it and is spent. `main` is
+15 commits ahead of `origin/main`; nothing is pushed, and pushing is the user's
+call.
 
-This session's commits, oldest first:
+This session's commits, oldest first — all one thread, the Hurler's long throw:
 
-- `a53267c` Let a crowd settle at the waypoint
-- `1a209c3` Decide crowding with a band, not a line
+- `1946d35` Hurl with the whole body
+- `705fb80` Judge a pose in the renderer that draws it
+- `9a1fd1d` Stand a hurler like a thrower and let it drive off the back leg
+- `b3e7f5b` Wind the hurl up like a spring
 
-Both came from playtest reports about movement rather than from planned work,
-and both are written up under **Crowds and waypoints** below. Neither touches
-combat animation, the production cadence, or the camera.
+They came from playtest reports, and the middle one is the important one to read
+first: it is a tooling commit that exists because the first commit was validated
+against a renderer nobody was looking at. See **Which instrument to trust**.
 
 Earlier session commits, oldest first:
 
@@ -23,26 +25,8 @@ Earlier session commits, oldest first:
 - `d76b50e` Send the swords out in pairs, the hurler alone
 - `5e2b8c5` Send the swords out three at a time
 - `d661abb` Give the hurlers a building of their own
-
-The first two are one thread. The throws shipped sidearm and were rebuilt
-overhand a session later, which turned up a bug that had been quietly wrong the
-whole time: the Blender tools were posing in Blender's Euler order rather than
-Three.js's, so they had been validating and drawing poses the game never
-rendered. Read `e71fb45`'s measurements with that in mind.
-
-Production is split across two buildings per corporation. The Assembly Bay
-opens every 20 seconds and sends out three swords abreast; the new **Stoneworks**
-opens on its own 20-second timer and sends out one Hurler. `SWORD_ORDER` and
-`HURLER_ORDER` in `production.ts` are the whole of it; `production.test.ts` pins
-each order, the cadence, and that a trio walks clear of the door instead of
-jamming it, and `buildings.test.ts` pins the base layout.
-
-Each producing building selects on its own, shows its own ring, and keeps its
-own rally point. All four start rallying to the middle of the map; right-click
-with one selected moves only that building's rally point. Note the throughput
-change that follows from the user's brief: the mix is still three swords to a
-rock, but both doors run at once, so units arrive twice as fast as they did when
-one door alternated.
+- `a53267c` Let a crowd settle at the waypoint
+- `1a209c3` Decide crowding with a band, not a line
 
 Run these checks after further combat changes:
 
@@ -51,68 +35,80 @@ npm test
 npm run build
 blender --background --python tools/render_rigwalker_duel.py
 blender --background --python tools/render_rigwalker_throw.py
-npm run dev   # then tools/capture_sim.sh /tmp/sheet "1h v 1" 3 2 5 8 11
+npm run dev   # then see the capture recipes below
 ```
 
 The Vite warning about the shared `world` chunk exceeding 500 kB is known and
 non-blocking.
 
-## Crowds and waypoints
+## Which instrument to trust
 
-Two playtest reports, three defects, one recurring shape. `AGENTS.md` has the
-rules under **Arriving at a waypoint** and **Hysteresis, or the stutter step**;
-this is what was actually wrong and how it was found.
+**Read this before touching a pose.** It is the main thing this session learnt
+and it cost most of a session to learn.
 
-**"Units returning to the waypoint cannot settle down after combat ends."**
-Arrival was an exact test: within 8 cm of the destination. But every unit a
-building makes is sent to that building's *one* rally point, and the positional
-clearance floor holds units 1.15 m apart, so only the first unit could ever
-satisfy it. Everyone else pressed into a point they were being held off, for as
-long as the game ran. A fight makes it visible because it puts a whole group
-back on the road at once. Reproduced before touching anything: six units sent to
-one rally point were still collectively walking 1.07 m/s twenty seconds later.
+`tools/render_rigwalker_throw.py` ports `applyThrowPose` onto the real GLB and
+measures it. It stops there. The game then runs `applyBalancePose` on top —
+a crouch, a lean, and recovery steps the tool knows nothing about. So the tool
+is authoritative about **the arm**, and about what a throw *asks* the legs for.
+It is not authoritative about where a foot lands on screen.
 
-Arrival is now also "stopped": no ground made up for `CROWD_ARRIVAL_SECONDS`,
-somebody within `CROWD_BLOCK_DISTANCE` between the unit and the point, **and**
-enough bodies already nearer the point to fill the ground still to cover. That
-last clause is the one that matters and the one to leave alone. Without it — the
-first version — a bay's trio walking abreast converges, funnels, loses a
-moment's ground with a neighbour alongside, and two of the three quit 8.6 m
-short. `production.test.ts` caught it. Bodies pack about a clearance apart, so
-the ground arrived units cover grows with the root of their number; comparing
-that against the distance left is what tells a full rally point from a busy one.
+That gap is not academic: the tool passed a foot-drift check at 0.195 m while
+the shipped rear foot was floating 0.41 m off the ground, and a whole commit's
+worth of "validated" contact sheets showed a pose the game never drew.
 
-**"A unit stutter-steps at a crowd of its team; the ring flashes rapidly."**
-Two independent causes, found by running the real game loop headless for three
-minutes — four producing buildings, both corporations — and counting how often
-each unit changed its mind.
+For feet, weight, stance or silhouette, measure the renderer that draws it:
 
-1. *The ring.* A plan event draws an accent ring under the fighter, so a strobe
-   means an encounter churning. `ACQUIRE_SLACK` and the drop range were both
-   1.35, which for a hurler is the same 21.71 m for both: sitting on that line
-   it took the same encounter, lost it, and took it again — 626 plan events in
-   20 s on the bench, while standing still and never throwing. `ACQUIRE_SLACK`
-   is now 1.15 and the drop multiplier is a named `RELEASE_SLACK`. Hurlers
-   consequently start their approach at 18.5 m rather than 21.7 m.
-2. *The step.* Unrelated to combat. A standing unit drifted away from neighbours
-   whenever one crowding threshold was crossed, so a unit sitting on that line
-   started and stopped walking every frame, permanently half-blended through the
-   0.16 s crossfade into the walk clip. It now steps at `SEPARATION_NUDGE` and
-   keeps stepping until `SEPARATION_CLEAR`.
+```sh
+EXTRA='zoom=6&on=HR1&feet=1' tools/capture_sim.sh /tmp/sheet "1h v 1" 3 1.62 1.95 3.00
+```
 
-**Left deliberately alone.** A hurler at point-blank re-plans about every 0.68 s
-because `toss` is a 0.30 s throw, against a 0.38 s ring. That is a busy ring, but
-it is throwing a rock each time rather than churning. If the user reports the
-flash again on a hurler with a swordsman on top of it, that is the cadence and a
-tuning call, not this bug.
+- `on=HR1` rides one fighter by label. At a zoom that fills the frame with a
+  body, the centroid of two fighters twelve metres apart frames neither of them,
+  which is why earlier captures were unreadable specks.
+- `feet=1` prints each foot in that fighter's own frame **after every pose
+  layer**, with its toe pitch. A planted foot reads about `h0.07`; compare
+  against a swordsman in the same frame rather than against zero.
+- `capture_sim.sh` echoes every URL it builds. Paste one into a browser and it
+  is the same frame — that is what makes a pose arguable with the user rather
+  than describable at them.
 
-**How to look for more of these.** The shape recurs: anything decided by testing
-one threshold against neighbours every frame will be decided both ways at frame
-rate, because a crowd is never quite still. The headless soak is worth
-rebuilding when hunting one — production plus `CombatDirector` plus
-`unit.update`, no rendering, counting plan events per second and walk-state
-flips per unit. It is what turned both of these up in one run, and neither was
-visible in a two-unit test.
+## The rig has no IK, and that decides more than taste
+
+The hips are pinned to the terrain and each leg is two rigid bones, so **a foot
+cannot reach out and stay on the ground** — it travels an arc. Every stance
+question is really this arithmetic:
+
+- A leg reaching `d` from under the hip lifts its foot by
+  `THIGH*(1-cos θ) + SHIN*(1-cos(θ+knee))`. `ankleLift` in `rigwalker.ts` is
+  that, and `hurlStep` derives the hip drop from it rather than guessing.
+- **The folded knee is the biggest lifter**, worth more than the whole hip
+  sweep. A bent knee behind the body is why a rear foot floats. The hurl's rear
+  leg therefore *drives straight*, which is free; crouching to pay for a folded
+  one costs release height instead.
+- **The root bone sits on the ground, not at the hips.** Pitching it forward
+  swings the whole skeleton about the soles, and anything behind that pivot goes
+  up. Bending belongs to the spine and chest, which pivot where a spine does. A
+  root pitch of 0.3 rad was half of "standing on its toes".
+- `drop` follows the **lower** of the two feet — the one actually standing on
+  the ground. That single rule replaced a hand-tuned heel allowance and covers
+  the whole motion: through the gather it tracks the leg holding the fighter up,
+  through the drive it tracks the plant, and the other foot is free to fly.
+
+The consequence to accept rather than fight: **the step cannot be as big as it
+looks like it should be.** Half a body-width of travel asks the trailing leg to
+reach about 0.9 m, which costs nearly 0.2 m of crouch, and a hurl crouched that
+deep releases lower than a pitch — inverting the ordering the three throws are
+read by. The travel peaks around 0.30 m. `hurler.test.ts` pins the bound and
+says why. Getting more would need real foot IK, which is a feature, not a tune.
+
+## Only one layer may own the legs
+
+`applyBalancePose` is authored for a fighter that is only standing. Layered onto
+a stride, its crouch and recovery steps lifted the rear foot 0.17 m and closed
+the split back up. So `hurlStep` reports an `engagement` (how much of the
+fighter the throw currently owns) and the balance layer's leg authority is
+`1 - engagement`. Its lean and its hit reaction are never scaled — those are the
+body's, whatever the feet have been told to do.
 
 ## What the Hurler is
 
@@ -131,73 +127,140 @@ rules; the short version is that it is deadliest at the top of its range, that
 the range it is at picks its throw, and that it is walked down through all three
 by anything that closes on it.
 
+`ROCK_REFERENCE_SPEED` in `effects.ts` is a **fixed** reference, not the fastest
+throw. The hurl is thrown past it and sits pinned at the flat arc base; raising
+it to match would loop the other two more.
+
+## The hurl is a spring, not a swing
+
+The current long throw was specified by the user and built to it. Reading order:
+`applyThrowPose`'s `hurl` branch, `hurlLegs`, `hurlStep`.
+
+1. **Gather.** The lead knee lifts and the shin **tucks back under** the body.
+   The tuck is what brings the feet together — a knee lifted over a straight
+   shin puts that foot two thirds of a metre ahead of the fighter, which is a
+   stride, not a gather. The body leans away and winds clockwise off the target;
+   the counterweight arm comes up at the shoulder with the forearm folded
+   **across the chest**. Fold it upward instead and the pose stops being a
+   counterweight and becomes a rude gesture — that was a real playtest report.
+2. **Plant.** The lifted leg swings down and out and lands. Once planted it is
+   supposed to stay; what it gives back on the whip is only what the body
+   travels forward in the same stretch. Take back more and the fighter releases
+   with its feet together.
+3. **Unwind.** Hips lead the shoulders, and the coil runs **through square and
+   on into a left twist** — a coil that only returns to neutral has spent itself
+   stopping. The rear leg extends behind and its heel comes off the ground.
+4. **Release.** The elbow holds a right angle through the top of the wind and
+   extends *late*, so the arm is one straight bar from shoulder to rock with the
+   wrist in line behind it. The shoulder carries higher than it used to
+   (`upperX -1.60` at the release key) to pay for that: a straight arm releases
+   lower than a bent one, and the hurl must clear the pitch.
+
+The gather runs on `draw * (1 - stride)`, not `draw`. Those two beats overlap
+badly enough that a knee lift hung on `draw` alone is still up under a foot that
+has already planted.
+
+Measured through the motion (`1h v 1`, seed 3), foot position in the fighter's
+own frame, forward positive:
+
+| | gather (0.29) | drive (0.47) | release (0.58) | standing |
+| --- | --- | --- | --- | --- |
+| lead foot | +0.37, **h0.50** lifted | +0.30, h0.06 | +0.22, h0.06 | +0.25, h0.02 |
+| rear foot | −0.37, h0.05 | −0.44, h0.25 | −0.27, h0.43 | −0.66, h0.08 |
+| split | 0.74 | 0.74 | 0.49 | **0.91** |
+
+A hurler also now **stands bladed** rather than square, held through the hurl
+and given back as the two shorter throws plant to square. The throw is under a
+second of a cycle over two seconds long, so the stance it waits in *is* the unit
+as far as anyone watching is concerned — and note the cue label
+"Winding up a hurl" is the *strategy*, shown for the whole cycle including the
+long size-up and recovery. A report about "the wind-up" is very likely about the
+stance, not the motion.
+
+## A rock knocks its target down
+
+Damage now carries `sourceId` and `thrown`. Presentation turns those into a
+world direction, and a killing throw tips the corpse's up-axis onto the rock's
+line and carries it 0.4 m down it. A cut has no line worth carrying — it lands
+from a fighter standing right there — so it keeps its sideways roll off `side`.
+
+Before this, every rock kill in the game toppled the same way, because
+`planThrow` has no side to give and hardcodes `1`.
+
 ## The animations, and how they were got right
 
-All three throws are overhand, the way a baseball is thrown: the rock gathers
-back and low, the elbow leads it up above the shoulder, the hand comes over the
-top and lets go out in front and high, and the arm rides down across the body.
-They differ in how much of the fighter goes into it. The body is driven by four
-beats (draw, stride, whip, follow); the arm is keyed, for the reason below.
-
-- **hurl** — full body. A coiled torso, left arm pointing out at the target,
-  front foot striding, hips opening ahead of the shoulders, arm slinging over
-  last. Releases at 3.88 m, roughly a metre above the head.
-- **pitch** — off a planted stance. Half the coil, no stride, no aiming arm.
-- **toss** — a dart. The arm is up and gone before the body has moved.
+All three throws are overhand: the rock gathers back and low, the elbow leads it
+up above the shoulder, the hand comes over the top and lets go out in front and
+high, and the arm rides down across the body. The body is driven by four beats
+(draw, stride, whip, follow); the arm is keyed, for the reason below.
 
 None of this was written from first principles. The bone axes were **measured**
 first, one rotation at a time on the imported GLB, because the Z-up to Y-up
 conversion moves them and the Euler order means a shoulder's abduction changes
 what its elevation does. Those signs are in the comment above `applyThrowPose`.
 
-`tools/render_rigwalker_throw.py` then measured and rendered every version.
-Everything it currently checks, it caught at least once:
+Everything `render_rigwalker_throw.py` checks, it caught at least once — feet a
+metre off the ground, a hurl releasing below a pitch, an arm finishing above the
+head, a toss that read as dropping the rock, a body folded double, and contact
+sheets that were all correct and all showed a unit standing still because
+Blender re-applies the GLB's own actions on every render.
 
-1. Feet a metre and a half off the ground, because the follow-through was
-   pitching the whole body about the ankles instead of bending at the waist.
-2. The rock releasing *below* where the pitch releases, because the whip had
-   already carried the arm down by the release phase.
-3. The arm finishing above the head after release rather than sweeping down
-   across the body.
-4. A toss that read as dropping the rock by its knee rather than flicking it.
-5. The body folded double in the follow-through.
-6. Contact sheets that were all correct and all showed a unit standing still,
-   because Blender re-applies the GLB's own actions on every render. Clearing
-   the animation data is the fix, and the tool now does it.
+One check changed this session: it used to require **both** feet stay near the
+ground, which fails a hurl for lifting a knee on purpose. It now measures the
+foot being stood on.
 
-Final geometry: release heights 3.88 / 3.71 / 3.46 m, all of them above the
-head, foot drift under 0.19 m, recovery error 0.0 degrees. The sword duel still
-validates at 0.069 m drift and 0.00 degrees.
+Final geometry: release heights **3.81 / 3.73 / 3.48 m**, all above the head;
+support-foot drift 0.081 / 0.060 / 0.045 m; recovery error 0.0 degrees. The
+sword duel still validates at 0.069 m drift and 0.00 degrees.
 
 ### Why the arm is keyed and the body is not
 
-The first version of these throws summed beat coefficients for every bone,
-including the throwing arm, and read as sidearm. Two things were wrong, and
-both are the kind that measure clean and look wrong:
+The first version summed beat coefficients for every bone, including the
+throwing arm, and read as sidearm. Two causes, both of the kind that measure
+clean and look wrong:
 
 1. **Blender's Euler `XYZ` is not Three.js's.** Three.js composes its default
    XYZ as `qx*qy*qz`; Blender calls that order `ZYX`. Every Blender tool here
    was posing with Blender's `'XYZ'`, so any bone with two non-zero angles —
    which is every shoulder in a throw — was measured and rendered in a pose the
    game never drew. All three tools now pose with `'ZYX'`.
-2. **A sum of beats cannot trace this arc.** On this rig the arm is only above
-   shoulder height through a narrow band of shoulder angles. Blending from a
-   cocked pose to a released one walks straight out of that band in between:
-   halfway through, the arm is hanging at the hip with the elbow below the
-   shoulder, and the throw reads as a sling round the side however good the two
-   end poses are. `THROW_ARM_KEYS` places poses along the arc instead, each one
-   solved against the imported skeleton for a written-down hand *and elbow*
-   position. Constraining the elbow is the part that matters: the hand alone can
-   be put in the right place by an arm wrapped any number of ways.
+2. **A sum of beats cannot trace this arc.** The arm is only above shoulder
+   height through a narrow band of shoulder angles, and blending from a cocked
+   pose to a released one walks out of that band in between: halfway through the
+   arm hangs at the hip and the throw reads as a sling. `THROW_ARM_KEYS` places
+   poses along the arc instead, each solved for a written-down hand *and elbow*
+   position. Constraining the elbow is the part that matters.
 
-The tool now checks the arc rather than the release pose — the rock has to clear
-the head, and once it is above the shoulder the elbow has to stay above it too,
-sampled every hundredth of a phase because the dropped-elbow dip lives between
-two good keys and a coarse sweep steps over it.
+The same trap bites smaller things. The aiming arm runs on the *larger* of the
+draw and stride beats rather than their sum, because adding them lifts it over
+the head halfway through the wind.
+
+## Crowds and waypoints
+
+From the previous session; `AGENTS.md` has the rules under **Arriving at a
+waypoint** and **Hysteresis, or the stutter step**.
+
+Arrival is "stopped", not "within 8 cm": no ground made up for
+`CROWD_ARRIVAL_SECONDS`, somebody within `CROWD_BLOCK_DISTANCE` between the unit
+and the point, **and** enough bodies already nearer the point to fill the ground
+still to cover. That last clause is the one to leave alone — without it a bay's
+trio walking abreast funnels, loses a moment's ground, and two of the three quit
+8.6 m short. Bodies pack about a clearance apart, so arrived units cover ground
+growing with the root of their number.
+
+The stutter had two independent causes, found by running the real loop headless
+for three minutes and counting how often each unit changed its mind:
+`ACQUIRE_SLACK` and the drop range were both 1.35 (identical for a hurler, so it
+took and lost the same encounter forever — 626 plan events in 20 s while
+standing still), and a standing unit drifted whenever one crowding threshold was
+crossed. Now `ACQUIRE_SLACK` is 1.15 against a named `RELEASE_SLACK`, and
+separation steps at `SEPARATION_NUDGE` until `SEPARATION_CLEAR`.
+
+**The shape recurs:** anything decided by testing one threshold against
+neighbours every frame will be decided both ways at frame rate, because a crowd
+is never quite still. The headless soak is worth rebuilding when hunting one.
 
 ## Architecture notes worth preserving
-
-Everything in the previous handoff still holds. Added by this session:
 
 - **The strike is resolved at release, replayed on arrival.** The `throw` event
   carries speed, flight time, and the already-rolled outcome, so presentation
@@ -206,57 +269,51 @@ Everything in the previous handoff still holds. Added by this session:
   out from under a rock still in the air.
 - **A hurler is never a mutual duellist.** One-sided `ranged` encounters, never
   promoted, never riposting. A swordsman attacking one takes a normal support
-  encounter and does *not* defer to it — a hurler is permanently mid-throw at
-  someone else, and deferring to that left swordsmen watching it work.
-- **Being hit outranks what you were planning.** Several encounters can write a
-  cue for one fighter in a frame; `writeCue` stops a landed blow being lost to
-  whichever encounter happened to be iterated last.
+  encounter and does *not* defer to it.
+- **Being hit outranks what you were planning.** `writeCue` stops a landed blow
+  being lost to whichever encounter was iterated last.
 - **Rock size and arc are drawn from the rendered result, not from physics.**
   All three throws are far harder than their distance needs, so honest
-  ballistics gives three flat lines; looping the slow ones is what makes the
-  speed difference visible.
+  ballistics gives three flat lines.
+- **The step is a model offset, not movement.** The director owns where a hurler
+  stands, so a hurl's travel is `modelRoot.position` inside the group. Local +Z
+  is forward: the group's yaw is `atan2(direction.x, direction.z)`. The health
+  bar rides it; the selection ring does not, because the ring marks the ground
+  the unit holds.
 
 ## Measured state
 
+- 69 tests pass; production build passes.
 - Long range out-damages medium by more than a fifth, and medium out-damages
   short by the same, across eight seeds at thirty seconds each.
-- `1h v 1` seed 3: hurler opens at 11.9 m, lands two hurls and a run of pitches
-  and tosses, is closed on and killed at 13.8 s. That is the intended shape.
-- `2h v 3` the swords win; `2h+2 v 4` is still a heavy fight at 30 s.
+- `1h v 1` seed 3: hurler opens at 11.9 m, throws, is closed on and killed. A
+  hurl at 12 m now flies in 0.35 s rather than 0.44 s.
 - Crowds of 2 through 20 sent to one waypoint go completely still about 3.1 s
-  after arriving — 0.000 m of movement in the final second — at a minimum gap of
-  1.22 m. Post-fight survivors settle across four seeds.
-- A bay's trio still walks the full distance and settles at 0.21 / 1.75 / 2.22 m
-  from its rally point. That spread is the fix working, not units falling short.
+  after arriving, at a minimum gap of 1.22 m.
 - Over a three-minute headless soak: out-of-combat walk-state flips fell from
-  579 to 106 and the sustained per-frame strobing is gone; in-combat shuffling
-  is unchanged (2350 → 2302), which is fighters working rather than stuttering.
-- 64 tests pass; production build passes. Both new regression tests were
-  confirmed to fail when their fix is reverted.
+  579 to 106; in-combat shuffling unchanged, which is fighters working.
 
 ## Suggested next steps
 
 The goal remains that combat looks cooler each iteration, not that it becomes
 playable. Player agency is still out of scope.
 
-1. **This session's movement work needs playing.** Both fixes are measured, but
-   what cannot be measured from here is whether a crowd resting in a loose blob
-   *around* its rally point rather than on it reads right at gameplay scale, and
-   whether 0.45 s of stalling before a unit gives up looks like a decision or
-   like hesitation. `CROWD_ARRIVAL_SECONDS`, `CROWD_BLOCK_DISTANCE`,
-   `SEPARATION_NUDGE` and `SEPARATION_CLEAR` are all at the top of
-   `rigwalker.ts` if they want moving.
-2. **The throws have not been heard.** The release reuses the sword's `swing`
+1. **The rebuilt hurl has not been played.** It is measured and validated but
+   two judgement calls are open and only watching it move will settle them:
+   the rear heel reaches `h0.43` at release — correct for a full-effort drive,
+   but it may read as a dangle; and the feet in the gather are 0.74 m apart
+   rather than truly together, because tucking the shin further starts to look
+   like a hurdler. Both are single coefficients in `hurlLegs`.
+2. **Foot IK is the real unlock.** Everything cramped about the step traces to
+   its absence — the travel bound, the heel lift, the small slide as the stance
+   recovers. A two-bone solver on the planted foot would let the step be as big
+   as it looks like it should be. It is a feature, and worth scoping properly.
+3. **The throws have not been heard.** The release reuses the sword's `swing`
    whoosh, graded by throw. A heave and a rock landing may want their own voices
-   — but the standing lesson is that a fight wants its sound spent on contact,
-   so add carefully.
-3. Hurlers can be held back: the Stoneworks has its own rally point, so a line
-   behind the swords is a right-click rather than a code change. Whether the
-   default of everything rallying to the middle wants changing is a playtest
-   question — and note that default is what makes the rally-point crowd, so it
-   is also what this session's first fix was exercising.
-4. A hurler that runs out of room has nowhere to go; it backpedals into whatever
-   is behind it. Retreating toward its own side would read better than
-   retreating in a straight line.
-5. Earlier items still open: scorch decals under wrecks, encirclement positions
+   — but the standing lesson is that a fight wants its sound spent on contact.
+4. Hurlers can be held back: the Stoneworks has its own rally point, so a line
+   behind the swords is a right-click rather than a code change.
+5. A hurler that runs out of room backpedals into whatever is behind it.
+   Retreating toward its own side would read better than a straight line.
+6. Earlier items still open: scorch decals under wrecks, encirclement positions
    for group fights, and trails reading white-hot over bright ground.
