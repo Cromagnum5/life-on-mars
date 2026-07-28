@@ -7,11 +7,15 @@ import { loadRigwalkerAsset } from "./rigwalker-assets";
 import {
   addMarsLighting,
   applyMarsAtmosphere,
+  createCameraOrbit,
   createMarsRenderer,
   createRocks,
   createTabletopCamera,
   createTerrain,
   fitCameraToViewport,
+  orbitBy,
+  orbitOffset,
+  panFocus,
   terrainHeightAt,
 } from "./world";
 import "./sim.css";
@@ -47,6 +51,8 @@ import "./sim.css";
 const ARENA_SIZE = 72;
 const MIN_ZOOM = 0.9;
 const MAX_ZOOM = 7;
+/** How far one arrow key swings the view. Twenty-four presses make a circuit. */
+const ORBIT_STEP = THREE.MathUtils.degToRad(15);
 /** Fixed timestep for reproducible headless captures. */
 const CAPTURE_STEP = 1 / 60;
 const LOG_LIMIT = 22;
@@ -136,7 +142,15 @@ scene.add(createTerrain(ARENA_SIZE, 96), createRocks(ARENA_SIZE, 26, [new THREE.
 
 const renderer = createMarsRenderer(canvas);
 const camera = createTabletopCamera(Number(params.get("zoom") ?? 3.2));
-const cameraOffset = camera.position.clone();
+const orbit = createCameraOrbit();
+// A headless capture cannot press a key, so the angle is a URL parameter too:
+// degrees swung from the default three-quarter view.
+orbitBy(
+  orbit,
+  THREE.MathUtils.degToRad(Number(params.get("yaw") ?? 0)),
+  THREE.MathUtils.degToRad(Number(params.get("pitch") ?? 0)),
+);
+const cameraOffset = new THREE.Vector3();
 const focus = new THREE.Vector3();
 const centroid = new THREE.Vector3();
 // Scratch for the `contacts=1` diagnostic: where a strike's sparks are thrown,
@@ -337,7 +351,7 @@ function updateCamera(delta: number): void {
     // Damped so a defeat that moves the centroid does not snap the view.
     focus.lerp(centroid, 1 - Math.exp(-3.2 * delta));
   }
-  camera.position.copy(focus).add(cameraOffset);
+  camera.position.copy(focus).add(orbitOffset(orbit, cameraOffset));
   camera.lookAt(focus);
 }
 
@@ -495,11 +509,19 @@ window.addEventListener("keydown", (event) => {
   } else if (/^Key[WASD]$/.test(event.code)) {
     // Panning is an explicit choice to stop following the fight.
     followInput.checked = false;
-    const pan = 2.4 / camera.zoom;
-    if (event.code === "KeyA") focus.x -= pan, focus.z += pan;
-    if (event.code === "KeyD") focus.x += pan, focus.z -= pan;
-    if (event.code === "KeyW") focus.x -= pan, focus.z -= pan;
-    if (event.code === "KeyS") focus.x += pan, focus.z += pan;
+    const pan = (2.4 * Math.SQRT2) / camera.zoom;
+    if (event.code === "KeyA") panFocus(orbit, focus, 0, -1, pan);
+    if (event.code === "KeyD") panFocus(orbit, focus, 0, 1, pan);
+    if (event.code === "KeyW") panFocus(orbit, focus, 1, 0, pan);
+    if (event.code === "KeyS") panFocus(orbit, focus, -1, 0, pan);
+  } else if (/^Arrow(Left|Right|Up|Down)$/.test(event.code)) {
+    // Swinging the view is not a pan: the fight stays framed, the angle on it
+    // changes. Following is left alone so a fight can be circled while it runs.
+    event.preventDefault();
+    if (event.code === "ArrowLeft") orbitBy(orbit, -ORBIT_STEP, 0);
+    if (event.code === "ArrowRight") orbitBy(orbit, ORBIT_STEP, 0);
+    if (event.code === "ArrowUp") orbitBy(orbit, 0, ORBIT_STEP);
+    if (event.code === "ArrowDown") orbitBy(orbit, 0, -ORBIT_STEP);
   }
 });
 

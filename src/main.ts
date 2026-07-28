@@ -20,11 +20,15 @@ import { loadRigwalkerAsset } from "./rigwalker-assets";
 import {
   addMarsLighting,
   applyMarsAtmosphere,
+  createCameraOrbit,
   createMarsRenderer,
   createRocks,
   createTabletopCamera,
   createTerrain,
   fitCameraToViewport,
+  orbitBy,
+  orbitOffset,
+  panFocus,
   terrainHeightAt,
 } from "./world";
 import "./style.css";
@@ -32,6 +36,8 @@ import "./style.css";
 const MAP_SIZE = 180;
 const MIN_ZOOM = 0.75;
 const MAX_ZOOM = 3.2;
+/** How fast the arrow keys swing the view, in radians a second. */
+const ORBIT_SPEED = THREE.MathUtils.degToRad(70);
 const rigwalkerAsset = await loadRigwalkerAsset("/models/rigwalker.glb");
 
 const canvas = document.querySelector<HTMLCanvasElement>("#game");
@@ -47,7 +53,8 @@ addMarsLighting(scene);
 const renderer = createMarsRenderer(canvas);
 const camera = createTabletopCamera();
 const cameraTarget = new THREE.Vector3(0, 0, 0);
-const cameraOffset = camera.position.clone().sub(cameraTarget);
+const cameraOrbit = createCameraOrbit();
+const cameraOffset = new THREE.Vector3();
 
 const terrain = createTerrain(MAP_SIZE);
 const corporateBases = createBuildings(terrainHeightAt);
@@ -341,7 +348,11 @@ canvas.addEventListener("contextmenu", (event) => {
 
 const keys = new Set<string>();
 
-window.addEventListener("keydown", (event) => keys.add(event.code));
+window.addEventListener("keydown", (event) => {
+  // The arrows drive the camera, so they must not also scroll the page.
+  if (event.code.startsWith("Arrow")) event.preventDefault();
+  keys.add(event.code);
+});
 window.addEventListener("keyup", (event) => keys.delete(event.code));
 window.addEventListener("blur", () => keys.clear());
 
@@ -384,15 +395,26 @@ function updateCamera(delta: number): void {
 
   if (direction.lengthSq() > 0) {
     direction.normalize();
-    const speed = 23 / camera.zoom;
-    cameraTarget.x += (direction.x + direction.y) * speed * delta;
-    cameraTarget.z += (-direction.x + direction.y) * speed * delta;
+    const speed = (23 * Math.SQRT2) / camera.zoom;
+    // Panned in the camera's own frame, so W still walks the view away from the
+    // player however far round the map has been swung.
+    panFocus(cameraOrbit, cameraTarget, -direction.y, direction.x, speed * delta);
+  }
+
+  let yaw = 0;
+  let pitch = 0;
+  if (keys.has("ArrowLeft")) yaw -= 1;
+  if (keys.has("ArrowRight")) yaw += 1;
+  if (keys.has("ArrowUp")) pitch += 1;
+  if (keys.has("ArrowDown")) pitch -= 1;
+  if (yaw !== 0 || pitch !== 0) {
+    orbitBy(cameraOrbit, yaw * ORBIT_SPEED * delta, pitch * ORBIT_SPEED * delta);
   }
 
   const boundary = MAP_SIZE * 0.42;
   cameraTarget.x = THREE.MathUtils.clamp(cameraTarget.x, -boundary, boundary);
   cameraTarget.z = THREE.MathUtils.clamp(cameraTarget.z, -boundary, boundary);
-  camera.position.copy(cameraTarget).add(cameraOffset);
+  camera.position.copy(cameraTarget).add(orbitOffset(cameraOrbit, cameraOffset));
   camera.lookAt(cameraTarget);
 }
 

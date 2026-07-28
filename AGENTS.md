@@ -38,10 +38,16 @@ interaction over broad systems or premature engine architecture.
 
 Current camera controls are intentionally minimal after playtesting:
 
-- `WASD` pans the camera.
+- `WASD` pans the camera, in the camera's own frame rather than along the world
+  axes, so a pan still means what the screen says once the view has been turned.
+- The left and right arrows orbit about what the camera is watching; the up and
+  down arrows raise and lower it, between six and eighty-four degrees off the
+  ground. The three-quarter view is where it starts and nothing else moves it.
 - Mouse wheel zooms.
 - Do not add edge scrolling, arrow-key panning, or mouse-drag panning unless the
-  user asks for them; those controls were tested and removed.
+  user asks for them; those controls were tested and removed. The arrows orbit,
+  which is a different question — what the scene looks like from elsewhere, not
+  what is on screen — and was asked for while the game is still being decided.
 
 ## Initial game vocabulary
 
@@ -213,10 +219,15 @@ distance, plus a timestamped event log and an outcome tally.
   sixteen metres, which needs both a longer approach and a wider view than two
   swordsmen walking into each other; `zoom` in the URL still overrides it.
 - `Space` pauses, `.` steps one frame, `R` restarts, `1`-`9` pick a matchup,
-  `WASD` pans, wheel zooms.
-- URL parameters: `matchup`, `seed`, `speed`, `zoom`, `hud=0`, `t`, and
-  `contacts=1`, which logs where each strike throws its sparks in the
-  attacker's own frame: reach toward the opponent, side, and height.
+  `WASD` pans, the left and right arrows swing the view round the fight, the up
+  and down arrows raise and lower it, and the wheel zooms. Panning is in the
+  camera's own frame, so `W` still walks away from the eye once the view has
+  been turned.
+- URL parameters: `matchup`, `seed`, `speed`, `zoom`, `hud=0`, `t`,
+  `yaw` and `pitch` — degrees swung from the default three-quarter view, since
+  a headless capture cannot press an arrow key — and `contacts=1`, which logs
+  where each strike throws its sparks in the attacker's own frame: reach toward
+  the opponent, side, and height.
 
 `t` is the headless capture mode: the page steps a fixed timestep fight to that
 exact sim time in one synchronous burst, renders one frame, and freezes. It

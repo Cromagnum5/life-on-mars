@@ -146,10 +146,76 @@ export function createMarsRenderer(canvas: HTMLCanvasElement): THREE.WebGLRender
   return renderer;
 }
 
-/** The fixed three-quarter orthographic view. Zoom is the only camera variable. */
+/** Where the default three-quarter view sits, as an offset from what it watches. */
+const DEFAULT_EYE = new THREE.Vector3(36, 42, 36);
+
+/** How far the view may be tipped. Level with the ground reads as nothing, and
+ * straight down leaves `lookAt` with no way to tell which way is north. */
+const MIN_PITCH = THREE.MathUtils.degToRad(6);
+const MAX_PITCH = THREE.MathUtils.degToRad(84);
+
+/**
+ * The orbit the camera hangs on: an eye held at `radius` from the focus, turned
+ * `yaw` about the vertical and lifted `pitch` above the ground. The default is
+ * the three-quarter view the game has always used; the game and the sim both
+ * let the player swing it, because the shape of a fight is not yet decided and
+ * the answer is easier to see from a few angles than to argue from one.
+ */
+export interface CameraOrbit {
+  /** Rotation about the vertical, in radians. Zero looks along +z. */
+  yaw: number;
+  /** Elevation above the ground plane, in radians. */
+  pitch: number;
+  /** Distance from the focus to the eye. */
+  radius: number;
+}
+
+export function createCameraOrbit(): CameraOrbit {
+  return {
+    yaw: Math.atan2(DEFAULT_EYE.x, DEFAULT_EYE.z),
+    pitch: Math.atan2(DEFAULT_EYE.y, Math.hypot(DEFAULT_EYE.x, DEFAULT_EYE.z)),
+    radius: DEFAULT_EYE.length(),
+  };
+}
+
+/** Turns the orbit and tips it, keeping the elevation inside its limits. */
+export function orbitBy(orbit: CameraOrbit, yaw: number, pitch: number): void {
+  orbit.yaw += yaw;
+  orbit.pitch = THREE.MathUtils.clamp(orbit.pitch + pitch, MIN_PITCH, MAX_PITCH);
+}
+
+/** Writes the orbit into `offset`: the vector from the focus out to the eye. */
+export function orbitOffset(orbit: CameraOrbit, offset: THREE.Vector3): THREE.Vector3 {
+  const ground = Math.cos(orbit.pitch) * orbit.radius;
+  return offset.set(
+    Math.sin(orbit.yaw) * ground,
+    Math.sin(orbit.pitch) * orbit.radius,
+    Math.cos(orbit.yaw) * ground,
+  );
+}
+
+/**
+ * Moves the focus across the ground in the camera's own frame, so panning still
+ * means what the screen says it means once the view has been swung round.
+ * `forward` runs away from the eye, `right` runs to screen right.
+ */
+export function panFocus(
+  orbit: CameraOrbit,
+  focus: THREE.Vector3,
+  forward: number,
+  right: number,
+  distance: number,
+): void {
+  const sin = Math.sin(orbit.yaw);
+  const cos = Math.cos(orbit.yaw);
+  focus.x += (cos * right - sin * forward) * distance;
+  focus.z += (-sin * right - cos * forward) * distance;
+}
+
+/** The three-quarter orthographic view. Zoom and the orbit are its variables. */
 export function createTabletopCamera(zoom = 1.35): THREE.OrthographicCamera {
   const camera = new THREE.OrthographicCamera();
-  camera.position.set(36, 42, 36);
+  camera.position.copy(DEFAULT_EYE);
   camera.zoom = zoom;
   camera.updateProjectionMatrix();
   return camera;
