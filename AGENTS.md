@@ -365,7 +365,14 @@ wrong, and it checks things that were each caught by it in practice:
 - release heights fall off with the throw, which is also what catches a hurl
   crouched too deep into its own stride;
 - consecutive phases are distinguishable at RTS scale;
-- the pose settles back to the ready stance.
+- the pose settles back to the ready stance;
+- a hurl is a **step**: the hurler waits with the trailing leg behind it and its
+  weight on the throwing-side foot, releases over a lead foot that is in front
+  of the other one, and does not skate that foot while it is planted.
+
+`FEET=1` prints a hurl foot by foot across fifty phases, and `MEASURE=1` stops
+before the renders, which are most of the runtime. A stance question is usually
+`FEET=1 MEASURE=1` and ten seconds.
 
 Three traps worth knowing before touching it:
 
@@ -392,9 +399,23 @@ Three traps worth knowing before touching it:
   feet float; overpay and the front sole goes under the ground and the release
   height sinks below the pitch's. Three things lift that rear foot, in order of
   size: **the folded knee**, the root pitch, and the hip sweep. A bent knee
-  behind the body is worth more than the whole sweep, which is why the rear leg
-  drives *straight* — straightening it is free, and crouching to pay for a
-  folded one costs release height the throws are ordered by.
+  behind the body is worth more than the whole sweep. That is only a bill when
+  the leg in question is the one being stood on: `drop` follows the *lower*
+  foot, so once the lead foot is planted the rear knee may fold as much as the
+  drive wants — and it should, because a foot has to be off the ground before it
+  travels or it skates. Fold the knee of the leg holding the fighter up and the
+  crouch that pays for it costs release height the throws are ordered by.
+- **The legs have their own beats, not the body's four.** `HURL_TUCK`,
+  `HURL_SWING`, `HURL_STEP`, `HURL_HEEL`, `HURL_DRIVE` and `HURL_HOME` exist
+  because each foot has to leave the ground slightly before it travels and land
+  slightly before it takes weight, and none of draw/stride/whip/follow start
+  where a foot needs to. Hanging a foot on a body beat is what makes it skate.
+- **The coil drags the planted foot, and the lead leg has to cancel it.** The
+  root's yaw turns the whole skeleton about a point on the ground, so the hips
+  opening through the release sweeps the foot the fighter is standing on round
+  with them — a quarter of a metre of it, measured. `hurlLegs` therefore takes a
+  term off `hurlHips`. Nothing in `hurlStep`'s arithmetic can see this: it is
+  planar, and this is a rotation about the vertical. It was found by measuring.
 - **The root bone sits on the ground, not at the hips.** Pitching it forward is
   not bending at the waist: it swings the whole skeleton about the fighter's
   soles, and the rear foot, being behind that pivot, goes up. Bend the spine and
@@ -406,10 +427,18 @@ Three traps worth knowing before touching it:
   closed the split back up, so `hurlStep` reports an `engagement` and the
   balance layer's leg authority is `1 - engagement`. Its lean and hit reaction
   are never scaled — those are the body's, whatever the feet were told to do.
-- **A hurler stands bladed, not square.** The throw is under a second of a cycle
-  over two seconds long, so the stance it waits in *is* the unit as far as
-  anyone watching is concerned. `HURLER_STANCE` is in all three branches, held
-  through the hurl and given back as the two shorter throws plant to square.
+- **A hurler stands bladed, not square, with the throwing-side leg forward.**
+  The throw is under a second of a cycle over two seconds long, so the stance it
+  waits in *is* the unit as far as anyone watching is concerned. `HURLER_STANCE`
+  is in all three branches, held through the hurl and given back as the two
+  shorter throws plant to square. Which leg is forward is not a coin toss: a
+  hurl is a step, and standing with the trailing leg already in front leaves
+  nowhere to step to, so the wind-up reads as a knee lifted on the spot.
+  `HURLER_LOAD` gives the weighted leg the deeper knee, which is the whole of
+  "weight on that leg" as far as the rig is concerned — and because `drop`
+  follows the lower foot, it is also what puts that foot on the ground.
+  All four branches have to agree on it to the decimal, or every throw opens
+  with a foot jumping to a new spot.
 - **Clear the imported animation data before rendering.** The GLB carries
   Idle, Walk and CombatIdle, and Blender re-applies whichever is assigned every
   time it renders a frame. Miss this and the measurements are right while every

@@ -25,7 +25,7 @@ Run from the repository root:
     blender --background --python tools/render_rigwalker_throw.py
 """
 
-import bpy, math
+import bpy, math, os
 from pathlib import Path
 from mathutils import Vector, Euler
 
@@ -123,9 +123,27 @@ def drive(throw, phase):
 
 
 HURLER_STANCE = .20
+HURLER_LOAD = .10
 THIGH_LENGTH = .79
 SHIN_LENGTH = .72
 STANDING_KNEE = .24
+
+# The stance a hurler waits in: throwing-side leg forward and weighted, the
+# other trailing. Ports HURL_TRAIL_* / HURL_SUPPORT_* in src/rigwalker.ts.
+TRAIL_HIP = .06 + HURLER_STANCE
+TRAIL_KNEE = STANDING_KNEE - HURLER_LOAD
+SUPPORT_HIP = -.06 - HURLER_STANCE
+SUPPORT_KNEE = STANDING_KNEE + HURLER_LOAD
+
+# The legs' own beats. See the comment on HURL_TUCK in src/rigwalker.ts: a foot
+# has to be off the ground before it travels, and none of the body's four beats
+# start where a foot needs to.
+TUCK = (0, .12, .3, .48)
+SWING = (.02, .3, .3, .48)
+STEP = (.26, .46, .74, 1)
+HEEL = (.34, .5, .6, .86)
+DRIVE = (.4, .58, .6, .86)
+HOME = (.7, .8, .9, 1)
 
 
 def hurl_gather(d):
@@ -139,15 +157,27 @@ def hurl_root_pitch(d):
     return -.06 * g + .04 * d['stride'] + .1 * d['whip'] + .14 * d['follow']
 
 
-def hurl_legs(d, ready):
-    """Port of hurlLegs. Returns (upper_l, lower_l, upper_r, lower_r)."""
+def hurl_hips(d):
+    """Port of hurlHips. The coil, and what the lead leg has to cancel."""
     g = hurl_gather(d)
-    stride, whip, follow = d['stride'], d['whip'], d['follow']
+    return .75 * g + .3 * d['stride'] - 1.3 * d['whip'] - .4 * d['follow']
+
+
+def hurl_legs(phase, d):
+    """Port of hurlLegs. Returns (upper_l, lower_l, upper_r, lower_r).
+
+    The left leg trails and steps through; the right, under the throwing arm,
+    holds the fighter up and then drives.
+    """
+    tuck, swing = beat(phase, TUCK), beat(phase, SWING)
+    step, home = beat(phase, STEP), beat(phase, HOME)
+    heel, driv = beat(phase, HEEL), beat(phase, DRIVE)
+    whip, hips = d['whip'], hurl_hips(d)
     return (
-        -.06 - HURLER_STANCE * ready - 1 * g - .24 * stride + .1 * whip + .06 * follow,
-        STANDING_KNEE + 1.5 * g + .06 * stride - .1 * whip + .1 * follow,
-        .06 + HURLER_STANCE * ready - .06 * g + .28 * stride + .2 * whip - .04 * follow,
-        STANDING_KNEE + .1 * g - .2 * stride - .06 * whip + .08 * follow,
+        TRAIL_HIP - 1.32 * swing - .62 * step + .11 * hips - .3 * home,
+        TRAIL_KNEE + .45 * tuck + 1.25 * swing + .16 * step - .06 * whip + .6 * home,
+        SUPPORT_HIP + .19 * step + .24 * driv,
+        SUPPORT_KNEE - .1 * step + .2 * heel,
     )
 
 
@@ -177,15 +207,17 @@ def hurl_step(throw, phase):
     """
     d = drive(throw, phase)
     hurling = throw == 'hurl' and phase >= 0
-    forward = (.13 * d['stride'] + .15 * d['whip'] + .22 * d['follow']) if hurling else 0.0
+    forward = (.2 * beat(phase, STEP) + .1 * d['whip']) if hurling else 0.0
     engagement = 0.0 if phase < 0 else max(d.values())
     ready = 1 - engagement
     pitch = hurl_root_pitch(d) if hurling else 0.0
     if hurling:
-        upper_l, lower_l, upper_r, lower_r = hurl_legs(d, ready)
+        upper_l, lower_l, upper_r, lower_r = hurl_legs(phase, d)
     else:
-        upper_l, lower_l = -.02 - HURLER_STANCE * ready, STANDING_KNEE
-        upper_r, lower_r = .02 + HURLER_STANCE * ready, STANDING_KNEE
+        upper_l = .06 + HURLER_STANCE * ready
+        lower_l = STANDING_KNEE - HURLER_LOAD * ready
+        upper_r = -.06 - HURLER_STANCE * ready
+        lower_r = STANDING_KNEE + HURLER_LOAD * ready
 
     def standing(upper, knee):
         return (ankle_lift(upper, knee) - STANDING_LIFT +
@@ -300,7 +332,7 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
 
     if throw == 'hurl':
         g = hurl_gather(d)
-        hip = .75 * g + .3 * stride - 1.3 * whip - .4 * follow
+        hip = hurl_hips(d)
         chest = 1 * g + .7 * stride - 1.5 * whip - .5 * follow
         offset(rig, 'root', hurl_root_pitch(d), .34 * hip,
                -.1 * g - .08 * stride + .08 * whip + .12 * follow)
@@ -317,7 +349,7 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
         offset(rig, 'lower_arm.L',
                -.08 + .72 * sight - .5 * whip + .2 * follow + .35 * aim, 0, -.05)
         offset(rig, 'hand.L', -.06, 0, 0)
-        set_legs(rig, *hurl_legs(d, ready))
+        set_legs(rig, *hurl_legs(phase, d))
     elif throw == 'pitch':
         coil = .95 * draw + .7 * stride - .95 * whip - .4 * follow
         offset(rig, 'root', -.1 * draw + .18 * whip + .24 * follow, .16 * coil,
@@ -329,10 +361,10 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
         offset(rig, 'upper_arm.L', -.32 - .3 * draw + .75 * whip + .5 * follow, 0, -.08)
         offset(rig, 'lower_arm.L', -.18 - .04 * draw + .55 * whip + .45 * follow, 0, -.05)
         offset(rig, 'hand.L', -.06, 0, 0)
-        set_legs(rig, -.02 - HURLER_STANCE * ready + .06 * draw - .1 * whip - .08 * follow,
-                 .24 + .08 * draw + .06 * whip + .09 * follow,
-                 .02 + HURLER_STANCE * ready + .1 * draw + .08 * whip + .04 * follow,
-                 .24 + .14 * draw + .13 * whip + .17 * follow)
+        set_legs(rig, .06 + HURLER_STANCE * ready + .06 * draw - .1 * whip - .08 * follow,
+                 STANDING_KNEE - HURLER_LOAD * ready + .08 * draw + .06 * whip + .09 * follow,
+                 -.06 - HURLER_STANCE * ready + .1 * draw + .08 * whip + .04 * follow,
+                 STANDING_KNEE + HURLER_LOAD * ready + .14 * draw + .13 * whip + .17 * follow)
     else:
         coil = .5 * draw - .45 * whip - .2 * follow
         offset(rig, 'root', .06 * draw + .12 * whip + .14 * follow, .1 * coil, 0)
@@ -343,10 +375,10 @@ def pose_throw(rig, throw, phase, aim_phase=-1):
         offset(rig, 'upper_arm.L', -.34 + .3 * whip + .2 * follow, 0, -.1)
         offset(rig, 'lower_arm.L', -.22 + .3 * whip + .2 * follow, 0, -.06)
         offset(rig, 'hand.L', -.06, 0, 0)
-        set_legs(rig, -.02 - HURLER_STANCE * ready - .08 * whip,
-                 .26 + .14 * draw + .1 * whip,
-                 .02 + HURLER_STANCE * ready + .08 * whip,
-                 .26 + .18 * draw + .14 * whip)
+        set_legs(rig, .06 + HURLER_STANCE * ready - .08 * whip,
+                 STANDING_KNEE - HURLER_LOAD * ready + .14 * draw + .1 * whip,
+                 -.06 - HURLER_STANCE * ready + .08 * whip,
+                 STANDING_KNEE + HURLER_LOAD * ready + .18 * draw + .14 * whip)
 
     if ready > .001:
         add_offset(rig, 'root', 0, ready * .16, -ready * .05)
@@ -376,13 +408,22 @@ def measure(actor, throw, phase, aim_phase=-1):
     elbow = rig.matrix_world @ rig.pose.bones['lower_arm.R'].matrix.translation
     root = rig.matrix_world @ rig.pose.bones['root'].matrix.translation
     from_body = rock - root
+    # Feet are measured against the **spot the fighter holds**, not against its
+    # root, because the step moves the root: a foot that keeps station while the
+    # body travels over it is planted, and one that keeps station with the root
+    # is being dragged along the ground. `at_x` is where the director put it.
+    home = Vector((STANCES[rig][1], 0, 0))
+    feet = {tag: named(f'Foot.{tag}', actor).matrix_world.translation
+            for tag in ('L', 'R')}
     return {
         'reach': from_body.dot(FORWARD),
         'height': rock.z,
         'side': from_body.x,
         'elbow': elbow.z,
-        'footL': named('Foot.L', actor).matrix_world.translation.z,
-        'footR': named('Foot.R', actor).matrix_world.translation.z,
+        'footL': feet['L'].z,
+        'footR': feet['R'].z,
+        'alongL': (feet['L'] - home).dot(FORWARD),
+        'alongR': (feet['R'] - home).dot(FORWARD),
         'pose': {b.name: b.rotation_quaternion.copy() for b in rig.pose.bones},
     }
 
@@ -417,7 +458,9 @@ for throw in ('hurl', 'pitch', 'toss'):
         drift = max(drift, abs(min(m['footL'], m['footR']) - ready_support))
         print(f'  phase {phase:.2f}  reach {m["reach"]:+.2f}  height {m["height"]:.2f}  '
               f'side {m["side"]:+.2f}  elbow {m["elbow"]:.2f}  '
-              f'feet {m["footL"]:.2f}/{m["footR"]:.2f}')
+              f'feet L {m["alongL"]:+.2f}/h{m["footL"]:.2f} '
+              f'R {m["alongR"]:+.2f}/h{m["footR"]:.2f} '
+              f'split {m["alongL"] - m["alongR"]:+.2f}')
     at_release = measure(MAIN, throw, RELEASE[throw])
     drawn = min(samples.values(), key=lambda m: m['reach'])
     travel = at_release['reach'] - drawn['reach']
@@ -485,6 +528,40 @@ for throw in ('hurl', 'pitch', 'toss'):
             failures.append(f'{throw}: phases {earlier} and {later} are '
                             f'indistinguishable ({moved:.3f} m apart)')
 
+# A hurl is a step, and this is what makes it one rather than a knee lifted on
+# the spot. The fighter waits with the throwing-side leg forward under its
+# weight and the other trailing; that trailing leg comes through and plants
+# ahead; and once it is down it stays down while the body travels over it.
+#
+# The last of those is the one that needs measuring rather than reasoning about.
+# `hurlStep`'s arithmetic is planar and cannot see the coil: the root turns the
+# whole skeleton about a point on the ground, and uncancelled that swept the
+# planted lead foot a quarter of a metre backwards through the release — a pose
+# whose numbers all looked right.
+print()
+stance = measure(MAIN, 'hurl', 0)
+if stance['alongL'] > stance['alongR'] - 0.3:
+    failures.append(
+        f'a hurler does not wait with its trailing leg behind it '
+        f'(L {stance["alongL"]:+.2f} vs R {stance["alongR"]:+.2f}) - there is '
+        f'nowhere to step to, and the wind-up reads as a knee lift on the spot')
+if stance['footR'] > stance['footL']:
+    failures.append(
+        f'a hurler waits with its weight on the wrong leg: the throwing-side '
+        f'foot is {stance["footR"]:.2f} up and the trailing one {stance["footL"]:.2f}')
+stepped = measure(MAIN, 'hurl', RELEASE['hurl'])
+print(f'the step: trailing foot {stance["alongL"]:+.2f} m behind the spot at the '
+      f'start, {stepped["alongL"]:+.2f} m ahead of it at release')
+if stepped['alongL'] < stepped['alongR'] + 0.3:
+    failures.append(
+        f'the hurl does not release over a planted lead foot '
+        f'(L {stepped["alongL"]:+.2f} vs R {stepped["alongR"]:+.2f})')
+planted = [measure(MAIN, 'hurl', p / 100)['alongL'] for p in range(44, 73, 4)]
+skate = max(planted) - min(planted)
+print(f'the lead foot moves {skate:.3f} m between planting and the recovery')
+if skate > 0.16:
+    failures.append(f'the lead foot skates {skate:.3f} m while it is planted')
+
 # Height ordering: all three come over the top, but the further the throw the
 # taller and longer the fighter stands it up.
 heights = {throw: measure(MAIN, throw, RELEASE[throw])['height'] for throw in RELEASE}
@@ -504,9 +581,28 @@ if recovery > 0.7:
     failures.append(f'hurl does not settle back to the ready stance '
                     f'({math.degrees(recovery):.1f} degrees out)')
 
+# A dense read of where the feet actually are through a hurl. The step is the
+# one part of this motion the eight validation phases are too coarse for: a foot
+# that skates does it between them, and the arithmetic in `hurlStep` cannot
+# predict it because the body's yaw carries the feet around as well.
+if os.environ.get('FEET'):
+    print('\n=== a hurl, foot by foot, against the spot the fighter holds ===')
+    print('   phase   fwd |     L    h |     R    h | split')
+    for step_index in range(0, 51):
+        phase = step_index / 50
+        m = measure(MAIN, 'hurl', phase)
+        forward, _ = hurl_step('hurl', phase)
+        print(f'    {phase:.2f} {forward:5.2f} | {m["alongL"]:+.2f} {m["footL"]:.2f} | '
+              f'{m["alongR"]:+.2f} {m["footR"]:.2f} | {m["alongL"] - m["alongR"]:+.2f}')
+
 if failures:
     raise RuntimeError('Throw validation failed:\n  ' + '\n  '.join(failures))
 print('\nThrow geometry validated.\n')
+
+# Rendering is most of the runtime, and a stance question is answered by the
+# numbers above. `MEASURE=1` stops here.
+if os.environ.get('MEASURE'):
+    raise SystemExit(0)
 
 
 # ------------------------------------------------------------------ rendering

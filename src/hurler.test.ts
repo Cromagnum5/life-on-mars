@@ -208,6 +208,20 @@ describe("the step a hurl takes", () => {
     expect(hurlStep("toss", -1).drop).toBeCloseTo(sample(-1).drop, 5);
   });
 
+  it("starts a hurl in the stance it was already standing in", () => {
+    // A hurler between throws is posed by the branch a pitch and a toss use;
+    // the instant a long throw starts it is posed by the hurl's own. If those
+    // two disagree about the stance, every hurl opens with a foot jumping to a
+    // new spot — which is not visible in a still and very visible in motion.
+    // `drop` is what this can see of the legs, and it is derived from all four
+    // angles, so it catches any of them drifting apart.
+    expect(sample(0).drop).toBeCloseTo(sample(-1).drop, 5);
+    expect(sample(1).drop).toBeCloseTo(sample(-1).drop, 5);
+    for (const throwType of ["pitch", "toss"] as const) {
+      expect(hurlStep(throwType, -1).drop).toBeCloseTo(sample(-1).drop, 5);
+    }
+  });
+
   it("hands the legs to the throw and takes them back", () => {
     // What `applyBalancePose` reads to know whose stance it is. Its crouch and
     // recovery steps belong to a fighter that is only standing; layered onto a
