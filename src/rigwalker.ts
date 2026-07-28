@@ -488,13 +488,22 @@ const READY_THROW_ARM: ThrowArmKey = {
  * differing in how early they get there and how far they carry it.
  */
 const THROW_ARM_KEYS: Record<ThrowType, readonly ThrowArmKey[]> = {
+  // The elbow is the story of this one. It folds to a right angle by the top of
+  // the wind, holds while the shoulder comes through, and then extends — the
+  // lever opening late, after the midpoint, is where the speed comes from. At
+  // release it is straight and the wrist is in line with it, so the whole arm
+  // is one bar through the rock. An elbow still bent at release is a thrower
+  // pushing rather than throwing, however good the rest of the pose looks.
   hurl: [
     READY_THROW_ARM,
     { at: 0.14, upperX: -0.89, upperY: 0.17, upperZ: -0.79, lowerX: 1.35, handX: 0.45 },
-    { at: 0.3, upperX: -1.25, upperY: 1.62, upperZ: -1.23, lowerX: 1.7, handX: 0.55 },
-    { at: 0.48, upperX: -1.6, upperY: 1.7, upperZ: -1.52, lowerX: 1.15, handX: 0.35 },
-    { at: 0.58, upperX: -1.47, upperY: 1.49, upperZ: -1.42, lowerX: 0.2, handX: -0.35 },
-    { at: 0.7, upperX: -0.98, upperY: 0.94, upperZ: -0.77, lowerX: 0.55, handX: 0.05 },
+    { at: 0.3, upperX: -1.25, upperY: 1.62, upperZ: -1.23, lowerX: 1.57, handX: 0.55 },
+    { at: 0.48, upperX: -1.6, upperY: 1.7, upperZ: -1.52, lowerX: 1.05, handX: 0.4 },
+    // The shoulder carries higher here than it used to, because a straight arm
+    // releases lower than a bent one from the same shoulder — and the hurl has
+    // to release above the pitch or the throws stop reading in order.
+    { at: 0.58, upperX: -1.6, upperY: 1.56, upperZ: -1.5, lowerX: 0, handX: 0 },
+    { at: 0.7, upperX: -0.98, upperY: 0.94, upperZ: -0.77, lowerX: 0.45, handX: 0.1 },
     { at: 0.85, upperX: -0.32, upperY: 0.5, upperZ: -0.2, lowerX: 1, handX: 0.25 },
     { ...READY_THROW_ARM, at: 1 },
   ],
@@ -562,11 +571,17 @@ const HURLER_STANCE = 0.2;
 const THIGH_LENGTH = 0.79;
 const SHIN_LENGTH = 0.72;
 /**
- * How far the rear foot is allowed off the ground before the hips pay for it.
- * A thrower's rear heel does lift, and pretending otherwise is what forces the
- * crouch deep enough to drag the release down under the pitch's.
+ * The gather, separated out of the beats.
+ *
+ * The lead knee comes up and the body leans away from the target, and both are
+ * given back the instant the stride starts down. `draw` alone will not do it:
+ * `draw` and `stride` overlap heavily, so a knee lift hung on `draw` is still
+ * up under a foot that has already planted. Multiplying it out by the stride is
+ * what makes the gather a thing that ends.
  */
-const HEEL_LIFT = 0.1;
+function hurlGather(draw: number, stride: number): number {
+  return draw * (1 - stride);
+}
 
 /**
  * Where the body goes during a hurl: forward along the throw, and down. Plus
@@ -578,40 +593,61 @@ export type HurlStep = { forward: number; drop: number; engagement: number };
 const hurlStepScratch: HurlStep = { forward: 0, drop: 0, engagement: 0 };
 
 /**
- * How far behind the hips the rear leg is carrying its foot, in radians.
- *
- * Shared with `hurlStep` rather than written out twice, because the hip drop is
- * derived from this angle: the two have to be the same number or the hips pay
- * for a reach the leg is not making.
- */
-function hurlRearLeg(draw: number, stride: number, whip: number, follow: number): number {
-  return 0.06 + HURLER_STANCE + 0.1 * draw + 0.04 * stride + 0.02 * whip - 0.04 * follow;
-}
-
-/**
  * How far the root pitches forward through a hurl, in radians.
  *
  * The root bone sits on the ground, not at the hips, so pitching it forward is
  * not bending at the waist — it swings the whole skeleton about the fighter's
- * feet, and the rear foot, being behind the pivot, goes up. That is half of why
- * a hurler was standing on its toes. The bend that reads as bending lives in
- * the spine and chest, which pivot where a spine actually does.
+ * feet, and the rear foot, being behind the pivot, goes up. The bend that reads
+ * as bending lives in the spine and chest, which pivot where a spine does; this
+ * only carries the hips through, which is a small thing.
  */
-function hurlRootPitch(draw: number, stride: number, whip: number, follow: number): number {
-  return -0.1 * draw + 0.02 * stride + 0.08 * whip + 0.14 * follow;
+function hurlRootPitch(gather: number, stride: number, whip: number, follow: number): number {
+  return -0.06 * gather + 0.04 * stride + 0.1 * whip + 0.14 * follow;
 }
 
+/** The four leg angles of a hurl, in radians. Lead leg is the left. */
+type HurlLegs = { upperL: number; lowerL: number; upperR: number; lowerR: number };
+
+const hurlLegsScratch: HurlLegs = { upperL: 0, lowerL: 0, upperR: 0, lowerR: 0 };
+
 /**
- * How much the rear knee is folded through a hurl, in radians.
+ * The legs of a hurl, shared between the pose and the hip drop that pays for
+ * it. Written once because the drop is derived from these exact angles: two
+ * copies would have the hips paying for a reach the legs are not making.
  *
- * It folds to gather and then drives straight, which is both what a thrower
- * does and what keeps the foot down: a bent knee behind the body is the single
- * largest thing lifting that foot, worth more than the whole hip sweep. Paying
- * for a folded rear leg with a deeper crouch instead costs the release height
- * the throws are ordered by — straightening it is free.
+ * The shape of it is a pitcher's. The lead knee comes up and the shin hangs
+ * from it — the feet finish nearly together, which is what balances a body
+ * leaning back into its wind — then that leg swings down and out and plants,
+ * and the rear leg drives straight behind as the body passes over the plant.
+ *
+ * The `0.67 * gather` on the lead knee is not decoration: it very nearly
+ * cancels the hip lift above it, which is what leaves the shin hanging
+ * vertically instead of sticking out in front of the fighter.
  */
-function hurlRearKnee(draw: number, stride: number, whip: number, follow: number): number {
-  return STANDING_KNEE + 0.16 * draw - 0.18 * stride - 0.06 * whip + 0.06 * follow;
+function hurlLegs(
+  draw: number, stride: number, whip: number, follow: number, ready: number,
+): HurlLegs {
+  const out = hurlLegsScratch;
+  const gather = hurlGather(draw, stride);
+  // Once it plants, the lead foot is supposed to stay where it landed. What it
+  // gives back on the whip is only what the body travels forward in the same
+  // stretch — take back more than that and the foot walks itself in under the
+  // hips, and the fighter releases with its feet together.
+  out.upperL = -0.06 - HURLER_STANCE * ready -
+    1 * gather - 0.24 * stride + 0.1 * whip + 0.06 * follow;
+  // Folded past the angle that would leave the shin vertical, so it hangs back
+  // under the body instead of out in front of it. That is what brings the feet
+  // together in the wind — a knee lifted with a straight shin below it puts the
+  // lead foot two thirds of a metre ahead of the fighter, which is a stride,
+  // not a gather.
+  out.lowerL = STANDING_KNEE + 1.5 * gather + 0.06 * stride - 0.1 * whip + 0.1 * follow;
+  // Under the body to hold the fighter up through the gather, then extending
+  // behind as the hips drive over the plant. Its heel comes off the ground
+  // doing it, which is correct and is why `drop` follows the lead foot.
+  out.upperR = 0.06 + HURLER_STANCE * ready -
+    0.06 * gather + 0.28 * stride + 0.2 * whip - 0.04 * follow;
+  out.lowerR = STANDING_KNEE + 0.1 * gather - 0.2 * stride - 0.06 * whip + 0.08 * follow;
+  return out;
 }
 
 /**
@@ -644,15 +680,20 @@ const STANDING_LIFT = ankleLift(0.06, STANDING_KNEE);
  * How far it can go is not a taste question. There is no IK here: the hips are
  * pinned to the terrain and the legs are two rigid bones, so a foot cannot
  * reach out and stay down — it travels an arc, and the only way to keep it on
- * the ground is to bring the hips to meet it. A leg reaching `d` from under the
- * hip lifts its foot by `LEG_REACH * (1 - cos θ)`, and that is what `drop` pays
- * back, less the heel lift a thrower is entitled to.
+ * the ground is to bring the hips to meet it.
  *
- * The bill is why the travel is what it is. Half a body-width of step asks the
- * rear leg to reach about 0.9 m, which costs nearly 0.2 m of crouch — and a
- * hurl crouched that deep releases lower than a pitch, which inverts the
- * ordering the three throws are read by. What is here is the largest step the
- * rig can take with its feet still on the ground.
+ * `drop` follows the **lower** of the two feet, which is the one standing on
+ * the ground. That one rule covers the whole motion without a heel allowance to
+ * hand-tune: through the gather the lead foot is up around the knee and the
+ * rear leg is holding the fighter up, so the drop tracks the rear; through the
+ * drive the lead foot is planted and the rear heel is the one in the air, so it
+ * tracks the lead. Whichever is lower is the one that must not sink, and the
+ * other is free to fly.
+ *
+ * The bill is still why the travel is what it is. Half a body-width of step
+ * asks the trailing leg to reach about 0.9 m, which costs nearly 0.2 m of
+ * crouch — and a hurl crouched that deep releases lower than a pitch, which
+ * inverts the ordering the three throws are read by.
  *
  * Everything is a pure function of the phase so `tools/render_rigwalker_throw.py`
  * can port it, and rides the same beats as the pose so the two cannot drift
@@ -670,26 +711,27 @@ export function hurlStep(throwType: ThrowType, phase: number): HurlStep {
   // Stride and whip are both at full at the moment of release, so these read as
   // a sum that peaks just past it rather than as three separate pushes.
   out.forward = hurling ? 0.13 * stride + 0.15 * whip + 0.22 * follow : 0;
-  // A pitch and a toss barely move their legs, so their rear leg is the stance
-  // itself and their drop is the standing one.
   out.engagement = phase < 0 ? 0 : Math.max(draw, stride, whip, follow);
-  const rear = hurling
-    ? hurlRearLeg(draw, stride, whip, follow)
-    // A pitch and a toss give the stance back as they throw, so what they owe
-    // for it goes with it.
-    : 0.06 + HURLER_STANCE * (1 - out.engagement);
-  const knee = hurling ? hurlRearKnee(draw, stride, whip, follow) : STANDING_KNEE;
-  const pitch = hurling ? hurlRootPitch(draw, stride, whip, follow) : 0;
-  // Two bills, both owed to the rear foot: the arc its own leg carries it up,
-  // and the arc the root pitch swings it up through, it being behind that
-  // pivot. The second is easy to forget and was the larger of the two. Both are
-  // measured against a leg already standing, or the crouch every fighter stands
-  // in gets charged for twice.
-  const lift = ankleLift(rear, knee) - STANDING_LIFT +
-    ankleReach(rear, knee) * Math.sin(pitch);
-  // The heel is only allowed off the ground while the throw is actually
-  // running. Standing, a thrower has both feet flat, and the hips pay in full.
-  out.drop = Math.max(0, lift - HEEL_LIFT * out.engagement);
+  const ready = 1 - out.engagement;
+  const pitch = hurling ? hurlRootPitch(hurlGather(draw, stride), stride, whip, follow) : 0;
+  // A pitch and a toss barely move their legs, and give the bladed stance back
+  // as they throw, so the stance itself is what they owe for.
+  const legs = hurling
+    ? hurlLegs(draw, stride, whip, follow, ready)
+    : Object.assign(hurlLegsScratch, {
+      upperL: -0.02 - HURLER_STANCE * ready, lowerL: STANDING_KNEE,
+      upperR: 0.02 + HURLER_STANCE * ready, lowerR: STANDING_KNEE,
+    });
+  // Each foot pays twice: the arc its own leg carries it up, and the arc the
+  // root pitch swings it through, the rear foot being behind that pivot. Both
+  // are measured against a leg already standing, or the crouch every fighter
+  // stands in gets charged for twice.
+  const standing = (upper: number, knee: number) =>
+    ankleLift(upper, knee) - STANDING_LIFT + ankleReach(upper, knee) * Math.sin(pitch);
+  out.drop = Math.min(
+    standing(legs.upperL, legs.lowerL),
+    standing(legs.upperR, legs.lowerR),
+  );
   return out;
 }
 
@@ -720,9 +762,16 @@ function addHitReaction(
  * the top and lets go out in front and high, and the arm rides down across the
  * body — and they differ in how much of the fighter goes into it:
  *
- * - `hurl` is the whole body. A full coil, the left arm pointing out at the
- *   target, a front-foot stride, hips opening ahead of the shoulders, and the
- *   arm slinging over last. It is slow, and it is why standing off is worth it.
+ * - `hurl` is the whole body, and it is a spring rather than a swing. The lead
+ *   knee comes up and the shin tucks under while the body leans away and winds
+ *   clockwise off the target; the feet finish nearly together, which is what
+ *   balances the lean. Then that leg swings down and plants, the hips open
+ *   ahead of the shoulders, and everything unwinds straight through square and
+ *   on into a left twist — a coil that only returns to neutral has spent
+ *   itself stopping. The elbow folds to a right angle at the top of the wind
+ *   and extends late, so the arm is one straight bar from shoulder to rock at
+ *   release, with the wrist in line. It is slow, and it is why standing off is
+ *   worth it.
  * - `pitch` is thrown off a planted stance: half the coil, no stride, no aiming
  *   arm, the arm doing the work.
  * - `toss` is a dart. The arm is up and gone before the body has moved, done
@@ -746,58 +795,58 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
   setBoneOffset(bones.handR, bones.armRest.handR, arm.handX, 0, 0);
 
   if (throwType === "hurl") {
-    // Hips lead the shoulders. The separation between the two during the stride
-    // is what makes a throw read as a throw rather than an arm swing.
-    const hip = 0.85 * draw + 0.15 * stride - 0.9 * whip - 0.6 * follow;
-    const chest = 1 * draw + 0.9 * stride - 1 * whip - 0.5 * follow;
+    const gather = hurlGather(draw, stride);
+    // The spring. Both wind clockwise away from the target and then unwind
+    // straight through neutral into a left twist, which is the half that makes
+    // it a throw rather than a turn: a body that only returns to square has
+    // spent its coil stopping itself. The hips lead the shoulders out of the
+    // gather, and the gap between these two is where the power is stored.
+    const hip = 0.75 * gather + 0.3 * stride - 1.3 * whip - 0.4 * follow;
+    const chest = 1 * gather + 0.7 * stride - 1.5 * whip - 0.5 * follow;
     setBoneOffset(bones.root, bones.bodyRest.root,
-      hurlRootPitch(draw, stride, whip, follow),
+      hurlRootPitch(gather, stride, whip, follow),
       0.34 * hip,
-      -0.14 * draw - 0.08 * stride + 0.08 * whip + 0.12 * follow);
-    // The bend the root gave up, taken by the joints that can afford it: these
-    // pivot at the waist and the ribs rather than at the soles.
+      -0.1 * gather - 0.08 * stride + 0.08 * whip + 0.12 * follow);
+    // Leans away over the gather and comes up straight through the release —
+    // the wind-up is stored here, at joints that pivot where a spine does,
+    // rather than at the root, which pivots at the soles.
     setBoneOffset(bones.spine, bones.bodyRest.spine,
-      0.04 + 0.1 * draw + 0.06 * whip - 0.14 * follow,
-      0.3 * chest, 0.06 * draw - 0.05 * follow);
+      0.04 - 0.3 * gather + 0.1 * whip + 0.2 * follow,
+      0.3 * chest, 0.06 * gather - 0.05 * follow);
     // Finishes bent over the front leg, the way a thrown-out arm ends.
     setBoneOffset(bones.chest, bones.bodyRest.chest,
-      0.03 + 0.16 * draw + 0.06 * whip - 0.18 * follow,
-      0.44 * chest, 0.05 * draw - 0.08 * follow);
-    // The eyes stay on the target through a coil of nearly sixty degrees.
+      0.03 - 0.18 * gather + 0.12 * whip + 0.16 * follow,
+      0.44 * chest, 0.05 * gather - 0.08 * follow);
+    // The eyes stay on the target through the whole coil, both ways.
     setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08 - 0.06 * follow, -0.5 * chest, 0);
     setBoneOffset(bones.head, bones.bodyRest.head, -0.03 + 0.08 * aim, -0.35 * chest, 0);
 
-    // The aiming arm sights down its whole length at the target through the
-    // wind, then folds hard into the ribs, which is what the throwing shoulder
-    // rotates around. The rig's rest elbow is straight, so any bend here is a
-    // bend the viewer sees: keeping `lowerArmL` near zero through the wind is
-    // the difference between a thrower sighting on someone and a thrower
-    // holding a bent forearm up in front of their chest.
+    // The counterweight arm. It lifts at the shoulder and carries the forearm
+    // folded across the front of the chest, then drives down and open as the
+    // body untwists — pulling that elbow down into the ribs is a good part of
+    // what turns the shoulders through.
+    //
+    // The fold has to go *across*, not up. The elbow is what reads here: with
+    // the upper arm low and the forearm cocked vertically the pose stops being
+    // a counterweight and becomes a gesture, which is what it used to be. The
+    // Z carries the whole arm over the centre line so the flexion lands the
+    // hand in front of the sternum rather than beside the ear.
     //
     // It runs on the larger of the two wind beats rather than their sum. Draw
     // and stride overlap, and adding them lifts the arm over the head halfway
     // through the wind — the same trap the throwing arm's keys exist to avoid.
     const sight = Math.max(draw, stride);
     setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
-      -0.42 - 0.98 * sight + 1.42 * whip + 0.34 * follow - 0.4 * aim,
-      0, -0.12 - 0.22 * sight + 0.2 * follow);
+      -0.4 - 0.72 * sight + 1.35 * whip + 0.34 * follow - 0.34 * aim,
+      0, -0.14 - 0.5 * sight + 0.25 * follow);
     setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
-      -0.1 - 0.06 * sight + 0.6 * whip + 0.4 * follow - 0.05 * aim,
+      -0.08 + 0.72 * sight - 0.5 * whip + 0.2 * follow + 0.35 * aim,
       0, -0.05);
     setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
 
-    // The legs have to absorb `hurlLunge`, or the body slides over two feet
-    // that travel with it. The left reaches out on the stride and then sweeps
-    // back under the hips as the body passes over the plant; the right extends
-    // behind to hold the ground it is driving off. Neither knee straightens
-    // past its base bend — there is no IK here, so a straight leg puts the
-    // sole through the terrain.
-    const upperL = -0.06 - HURLER_STANCE +
-      0.08 * draw - 0.22 * stride + 0.16 * whip - 0.06 * follow + combatStep;
-    const lowerL = 0.24 + 0.14 * draw + 0.1 * stride + 0.06 * follow;
-    const upperR = hurlRearLeg(draw, stride, whip, follow) - combatStep;
-    const lowerR = hurlRearKnee(draw, stride, whip, follow);
-    setLegs(bones, upperL, lowerL, upperR, lowerR);
+    const legs = hurlLegs(draw, stride, whip, follow, ready);
+    setLegs(bones,
+      legs.upperL + combatStep, legs.lowerL, legs.upperR - combatStep, legs.lowerR);
   } else if (throwType === "pitch") {
     const coil = 0.95 * draw + 0.7 * stride - 0.95 * whip - 0.4 * follow;
     setBoneOffset(bones.root, bones.bodyRest.root,

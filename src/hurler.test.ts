@@ -193,13 +193,18 @@ describe("the step a hurl takes", () => {
     expect(sample(release).forward).toBeLessThan(0.35);
   });
 
-  it("pays for the bladed stance in full while it is only standing", () => {
-    // Waiting out a gap, both feet are flat: nothing is happening that earns a
-    // lifted heel, so the hips owe the whole cost of standing across the line.
-    expect(sample(-1).engagement).toBe(0);
-    expect(sample(-1).drop).toBeGreaterThan(0);
-    // And the stance is owed whether or not a throw is loaded, so the two
-    // slower throws stand in it too.
+  it("keeps the hips within a stance of where they stand", () => {
+    // `drop` tracks the lower of the two feet, so it can go either way: a
+    // fighter whose legs are both straighter than it stands genuinely stands
+    // taller. What it may not do is wander, because it comes straight off the
+    // release height, and a hurl that releases below a pitch inverts the
+    // ordering the three throws are read by.
+    expect(Math.abs(sample(-1).drop)).toBeLessThan(0.05);
+    for (const phase of [0.3, 0.44, release, 0.72, 0.9]) {
+      expect(Math.abs(sample(phase).drop)).toBeLessThan(0.1);
+    }
+    // The stance is owed whether or not a throw is loaded, so the two slower
+    // throws stand in it too.
     expect(hurlStep("toss", -1).drop).toBeCloseTo(sample(-1).drop, 5);
   });
 
