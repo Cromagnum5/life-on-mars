@@ -276,7 +276,7 @@ Its bands are stated in the units the model itself defines, in `combat.ts`:
 
 | throw | band | speed | damage | motion | releases at |
 | --- | --- | --- | --- | --- | --- |
-| `hurl` | up to 12 shoulder widths (16.08 m) | 26 m/s | 38 | 1.15 s | phase 0.58 |
+| `hurl` | up to 12 shoulder widths (16.08 m) | 32.5 m/s | 38 | 1.15 s | phase 0.58 |
 | `pitch` | up to twice sword reach (8.6 m) | 17 m/s | 19 | 0.62 s | phase 0.44 |
 | `toss` | inside sword reach (4.3 m) | 11 m/s | 8 | 0.30 s | phase 0.32 |
 
