@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { MARS_GRAVITY } from "./balance";
 import { ROCK_MATERIAL, createRockGeometry } from "./rigwalker";
+import { viewSpan, type TabletopCamera } from "./world";
 
 /**
  * Pooled, world-space combat effects: sparks struck off the blade, a brief
@@ -46,13 +47,18 @@ const SPARK_VERTEX = /* glsl */ `
   attribute float aAlpha;
   attribute vec3 aColor;
   uniform float uPixelsPerUnit;
+  // 0 orthographic, 1 perspective. A spark is a point sprite, so nothing
+  // divides its size by depth unless this shader does it.
+  uniform float uDepthDivide;
   varying vec3 vColor;
   varying float vAlpha;
   void main() {
     vColor = aColor;
     vAlpha = aAlpha;
-    gl_PointSize = aSize * uPixelsPerUnit;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+    float depth = max(-viewPosition.z, 0.001);
+    gl_PointSize = aSize * uPixelsPerUnit / mix(1.0, depth, uDepthDivide);
+    gl_Position = projectionMatrix * viewPosition;
   }
 `;
 
@@ -249,7 +255,7 @@ export class CombatEffects {
     this.sparkGeometry.setAttribute("aSize", new THREE.BufferAttribute(this.sparkSizes, 1));
     this.sparkGeometry.setAttribute("aAlpha", new THREE.BufferAttribute(this.sparkAlphas, 1));
     this.sparkMaterial = new THREE.ShaderMaterial({
-      uniforms: { uPixelsPerUnit: { value: 12 } },
+      uniforms: { uPixelsPerUnit: { value: 12 }, uDepthDivide: { value: 0 } },
       vertexShader: SPARK_VERTEX,
       fragmentShader: SPARK_FRAGMENT,
       transparent: true,
@@ -510,11 +516,15 @@ export class CombatEffects {
    * gl_PointSize is in physical pixels, so a device pixel ratio above one would
    * otherwise halve the sparks.
    */
-  update(delta: number, camera: THREE.OrthographicCamera, drawingBufferHeight: number): void {
+  update(delta: number, camera: TabletopCamera, drawingBufferHeight: number): void {
     // Orthographic projection has no perspective divide, so point size in
-    // pixels is a fixed world-to-screen ratio that only zoom changes.
+    // pixels is a fixed world-to-screen ratio that only zoom changes. Under
+    // perspective the ratio holds at one metre out and the shader divides by
+    // depth from there, which is what the pixels-per-unit then means.
+    const perspective = (camera as THREE.PerspectiveCamera).isPerspectiveCamera === true;
+    this.sparkMaterial.uniforms.uDepthDivide.value = perspective ? 1 : 0;
     this.sparkMaterial.uniforms.uPixelsPerUnit.value =
-      (drawingBufferHeight / (camera.top - camera.bottom)) * camera.zoom;
+      drawingBufferHeight / viewSpan(camera, 1);
 
     let anySpark = false;
     for (let slot = 0; slot < MAX_SPARKS; slot += 1) {

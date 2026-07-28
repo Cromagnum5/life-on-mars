@@ -9,6 +9,7 @@ import {
 } from "./combat";
 import { CombatEffects } from "./effects";
 import type { NavigationObstacle, Rigwalker } from "./rigwalker";
+import { viewSpan, type TabletopCamera } from "./world";
 
 /**
  * One frame of fighting, end to end: plan, present, damage, pose, and clean up
@@ -17,7 +18,7 @@ import type { NavigationObstacle, Rigwalker } from "./rigwalker";
  */
 
 export type BattleContext = {
-  camera: THREE.OrthographicCamera;
+  camera: TabletopCamera;
   /** Where the camera is looking on the ground plane; the audio listener. */
   focus: THREE.Vector3;
   /** Framebuffer height, not CSS height; spark sizing depends on it. */
@@ -116,7 +117,9 @@ export class BattleRuntime {
     this.audio.setListener(
       context.focus.x, context.focus.z,
       this.cameraRight.x, this.cameraRight.z,
-      (camera.top - camera.bottom) / camera.zoom,
+      // Earshot is how much world the frame holds. Under perspective that is
+      // read at the focus, which is the part of the scene being listened to.
+      viewSpan(camera, camera.position.distanceTo(context.focus)),
     );
 
     const frame = this.director.update(

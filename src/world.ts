@@ -212,6 +212,14 @@ export function panFocus(
   focus.z += (-sin * right - cos * forward) * distance;
 }
 
+/**
+ * Either projection the scene can be drawn through. The game is orthographic
+ * and the visual direction says so; the sim can be switched to perspective to
+ * ask whether it should be, so everything downstream of the camera — the audio
+ * listener, the spark sizing — takes the pair rather than the one.
+ */
+export type TabletopCamera = THREE.OrthographicCamera | THREE.PerspectiveCamera;
+
 /** The three-quarter orthographic view. Zoom and the orbit are its variables. */
 export function createTabletopCamera(zoom = 1.35): THREE.OrthographicCamera {
   const camera = new THREE.OrthographicCamera();
@@ -221,19 +229,67 @@ export function createTabletopCamera(zoom = 1.35): THREE.OrthographicCamera {
   return camera;
 }
 
-/** Fits the orthographic frustum to the viewport and resizes the framebuffer. */
+/**
+ * The same view with a perspective divide. The default `fov` is the one that
+ * frames exactly `VIEW_HEIGHT` at the default orbit radius, so switching a
+ * still scene between the two projections leaves whatever is at the focus the
+ * size it already was and changes only what depth does to everything else.
+ */
+export const DEFAULT_FOV = THREE.MathUtils.radToDeg(
+  2 * Math.atan(VIEW_HEIGHT / 2 / DEFAULT_EYE.length()),
+);
+
+export function createPerspectiveCamera(zoom = 1.35, fov = DEFAULT_FOV): THREE.PerspectiveCamera {
+  const camera = new THREE.PerspectiveCamera(fov, 1, 0.5, 400);
+  camera.position.copy(DEFAULT_EYE);
+  camera.zoom = zoom;
+  camera.updateProjectionMatrix();
+  return camera;
+}
+
+/**
+ * How far back the eye must sit for `fov` to frame `VIEW_HEIGHT` at the focus.
+ * A wider lens comes in closer for the same framing, which is the whole of what
+ * makes one perspective view read as deeper than another.
+ */
+export function radiusForFov(fov: number, viewHeight = VIEW_HEIGHT): number {
+  return viewHeight / 2 / Math.tan(THREE.MathUtils.degToRad(fov) / 2);
+}
+
+/**
+ * World units visible from top to bottom of the frame, at `distance` from the
+ * eye. Orthographic ignores the distance, which is the whole difference.
+ */
+export function viewSpan(camera: TabletopCamera, distance: number): number {
+  if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
+    const perspective = camera as THREE.PerspectiveCamera;
+    const fov = THREE.MathUtils.degToRad(perspective.fov);
+    return (2 * Math.tan(fov / 2) * distance) / perspective.zoom;
+  }
+  const orthographic = camera as THREE.OrthographicCamera;
+  return (orthographic.top - orthographic.bottom) / orthographic.zoom;
+}
+
+/** Fits the frustum to the viewport and resizes the framebuffer. */
 export function fitCameraToViewport(
-  camera: THREE.OrthographicCamera,
+  camera: TabletopCamera,
   renderer: THREE.WebGLRenderer,
   width: number,
   height: number,
   viewHeight = VIEW_HEIGHT,
 ): void {
-  const viewWidth = viewHeight * (width / height);
-  camera.left = -viewWidth / 2;
-  camera.right = viewWidth / 2;
-  camera.top = viewHeight / 2;
-  camera.bottom = -viewHeight / 2;
+  if ((camera as THREE.PerspectiveCamera).isPerspectiveCamera) {
+    // Vertical fov is fixed and the aspect widens, which is how the
+    // orthographic view already behaves: height is the constant, width follows.
+    (camera as THREE.PerspectiveCamera).aspect = width / height;
+  } else {
+    const orthographic = camera as THREE.OrthographicCamera;
+    const viewWidth = viewHeight * (width / height);
+    orthographic.left = -viewWidth / 2;
+    orthographic.right = viewWidth / 2;
+    orthographic.top = viewHeight / 2;
+    orthographic.bottom = -viewHeight / 2;
+  }
   camera.updateProjectionMatrix();
   renderer.setSize(width, height, false);
 }

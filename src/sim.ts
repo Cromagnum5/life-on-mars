@@ -7,8 +7,10 @@ import { loadRigwalkerAsset } from "./rigwalker-assets";
 import {
   addMarsLighting,
   applyMarsAtmosphere,
+  DEFAULT_FOV,
   createCameraOrbit,
   createMarsRenderer,
+  createPerspectiveCamera,
   createRocks,
   createTabletopCamera,
   createTerrain,
@@ -16,7 +18,9 @@ import {
   orbitBy,
   orbitOffset,
   panFocus,
+  radiusForFov,
   terrainHeightAt,
+  type TabletopCamera,
 } from "./world";
 import "./sim.css";
 
@@ -34,6 +38,16 @@ import "./sim.css";
  *   t=9.5        run headless to that sim time and render one frame
  *   step=0.0166  fixed timestep used by `t`
  *   hud=0        hide the panels for a clean render
+ *   yaw=90       degrees the view is swung from the default three-quarter one,
+ *   pitch=-30    and degrees it is tipped; the arrow keys do the same live
+ *   camera=perspective   draw through a perspective projection instead, which
+ *                `P` also toggles live. The default view is orthographic and
+ *                nothing changes size with distance in it; this is how that
+ *                choice gets questioned against the same seeded fight
+ *   fov=70       vertical field of view for that projection, in degrees. The
+ *                default frames what the orthographic view frames, so a swap
+ *                holds the focus and changes only depth; a wider lens comes in
+ *                closer for the same framing and reads as deeper
  *   on=HR1       ride one fighter by its label instead of the centre of the
  *                fight, which is what makes a pose judgeable: at a zoom that
  *                fills the frame with a body, the centroid frames nobody
@@ -141,8 +155,21 @@ addMarsLighting(scene, 26);
 scene.add(createTerrain(ARENA_SIZE, 96), createRocks(ARENA_SIZE, 26, [new THREE.Vector2()], 13));
 
 const renderer = createMarsRenderer(canvas);
-const camera = createTabletopCamera(Number(params.get("zoom") ?? 3.2));
+const startingZoom = Number(params.get("zoom") ?? 3.2);
+const fov = Number(params.get("fov") ?? DEFAULT_FOV);
+// Both projections exist from the start and the view swaps between them, so a
+// comparison is one keystroke on the same frame of the same seeded fight rather
+// than two runs that have to be trusted to match.
+const orthographicCamera = createTabletopCamera(startingZoom);
+const perspectiveCamera = createPerspectiveCamera(startingZoom, fov);
+let camera: TabletopCamera = params.get("camera") === "perspective"
+  ? perspectiveCamera
+  : orthographicCamera;
 const orbit = createCameraOrbit();
+// A wider lens must come in closer to frame the same thing, and how close is
+// exactly how strong the perspective reads. Orthographic ignores the radius, so
+// setting it from the lens costs the default view nothing.
+orbit.radius = radiusForFov(fov);
 // A headless capture cannot press a key, so the angle is a URL parameter too:
 // degrees swung from the default three-quarter view.
 orbitBy(
@@ -449,6 +476,20 @@ function resize(): void {
   fitCameraToViewport(camera, renderer, window.innerWidth, window.innerHeight);
 }
 
+/**
+ * Swaps the projection under the running fight. Zoom carries across, so the
+ * framing at the focus is held and the only thing that changes is what depth
+ * does to everything in front of and behind it — which is the question.
+ */
+function setPerspective(next: boolean): void {
+  const wanted = next ? perspectiveCamera : orthographicCamera;
+  if (wanted === camera) return;
+  wanted.zoom = camera.zoom;
+  camera = wanted;
+  resize();
+  updateCamera(0);
+}
+
 window.addEventListener("resize", resize);
 resize();
 
@@ -514,6 +555,8 @@ window.addEventListener("keydown", (event) => {
     if (event.code === "KeyD") panFocus(orbit, focus, 0, 1, pan);
     if (event.code === "KeyW") panFocus(orbit, focus, 1, 0, pan);
     if (event.code === "KeyS") panFocus(orbit, focus, -1, 0, pan);
+  } else if (event.code === "KeyP") {
+    setPerspective(camera === orthographicCamera);
   } else if (/^Arrow(Left|Right|Up|Down)$/.test(event.code)) {
     // Swinging the view is not a pan: the fight stays framed, the angle on it
     // changes. Following is left alone so a fight can be circled while it runs.
@@ -548,7 +591,9 @@ if (captureTime !== null) {
   while (simTime < captureTime) advance(captureStep);
   updateCamera(captureStep);
   renderReadout();
-  document.title = `${matchup} seed ${seed} @ ${simTime.toFixed(2)}s — ${verdict ?? "fighting"}`;
+  const projection = camera === perspectiveCamera ? `perspective ${fov.toFixed(0)}°` : "orthographic";
+  document.title =
+    `${matchup} seed ${seed} @ ${simTime.toFixed(2)}s · ${projection} — ${verdict ?? "fighting"}`;
   Object.assign(window, { __simCapture: { matchup, seed, time: simTime, verdict, tally } });
   // Redraw the frozen frame every tick. A canvas rendered once is empty by the
   // time a screenshot is taken, and screenshots are the point of this mode.

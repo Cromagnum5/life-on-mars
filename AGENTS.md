@@ -214,20 +214,29 @@ distance, plus a timestamped event log and an outcome tally.
 - Sword matchups are `1v1`, `2v2`, `3v2`, `3v3`, and `5v5`. Hurler matchups are
   `1h v 1` (the whole unit in one fight: it opens at maximum range and is walked
   down through all three throws), `1h v 1h`, `2h+2 v 4`, and `2h v 3`. All
-  seeded, so a fight replays.
+  seeded, so a fight replays — see "What a seed is worth" below for what that
+  does and does not survive.
 - A matchup carries its own starting standoff and zoom. A hurler works from
   sixteen metres, which needs both a longer approach and a wider view than two
   swordsmen walking into each other; `zoom` in the URL still overrides it.
 - `Space` pauses, `.` steps one frame, `R` restarts, `1`-`9` pick a matchup,
   `WASD` pans, the left and right arrows swing the view round the fight, the up
-  and down arrows raise and lower it, and the wheel zooms. Panning is in the
-  camera's own frame, so `W` still walks away from the eye once the view has
-  been turned.
+  and down arrows raise and lower it, `P` swaps the projection, and the wheel
+  zooms. Panning is in the camera's own frame, so `W` still walks away from the
+  eye once the view has been turned.
 - URL parameters: `matchup`, `seed`, `speed`, `zoom`, `hud=0`, `t`,
   `yaw` and `pitch` — degrees swung from the default three-quarter view, since
-  a headless capture cannot press an arrow key — and `contacts=1`, which logs
-  where each strike throws its sparks in the attacker's own frame: reach toward
-  the opponent, side, and height.
+  a headless capture cannot press an arrow key — `camera=perspective` and
+  `fov`, and `contacts=1`, which logs where each strike throws its sparks in
+  the attacker's own frame: reach toward the opponent, side, and height.
+- `camera=perspective` draws the same fight through a perspective projection.
+  The game is orthographic and the visual direction says so, but orthographic
+  means nothing changes size with distance, which reads as reverse perspective
+  at a low angle: a distant fighter holds its size while the ground shrinks
+  around it. The toggle is how that choice gets questioned rather than argued.
+  The default `fov` frames exactly what the orthographic view frames at the
+  focus, so a swap holds the framing and changes only depth; a wider `fov`
+  comes in closer for the same framing and reads as deeper.
 
 `t` is the headless capture mode: the page steps a fixed timestep fight to that
 exact sim time in one synchronous burst, renders one frame, and freezes. It
