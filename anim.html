@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Animation workbench for Life on Mars: scrub a Rigwalker's motions and tune them against the rig."
+    />
+    <title>Life on Mars — Anim tool</title>
+  </head>
+  <body>
+    <div id="sim">
+      <canvas id="stage" aria-label="Animation view"></canvas>
+
+      <header class="sim-bar">
+        <span class="sim-title">Anim tool</span>
+        <div class="sim-group" role="group" aria-label="Motion" id="motions"></div>
+        <div class="sim-group">
+          <button type="button" id="play">Play</button>
+          <label for="speed">Speed</label>
+          <input id="speed" type="range" min="0.05" max="2" step="0.05" value="0.5" />
+          <output id="speed-value">0.50×</output>
+          <label><input id="loop" type="checkbox" checked /> Loop</label>
+        </div>
+        <div class="sim-group">
+          <label for="line">Line</label>
+          <select id="line">
+            <option value="overhead">overhead</option>
+            <option value="forehand">forehand</option>
+            <option value="backhand">backhand</option>
+            <option value="flank">flank</option>
+            <option value="rising">rising</option>
+          </select>
+          <label for="intensity">Force</label>
+          <input id="intensity" type="range" min="0" max="1" step="0.02" value="0.72" />
+          <output id="intensity-value">0.72</output>
+        </div>
+        <div class="sim-group">
+          <a href="/sim.html">Combat sim</a>
+          <a href="/">Game</a>
+        </div>
+      </header>
+
+      <section class="anim-editor" aria-label="Tuning">
+        <div id="editor"></div>
+        <footer class="anim-save">
+          <button type="button" id="save">Save to pose-tuning.ts</button>
+          <button type="button" id="revert" title="Back to the numbers this page loaded with">
+            Revert
+          </button>
+          <span id="save-status"></span>
+          <details>
+            <summary>TypeScript</summary>
+            <textarea id="export" readonly rows="10" spellcheck="false"></textarea>
+          </details>
+        </footer>
+      </section>
+
+      <aside class="sim-readout" aria-label="Pose readout">
+        <div class="sim-status">
+          <span id="clock">0.00</span>
+          <span id="projection">ortho</span>
+          <span id="motion-name">—</span>
+        </div>
+        <div id="measures" class="anim-measures"></div>
+      </aside>
+
+      <section class="anim-timeline" aria-label="Timeline">
+        <div id="tracks" class="anim-tracks"></div>
+        <div id="playhead" class="anim-playhead"></div>
+        <div id="release" class="anim-release"></div>
+      </section>
+
+      <footer class="sim-help">
+        <kbd>Space</kbd> play <kbd>, .</kbd> frame <kbd>[ ]</kbd> key
+        <kbd>1–9</kbd> motion <kbd>WASD</kbd> pan <kbd>← →</kbd> orbit
+        <kbd>↑ ↓</kbd> altitude <kbd>P</kbd> projection <kbd>Wheel</kbd> zoom
+      </footer>
+    </div>
+    <script type="module" src="/src/anim.ts"></script>
+  </body>
+</html>

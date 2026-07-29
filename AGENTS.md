@@ -301,6 +301,63 @@ The rule this leaves: **anything that changes how a unit moves must come from an
 injected random stream**, never from an id, a counter, an array index, or the
 wall clock. Any of those turns a scenery change into a combat change.
 
+## The animation tool
+
+`anim.html` (`src/anim.ts`) is the sim with the fight taken out: one Rigwalker,
+one motion, and a phase held still. A fight is the wrong instrument for a pose —
+the frame worth looking at goes past in a tenth of a second, never comes back at
+the same value, and the director decides when. Here the phase is a slider.
+
+It is **not** a keyframe editor for the GLB. The combat poses are not in the
+model; they are written as offsets from the rest pose, driven by beats. What it
+edits is `src/pose-tuning.ts`.
+
+- Motions: the three throws, `aim`, the `ready` stance a hurler holds between
+  throws, and `cut`, `guard` and `struck` on the sword for comparison. `1`-`9`
+  picks one, `Space` plays, `,` and `.` step one frame *of that motion*, `[` and
+  `]` jump between arm keys. The camera keys are the sim's, unchanged.
+- The rig is posed by handing the real `Rigwalker.update` a hand-written cue
+  with `movement: "plant"`, so what is on screen has been through
+  `applyThrowPose`, the balance layer and the model offset. **It is the same
+  instrument as `capture_sim.sh`, not a fourth opinion** — the Blender tools
+  stop after the first of those three layers and never match the game.
+- The mark it faces exists because a pose needs a target: `Rigwalker.update`
+  only reaches its combat poses when the cue names somebody. It stands at the
+  motion's own fighting distance, so a cut has its opponent in frame and a throw
+  does not.
+- The readout is live, after every pose layer: engagement, the step's forward
+  and drop, the rock's height off the ground, and the same feet string `feet=1`
+  prints in the sim, from the same `describeFeet`.
+- The timeline draws every beat as a band where it fades in and out, the arm
+  keys as ticks, and the release phase as a dashed marker. Dragging it scrubs.
+- The balance layer is a damped spring, so a scrub takes a moment to settle.
+  What it settles to is the pose; the swing on the way there is not.
+
+`Save` writes `src/pose-tuning.ts` through a dev-only Vite route
+(`/__anim/pose-tuning`), replacing only what is below the marker at the foot of
+that file, so the prose above it survives. It goes through the server because
+this page is meant to be opened from another machine — `http://10.0.0.102:5173`
+is not a secure context, and `navigator.clipboard` does not exist in one. The
+serialized text is also in the panel to be copied by hand.
+
+Two consequences of saving worth knowing:
+
+- **A save reloads the page**, because it writes a module the page imports. That
+  is the right thing — it proves what is on disk is what is on screen — so the
+  tool keeps the motion, phase and camera in the URL and comes back to the same
+  frame, and carries the confirmation across in `saved=`.
+- **`Revert` means "back to what this page loaded with"**, which after a save is
+  the saved values. To undo a save, use git.
+
+`src/pose-tuning.test.ts` pins that `serializePoseTuning()` emits exactly what is
+checked in, so a save with nothing edited cannot rewrite the file, and that every
+arm key stays strictly inside the arc — a key at phase 0 or 1 would shadow the
+one shared ready pose both ends of every arc are read from.
+
+The numbers are still hand-ported into `tools/render_rigwalker_throw.py`. That
+port does not read this file, so anything saved here has to be copied across or
+the two instruments start describing different animations.
+
 ## Combat effects validation
 
 Sparks, flashes, trails, and rings are not covered by the Blender duel tool,
