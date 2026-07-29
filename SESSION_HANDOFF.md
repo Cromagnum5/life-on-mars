@@ -2,43 +2,121 @@
 
 ## Current checkpoint
 
-`main` at `08a1e19` (`Swing the counterweight arm round the ribs, not through
-them`), clean tree, **merged**. `hurl-steps-into-the-throw` has been
-fast-forwarded into it and is spent. `main` is 18 commits ahead of
-`origin/main`; nothing is pushed, and pushing is the user's call.
+`main` at `96bb3cc` (`Put the projection toggle in the game, where the problem
+is visible`), clean tree, **merged**. `camera-orbits-the-scene` has been
+fast-forwarded into it and is spent. `main` is 25 commits ahead of `origin/main`;
+nothing is pushed, and pushing is the user's call.
 
-This session's two commits, oldest first:
+This session was cameras, not combat. Its five commits, oldest first:
 
-- `dc17c06` Step into the hurl instead of lifting a knee on the spot
-- `08a1e19` Swing the counterweight arm round the ribs, not through them
+- `63096a4` Let the camera orbit the scene
+- `d10c7a3` Give a fighter its own beat from the seed, not the object counter
+- `e0bf84f` Let the sim ask the camera whether it should be orthographic
+- `3f419cf` Zoom a perspective view by walking in, not by narrowing the lens
+- `96bb3cc` Put the projection toggle in the game, where the problem is visible
 
-Both came from playtest reports about the same motion, the Hurler's long throw.
-Earlier session commits, oldest first:
-
-- `e71fb45` Add a Rigwalker that throws rocks
-- `23db02c` Throw the rock overhand
-- `d76b50e` Send the swords out in pairs, the hurler alone
-- `5e2b8c5` Send the swords out three at a time
-- `d661abb` Give the hurlers a building of their own
-- `a53267c` Let a crowd settle at the waypoint
-- `1a209c3` Decide crowding with a band, not a line
-- `1946d35` Hurl with the whole body
-- `705fb80` Judge a pose in the renderer that draws it
-- `9a1fd1d` Stand a hurler like a thrower and let it drive off the back leg
-- `b3e7f5b` Wind the hurl up like a spring
-
-Run these checks after further combat changes:
+Checks:
 
 ```sh
-npm test
+npm test        # 80 pass
 npm run build
 blender --background --python tools/render_rigwalker_throw.py
 blender --background --python tools/render_rigwalker_duel.py
-npm run dev   # then see the capture recipes below
+npm run dev
 ```
 
-The Vite warning about the shared `world` chunk exceeding 500 kB is known and
+The Vite warning about the shared chunk exceeding 500 kB is known and
 non-blocking.
+
+## The camera, and both modes stay
+
+The user is still deciding what the game is and is using the camera to look
+around. **Keep both projections.** Neither is a leftover; the point is being able
+to flip between them.
+
+Controls, identical in the game and the sim:
+
+- `WASD` pans, in the camera's own frame — `W` walks away from the eye whatever
+  direction the view has been swung to.
+- `←` `→` orbit; `↑` `↓` raise and lower, clamped to 6°–84° off the ground.
+  Level reads as nothing and straight down leaves `lookAt` no way to tell which
+  way is north.
+- `P` swaps orthographic and perspective. The game's control hint reads
+  `Flat view` / `Depth view`; the sim's status line reads `ortho 3.2×` or
+  `persp 43° · 21 m`.
+- Wheel zooms. `camera=perspective`, `fov`, `yaw`, `pitch` work in both URLs,
+  because a headless capture cannot press a key.
+
+`src/world.ts` owns all of it: `CameraOrbit` (yaw, pitch, radius), `orbitOffset`,
+`panFocus`, `viewSpan`, `radiusForFov`, and both camera constructors. The game
+and the sim only wire it up.
+
+### Three things that are easy to get wrong here
+
+**1. Orthographic has no distance term at all.** That is what the user reported
+as "units get bigger as they get further away". Nothing scales — measured, a 2 m
+unit is 81.6 px at 47 m and at 91 m. What changes is the *ground*, which
+compresses toward the horizon while the unit does not, so a distant unit reads as
+a giant standing at the back. It is a property of the projection, not a bug, and
+it is why the toggle exists.
+
+**2. Judge camera questions in the game, not the sim.** The sim holds every
+fighter within a few metres of the focus, so nothing in it is ever far away. The
+effect above is invisible there and obvious in the game, where units and
+buildings are spread over 180 m. Capturing the sim at a low pitch is what made an
+almost-dead feature look verified.
+
+**3. Perspective must spend zoom on distance, never on the lens.** Magnifying by
+narrowing the field of view is what a telephoto does, and a telephoto flattens
+depth: at the sim's usual 3.2× that was a 14° lens 66 m out, orthographic in all
+but name. `applyZoom` in both pages leaves the lens fixed and walks the eye in
+(`radiusForFov(fov, VIEW_HEIGHT / zoomLevel)`) so both projections frame the same
+span at the focus and only depth differs. A wider `fov` comes in closer still and
+reads deeper.
+
+## A seed is only worth what nothing else can touch
+
+`combatId` is `group.id`, three.js's **global object counter**, and five sites in
+`rigwalker.ts` used that number as each unit's own beat — separation angle,
+distance-reading cadence, combat step phase. Every mesh, light, rock and camera
+built before the units moved it. Adding one camera to the sim shifted every id by
+one and moved every fighter in every seed by about half a metre at six seconds,
+with an event log and damage tally that matched exactly. A capture sheet compared
+against that looks like a pose regression and is not one.
+
+It now comes off the seeded spawn stream (`variation` in `createRigwalker`), and
+`rigwalker.test.ts` replays a fight across a shifted object counter to keep it
+that way. `combatId` stays `group.id`, which is fine: it is only compared and
+keyed, never counted on.
+
+**The rule: anything that changes how a unit moves must come from an injected
+random stream** — never an id, a counter, an array index, or the wall clock. Any
+of those turns a scenery change into a combat change.
+
+**Consequence for the pose work below: every capture sheet taken before `d10c7a3`
+no longer matches.** Outcomes are the same shape; the fine detail moved once.
+Retake references before reading any of them as a regression.
+
+## Verify the thing the user will actually do
+
+`P` shipped twice as a dead key. Both times the URL parameter was tested, the
+picture looked right, and the key itself was never pressed. The first time it was
+wired only into the sim while the user was pressing it in the game.
+
+`tools/capture_sim.sh` and URL parameters test *rendering*. They do not test
+input, and they do not test the page the user has open. For anything driven by a
+key, drive a real browser:
+
+```sh
+chrome --headless=new --remote-debugging-port=9223 about:blank &
+# then Input.dispatchKeyEvent over CDP, and Page.captureScreenshot after it
+```
+
+Node 20 needs `--experimental-websocket` for a CDP client.
+
+Known and unrelated: **`hud=0` renders a blank frame in headless capture.** It
+reproduces on commits before this session's work. The clean-render path is
+documented in AGENTS.md and currently broken.
 
 ## Which instrument to trust
 
@@ -87,15 +165,16 @@ EXTRA='zoom=6&on=HR1&feet=1' tools/capture_sim.sh /tmp/sheet "1h v 1" 3 1.63 1.9
   Judge the stance from several frames or from the middle of a throw, where
   engagement is high and the balance layer has no authority over the legs.
 
-**`renders/index.html`** is this session's output: fourteen phases of the same
-hurl in three columns — shipped, plus the step, plus the free arm — each with
-the frame's sim URL. Regenerate with `capture_sim.sh` into `renders/<column>/`
-and rebuild with `python3 renders/build_index.py`. `renders/` is gitignored.
+**`renders/index.html`** is an earlier session's output: fourteen phases of the
+same hurl in three columns, each with the frame's sim URL. Regenerate with
+`capture_sim.sh` into `renders/<column>/` and rebuild with
+`python3 renders/build_index.py`. `renders/` is gitignored, and its current
+contents predate `d10c7a3` — see the seed section above.
 
-## The one rule this session found
+## The one rule the hurl work found
 
 **A limb has to be clear of the body before it swings through where the body
-is.** It cost both commits, at two different joints, and it generalises:
+is.** It cost two commits, at two different joints, and it generalises:
 
 - A foot that starts travelling before it lifts skates. Feet hung on the body's
   power beats did exactly that at both ends of the step, so the legs got six
@@ -126,8 +205,6 @@ the near knee and put it back down where it came from.
 1. **Pick up and swing through.** The trailing knee folds before anything
    swings, so the foot leaves the ground where it stood instead of dragging out
    of the stance. Then it carries through under the body with the shin tucked.
-   The tuck very nearly cancels the hip lift above it, which is what leaves the
-   shin hanging under the body rather than sticking out in front.
 2. **The gather.** Knee up, feet passing each other, the body leaning away and
    winding clockwise off the target. All the weight is still on the
    throwing-side foot, which has not moved since phase 0.
@@ -283,6 +360,10 @@ is never quite still. The headless soak is worth rebuilding when hunting one.
   stands, so a hurl's travel is `modelRoot.position` inside the group. Local +Z
   is forward. The health bar rides it; the selection ring does not, because the
   ring marks the ground the unit holds.
+- **Sparks are point sprites and get no perspective divide for free.** The
+  shader now applies one under a uniform; the orthographic path computes the
+  identical pixels-per-unit it always did. Anything else added in screen space
+  will have the same problem.
 - **Clear the imported animation data before rendering in Blender.** The GLB
   carries Idle, Walk and CombatIdle, and Blender re-applies whichever action is
   assigned on every render. Miss this and the measurements are right while every
@@ -290,43 +371,51 @@ is never quite still. The headless soak is worth rebuilding when hunting one.
 
 ## Measured state
 
-- 70 tests pass; production build passes; all three throws validate.
+- 80 tests pass; production build passes.
+- Camera: default orbit reproduces the old fixed `(36, 42, 36)` eye exactly —
+  verified byte-identical captures before and after `63096a4`. Perspective at
+  the default fov frames the same span at the focus, within 3% on a standing
+  body (the residue is real: the camera looks down, so a head is nearer the eye
+  than the feet).
+- Pose figures below predate `d10c7a3` and still hold as *rig* measurements —
+  they come from the Blender tools, which spawn no units and are unaffected by
+  the seed change. Only sim capture sheets moved.
 - Release heights **3.77 / 3.73 / 3.48 m**, all above the head. The hurl's
-  margin over the pitch is **0.04 m**, down from 0.08 — the lead leg reaching
-  into the step costs a little crouch. That ordering is what the three throws
-  are read by and the tool fails on it, so treat 0.04 m as the budget: anything
-  that lowers the hurl or raises the pitch now needs the arm keys revisited.
+  margin over the pitch is **0.04 m** — treat it as the budget: anything that
+  lowers the hurl or raises the pitch needs the arm keys revisited.
 - Support-foot drift 0.081 m; the lead foot moves 0.090 m between planting and
   the recovery; recovery error 0.0 degrees.
 - The free arm clears the torso by at least 0.156 m at every phase of all three
   throws.
 - The sword duel still validates at 0.069 m drift and 0.00 degrees.
-- `1h v 1` seed 3: hurler opens at 11.9 m, throws, is closed on and killed.
 
 ## Suggested next steps
 
 The goal remains that combat looks cooler each iteration, not that it becomes
-playable. Player agency is still out of scope.
+playable. Player agency is still out of scope. The user is currently exploring
+what the game *is* by moving the camera, so camera work is live.
 
-1. **The rebuilt hurl has been played once and reported on twice, both fixed.**
-   The open judgement call is the **recovery step**: the lead foot covers about
-   a metre in the last 0.3 s of the motion, lifting to clear the ground on the
-   way. It measures like a step. Whether it reads like one at RTS scale, or like
-   a snap, needs watching — `renders/index.html` phases 0.72 to 1.00.
-2. **Foot IK is the real unlock.** Everything cramped about the step traces to
-   its absence — the travel bound, the release-height budget above, the small
+1. **The projection is an open question, deliberately.** Both modes stay until
+   the user decides. What has not been tried: perspective at gameplay distance
+   rather than at ground level, and whether unit readability survives it at the
+   zooms an RTS actually plays at.
+2. **`hud=0` renders blank in headless capture.** Pre-existing, blocks the clean
+   render path, small.
+3. **Retake the capture sheets** used to judge poses; the ones in `renders/`
+   predate the seed fix.
+4. **Foot IK is still the real unlock.** Everything cramped about the hurl step
+   traces to its absence — the travel bound, the release-height budget, the small
    slide as the stance recovers. A two-bone solver on the planted foot would let
    the step be as big as it looks like it should be. It is a feature, and worth
    scoping properly.
-3. **The throws have not been heard.** The release reuses the sword's `swing`
-   whoosh, graded by throw. A heave and a rock landing may want their own
-   voices — but the standing lesson is that a fight wants its sound spent on
-   contact.
-4. **The torso check is cheap and only the hurler has it.** The same measurement
+5. **The throws have not been heard.** The release reuses the sword's `swing`
+   whoosh, graded by throw. The standing lesson is that a fight wants its sound
+   spent on contact.
+6. **The torso check is cheap and only the hurler has it.** The same measurement
    would run over the swordsman's guards and cuts, which nobody has checked.
-5. Hurlers can be held back: the Stoneworks has its own rally point, so a line
+7. Hurlers can be held back: the Stoneworks has its own rally point, so a line
    behind the swords is a right-click rather than a code change.
-6. A hurler that runs out of room backpedals into whatever is behind it.
+8. A hurler that runs out of room backpedals into whatever is behind it.
    Retreating toward its own side would read better than a straight line.
-7. Earlier items still open: scorch decals under wrecks, encirclement positions
+9. Earlier items still open: scorch decals under wrecks, encirclement positions
    for group fights, and trails reading white-hot over bright ground.
