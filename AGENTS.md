@@ -314,8 +314,16 @@ edits is `src/pose-tuning.ts`.
 
 - Motions: the three throws, `aim`, the `ready` stance a hurler holds between
   throws, and `cut`, `guard` and `struck` on the sword for comparison. `1`-`9`
-  picks one, `Space` plays, `,` and `.` step one frame *of that motion*, `[` and
-  `]` jump between arm keys. The camera keys are the sim's, unchanged.
+  picks one, `Space` plays, `,` and `.` step one frame *of that motion* and ten
+  under shift, `Home` and `End` go to the ends, `[` and `]` jump between arm
+  keys. The camera keys are the sim's, unchanged.
+- **A slider does not own the keyboard.** Only the number fields and the line
+  picker do, because they are typed into. Bailing out of the keydown handler on
+  any focused input meant that touching one slider killed every shortcut on the
+  page and turned the arrow keys into an editor for the value last dragged —
+  which is the opposite of what an arrow key does everywhere else here. Drag a
+  value, then step through the frames it changed, is the loop the tool is for.
+  Fine adjustment belongs to the number field, where an arrow nudges by the step.
 - The rig is posed by handing the real `Rigwalker.update` a hand-written cue
   with `movement: "plant"`, so what is on screen has been through
   `applyThrowPose`, the balance layer and the model offset. **It is the same
