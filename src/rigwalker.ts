@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { BalanceController, type BalancePose } from "./balance";
+import { POSE_TUNING, type Beat, type ThrowArmKey } from "./pose-tuning";
 import type { RigwalkerAsset } from "./rigwalker-assets";
 import {
   BASE_FIGHT_DISTANCE,
@@ -62,6 +63,46 @@ export type NavigationObstacle = {
   center: THREE.Vector2;
   radius: number;
 };
+
+const footProbe = new THREE.Vector3();
+const footFrame = new THREE.Quaternion();
+const footTilt = new THREE.Quaternion();
+
+/**
+ * Where a fighter's feet actually are, in its own frame: +z is the way it is
+ * facing, y is off the ground. Read off the posed skeleton after every layer
+ * has been applied, which is the point — `applyThrowPose` is only the first of
+ * three, and the Blender tools stop after it. A stance argued from those tools
+ * is a stance nobody is looking at.
+ *
+ * Lives here rather than in either page so the sim's capture sheets and the
+ * animation tool print the same numbers in the same format. A planted foot
+ * reads about `h0.07`; compare against another fighter in the same frame rather
+ * than against zero.
+ */
+export function describeFeet(unit: Rigwalker): string {
+  const reach: number[] = [];
+  const parts: string[] = [];
+  for (const name of ["foot.L", "foot.R"]) {
+    // The glTF conversion drops the dots from some exporters, so try both -
+    // the same fallback `findCombatBones` uses.
+    const bone = unit.group.getObjectByName(name) ??
+      unit.group.getObjectByName(name.replaceAll(".", ""));
+    if (!bone) return " · feet ?";
+    footFrame.copy(unit.group.quaternion).invert();
+    bone.getWorldPosition(footProbe).sub(unit.group.position).applyQuaternion(footFrame);
+    const ankle = footProbe.clone();
+    // Along the foot bone is toward the toe. A toe below the ankle is a heel
+    // in the air, which is what "up on its toes" means as a number.
+    bone.getWorldQuaternion(footTilt);
+    footProbe.set(0, 1, 0).applyQuaternion(footTilt).applyQuaternion(footFrame);
+    reach.push(ankle.z);
+    parts.push(`${name.slice(-1)} ${ankle.z >= 0 ? "+" : ""}${ankle.z.toFixed(2)}` +
+      ` h${ankle.y.toFixed(2)} toe${footProbe.y >= 0 ? "+" : ""}${footProbe.y.toFixed(2)}`);
+  }
+  const split = reach[0] - reach[1];
+  return ` · feet ${parts.join("  ")}  split ${split >= 0 ? "+" : ""}${split.toFixed(2)}`;
+}
 
 const MOVE_SPEED = 3.6;
 const SEPARATION_SPEED = 1.1;
@@ -390,7 +431,7 @@ function applyCombatPose(bones: CombatBones, input: CombatPoseInput): void {
  * these are Euler angles: `setBoneOffset` composes them in Three.js's default
  * XYZ order, so the later axes turn in a frame the earlier ones have already
  * moved. It matters most for the shoulder, where the arm is only ever above
- * the shoulder through a narrow band of angles — see `THROW_ARM_KEYS`.
+ * the shoulder through a narrow band of angles — see `POSE_TUNING.armKeys`.
  */
 
 type ThrowPoseInput = {
@@ -406,9 +447,6 @@ type ThrowPoseInput = {
   combatStep: number;
 };
 
-/** A beat of the motion: fades in over the first pair, out over the second. */
-type Beat = readonly [number, number, number, number];
-
 function beat(phase: number, [inStart, inEnd, outStart, outEnd]: Beat): number {
   if (phase < 0) return 0;
   return smoothRange(phase, inStart, inEnd) * (1 - smoothRange(phase, outStart, outEnd));
@@ -417,128 +455,38 @@ function beat(phase: number, [inStart, inEnd, outStart, outEnd]: Beat): number {
 /**
  * The drive behind every throw: coil away, open, whip through, follow through.
  * The three throws differ in when these land and how far they go, not in which
- * bones they use.
+ * bones they use. When each one lands is `POSE_TUNING.throwBeats`.
  */
 type ThrowDrive = { draw: number; stride: number; whip: number; follow: number };
 
-const THROW_BEATS: Record<ThrowType, Record<keyof ThrowDrive, Beat>> = {
-  // A long wind: a full coil, a stride that opens the hips while the shoulders
-  // stay shut, then everything unwinds at once.
-  hurl: {
-    draw: [0, 0.26, 0.4, 0.56],
-    stride: [0.26, 0.44, 0.58, 0.76],
-    // The whip peaks on the release phase, so the body is squarest to the
-    // target at the moment the rock leaves rather than after it.
-    whip: [0.4, 0.58, 0.58, 0.82],
-    follow: [0.58, 0.74, 0.86, 1],
-  },
-  // No stride and half the coil: a shoulder pitch thrown off a planted stance.
-  pitch: {
-    draw: [0, 0.2, 0.3, 0.44],
-    stride: [0.18, 0.32, 0.44, 0.62],
-    whip: [0.28, 0.44, 0.44, 0.68],
-    follow: [0.44, 0.6, 0.84, 1],
-  },
-  // Barely a wind at all: the arm is up and gone before the body has moved.
-  toss: {
-    draw: [0, 0.12, 0.18, 0.3],
-    stride: [0.08, 0.18, 0.3, 0.46],
-    whip: [0.18, 0.32, 0.32, 0.52],
-    // Kept moving through the whole recovery: a flick that freezes after the
-    // release reads as a dropped frame at RTS scale.
-    follow: [0.32, 0.46, 0.74, 0.95],
-  },
-};
+const throwArmScratch: ThrowArmKey = { ...POSE_TUNING.ready };
+/** The ready pose again at phase 1, refreshed per call because it is editable. */
+const endArmScratch: ThrowArmKey = { ...POSE_TUNING.ready, at: 1 };
 
 /**
- * One pose of the throwing arm, as offsets from the imported rest pose.
- *
- * The rest of the body is driven by beats, summing a coefficient per bone. The
- * throwing arm cannot be: the shoulder only holds the arm above shoulder height
- * through a narrow band of Euler angles, and summing a cocked pose against a
- * released one walks straight out of that band on the way between them. The arm
- * comes out hanging at the hip halfway through, which is exactly the dropped
- * elbow that made these throws read as sidearm. Keys placed along the arc keep
- * the arm inside the band the whole way.
- *
- * Every key was solved against the imported skeleton for a written-down hand
- * and elbow position, by `tools/render_rigwalker_throw.py`, which also checks
- * that the shipped numbers still trace the arc.
+ * The keys of one throw's arm arc, counting the ready pose at either end: index
+ * 0 is the ready pose at phase 0, the last is the same pose at phase 1, and
+ * `POSE_TUNING.armKeys` holds what happens in between. The ends are read rather
+ * than stored so all three throws start and finish in the one shared pose — a
+ * hurler between throws is standing in it, and two copies of it would jump the
+ * arm whenever the gap called for a different throw.
  */
-type ThrowArmKey = {
-  /** Phase this pose lands on. Keys are in order and the ends are the ready pose. */
-  at: number;
-  upperX: number;
-  upperY: number;
-  upperZ: number;
-  lowerX: number;
-  handX: number;
-};
-
-/** Bladed and settled: rock hand low at the hip, elbow loose. */
-const READY_THROW_ARM: ThrowArmKey = {
-  at: 0, upperX: -0.35, upperY: 0, upperZ: -0.3, lowerX: -0.45, handX: 0,
-};
-
-/**
- * The arc, one entry per pose the hand passes through: the rock gathers back
- * and low, comes up cocked beside the ear with the elbow already above the
- * shoulder, tops out above the head, leaves the hand out in front and high,
- * then rides down and across the body. The three throws trace the same arc,
- * differing in how early they get there and how far they carry it.
- */
-const THROW_ARM_KEYS: Record<ThrowType, readonly ThrowArmKey[]> = {
-  // The elbow is the story of this one. It folds to a right angle by the top of
-  // the wind, holds while the shoulder comes through, and then extends — the
-  // lever opening late, after the midpoint, is where the speed comes from. At
-  // release it is straight and the wrist is in line with it, so the whole arm
-  // is one bar through the rock. An elbow still bent at release is a thrower
-  // pushing rather than throwing, however good the rest of the pose looks.
-  hurl: [
-    READY_THROW_ARM,
-    { at: 0.14, upperX: -0.89, upperY: 0.17, upperZ: -0.79, lowerX: 1.35, handX: 0.45 },
-    { at: 0.3, upperX: -1.25, upperY: 1.62, upperZ: -1.23, lowerX: 1.57, handX: 0.55 },
-    { at: 0.48, upperX: -1.6, upperY: 1.7, upperZ: -1.52, lowerX: 1.05, handX: 0.4 },
-    // The shoulder carries higher here than it used to, because a straight arm
-    // releases lower than a bent one from the same shoulder — and the hurl has
-    // to release above the pitch or the throws stop reading in order.
-    { at: 0.58, upperX: -1.6, upperY: 1.56, upperZ: -1.5, lowerX: 0, handX: 0 },
-    { at: 0.7, upperX: -0.98, upperY: 0.94, upperZ: -0.77, lowerX: 0.45, handX: 0.1 },
-    { at: 0.85, upperX: -0.32, upperY: 0.5, upperZ: -0.2, lowerX: 1, handX: 0.25 },
-    { ...READY_THROW_ARM, at: 1 },
-  ],
-  pitch: [
-    READY_THROW_ARM,
-    { at: 0.1, upperX: -0.92, upperY: -0.14, upperZ: -1.16, lowerX: 1.3, handX: 0.45 },
-    { at: 0.24, upperX: -1.5, upperY: 1.62, upperZ: -0.84, lowerX: 1.65, handX: 0.5 },
-    { at: 0.38, upperX: -1.64, upperY: 1.68, upperZ: -1.67, lowerX: 1.1, handX: 0.3 },
-    { at: 0.44, upperX: -1.33, upperY: 1.56, upperZ: -1.31, lowerX: 0.3, handX: -0.3 },
-    { at: 0.58, upperX: -0.78, upperY: 1.1, upperZ: -0.69, lowerX: 0.6, handX: 0.05 },
-    { at: 0.8, upperX: -0.32, upperY: 0.45, upperZ: -0.24, lowerX: 1, handX: 0.2 },
-    { ...READY_THROW_ARM, at: 1 },
-  ],
-  toss: [
-    READY_THROW_ARM,
-    { at: 0.16, upperX: -1.1, upperY: 0.6, upperZ: -1.56, lowerX: 1.75, handX: 0.55 },
-    { at: 0.26, upperX: -1.69, upperY: 1.49, upperZ: -1.64, lowerX: 1.35, handX: 0.35 },
-    { at: 0.32, upperX: -1.15, upperY: 1.44, upperZ: -1.26, lowerX: 0.65, handX: -0.2 },
-    { at: 0.46, upperX: -0.63, upperY: 1.05, upperZ: -0.79, lowerX: 0.75, handX: 0.05 },
-    { at: 0.7, upperX: -0.34, upperY: 0.4, upperZ: -0.32, lowerX: 0.95, handX: 0.2 },
-    { ...READY_THROW_ARM, at: 1 },
-  ],
-};
-
-const throwArmScratch: ThrowArmKey = { ...READY_THROW_ARM };
+function armKeyAt(keys: readonly ThrowArmKey[], index: number): ThrowArmKey {
+  if (index === 0) return POSE_TUNING.ready;
+  if (index > keys.length) return endArmScratch;
+  return keys[index - 1];
+}
 
 /** The arm pose partway between the two keys the phase falls between. */
 function throwArmPose(throwType: ThrowType, phase: number): ThrowArmKey {
   const out = throwArmScratch;
-  if (phase < 0) return Object.assign(out, READY_THROW_ARM);
-  const keys = THROW_ARM_KEYS[throwType];
+  if (phase < 0) return Object.assign(out, POSE_TUNING.ready);
+  const keys = POSE_TUNING.armKeys[throwType];
+  Object.assign(endArmScratch, POSE_TUNING.ready, { at: 1 });
   let index = 0;
-  while (index < keys.length - 2 && phase > keys[index + 1].at) index += 1;
-  const from = keys[index];
-  const to = keys[index + 1];
+  while (index < keys.length && phase > armKeyAt(keys, index + 1).at) index += 1;
+  const from = armKeyAt(keys, index);
+  const to = armKeyAt(keys, index + 1);
   const blend = smoothRange(phase, from.at, to.at);
   out.at = phase;
   out.upperX = from.upperX + (to.upperX - from.upperX) * blend;
@@ -550,7 +498,7 @@ function throwArmPose(throwType: ThrowType, phase: number): ThrowArmKey {
 }
 
 function throwDrive(throwType: ThrowType, phase: number): ThrowDrive {
-  const beats = THROW_BEATS[throwType];
+  const beats = POSE_TUNING.throwBeats[throwType];
   return {
     draw: beat(phase, beats.draw),
     stride: beat(phase, beats.stride),
@@ -595,7 +543,7 @@ const STANDING_KNEE = 0.24;
  * Multiplying it out by the stride is what makes the gather a thing that ends.
  *
  * The legs used to ride this too and no longer do — they have their own beats,
- * for the reason given on `HURL_TUCK`.
+ * for the reason given on `POSE_TUNING.hurlLegs`.
  */
 function hurlGather(draw: number, stride: number): number {
   return draw * (1 - stride);
@@ -654,37 +602,6 @@ const HURL_SUPPORT_HIP = -0.06 - HURLER_STANCE;
 const HURL_SUPPORT_KNEE = STANDING_KNEE + HURLER_LOAD;
 
 /**
- * The legs have their own beats, and this is why: a foot must be off the ground
- * before it travels, or it skates. The body's four beats are about power, and
- * every time a foot was hung on one of them it started moving a fraction before
- * or after it had anywhere to go.
- *
- * - `TUCK` folds the trailing knee before anything swings, so the foot leaves
- *   the ground where it stood rather than dragging out of the stance.
- * - `SWING` then carries that leg through, under the body and up.
- * - `STEP` is the plant: out fast, and home over the *whole* recovery. Reusing
- *   the stride beat here snapped the lead foot back under the hips in a tenth
- *   of a second, which is a slide however good the rest of the pose is.
- * - `HEEL` lifts the rear heel just before `DRIVE` extends that leg behind, for
- *   the same reason as `TUCK`: the drag only reads as a drive if the foot is
- *   already up when it starts.
- * - `HOME` clears the lead foot on the way back, so the recovery is a step and
- *   not the fighter's foot being dragged home.
- */
-const HURL_TUCK: Beat = [0, 0.12, 0.3, 0.48];
-const HURL_SWING: Beat = [0.02, 0.3, 0.3, 0.48];
-const HURL_STEP: Beat = [0.26, 0.46, 0.74, 1];
-const HURL_HEEL: Beat = [0.34, 0.5, 0.6, 0.86];
-const HURL_DRIVE: Beat = [0.4, 0.58, 0.6, 0.86];
-const HURL_HOME: Beat = [0.7, 0.8, 0.9, 1];
-/**
- * The free arm getting out of the chest's way, which is the same rule one limb
- * further up: a part has to be clear of the body before it swings through where
- * the body is. Riding the whip is too late — the whip is the swing.
- */
-const HURL_OPEN: Beat = [0.34, 0.5, 0.62, 0.86];
-
-/**
  * The legs of a hurl, shared between the pose and the hip drop that pays for
  * it. Written once because the drop is derived from these exact angles: two
  * copies would have the hips paying for a reach the legs are not making.
@@ -704,12 +621,15 @@ const HURL_OPEN: Beat = [0.34, 0.5, 0.62, 0.86];
  */
 function hurlLegs(phase: number, drive: ThrowDrive): HurlLegs {
   const out = hurlLegsScratch;
-  const tuck = beat(phase, HURL_TUCK);
-  const swing = beat(phase, HURL_SWING);
-  const step = beat(phase, HURL_STEP);
-  const heel = beat(phase, HURL_HEEL);
-  const push = beat(phase, HURL_DRIVE);
-  const home = beat(phase, HURL_HOME);
+  // The legs have beats of their own, and `POSE_TUNING.hurlLegs` says why: a
+  // foot must be off the ground before it travels, or it skates.
+  const legBeats = POSE_TUNING.hurlLegs;
+  const tuck = beat(phase, legBeats.tuck);
+  const swing = beat(phase, legBeats.swing);
+  const step = beat(phase, legBeats.step);
+  const heel = beat(phase, legBeats.heel);
+  const push = beat(phase, legBeats.drive);
+  const home = beat(phase, legBeats.home);
   const { draw, stride, whip, follow } = drive;
   const hips = hurlHips(hurlGather(draw, stride), stride, whip, follow);
   // The trailing leg. Through behind → knee up under the body → planted out in
@@ -783,7 +703,7 @@ const STANDING_LIFT = ankleLift(0.06, STANDING_KNEE);
  *
  * Everything is a pure function of the phase so `tools/render_rigwalker_throw.py`
  * can port it, and rides the same beats as the pose so the two cannot drift
- * apart. `HURL_STEP` fades out by the end of the motion, so the body walks
+ * apart. `hurlLegs.step` fades out by the end of the motion, so the body walks
  * itself back to the spot it holds while the lead foot steps home over it.
  *
  * Only the hurl travels: a pitch is thrown off a planted stance and a toss is
@@ -797,7 +717,7 @@ export function hurlStep(throwType: ThrowType, phase: number): HurlStep {
   // The body rides the same beat as the plant, because it is the plant: the
   // fighter travels over the foot it just put down. The whip is the last of it,
   // the hips going through as the rock leaves.
-  out.forward = hurling ? 0.2 * beat(phase, HURL_STEP) + 0.1 * whip : 0;
+  out.forward = hurling ? 0.2 * beat(phase, POSE_TUNING.hurlLegs.step) + 0.1 * whip : 0;
   out.engagement = phase < 0 ? 0 : Math.max(draw, stride, whip, follow);
   const ready = 1 - out.engagement;
   const pitch = hurling ? hurlRootPitch(hurlGather(draw, stride), stride, whip, follow) : 0;
@@ -868,7 +788,7 @@ function addHitReaction(
  * - `toss` is a dart. The arm is up and gone before the body has moved, done
  *   before the wind-up of a hurl would have finished.
  *
- * The body runs on the four beats. The arm runs on `THROW_ARM_KEYS`, for the
+ * The body runs on the four beats. The arm runs on `POSE_TUNING.armKeys`, for the
  * reason given there. Everything is written as an offset from the imported rest
  * pose, and every foot angle cancels the joints above it so the soles stay flat
  * on the ground.
@@ -931,12 +851,12 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
     // its own rather than riding the whip. Held across the chest while the
     // shoulder drove it down and back, the elbow went a quarter of a metre
     // inside the torso — measured, and visible in the game as the arm passing
-    // through the body instead of round it. `HURL_OPEN` gets the arm clear
+    // through the body instead of round it. `hurlLegs.open` gets the arm clear
     // before the shoulder swings it through, exactly the rule the feet follow.
     const sight = Math.max(draw, stride);
     setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
       -0.4 - 0.72 * sight + 1.35 * whip + 0.34 * follow - 0.34 * aim,
-      0, -0.14 - 0.5 * sight + 0.7 * beat(attackPhase, HURL_OPEN) + 0.2 * follow);
+      0, -0.14 - 0.5 * sight + 0.7 * beat(attackPhase, POSE_TUNING.hurlLegs.open) + 0.2 * follow);
     setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
       -0.08 + 0.72 * sight - 0.5 * whip + 0.2 * follow + 0.35 * aim,
       0, -0.05);

@@ -5,6 +5,11 @@ applied to the real imported GLB skeleton, so this checks the shipping motion
 rather than a stand-in. It measures first and renders second: a throw whose
 rock never gets in front of the body is broken however good the picture looks.
 
+The timing and the arm keys now live in `src/pose-tuning.ts`, which `anim.html`
+edits and saves. This file is a **hand port** of them and reads nothing: change
+them there and they have to be copied here, or the two instruments are
+describing different animations.
+
 All three throws are overhand. What the measurements are for is that "overhand"
 is a claim about the whole arc, not the release pose: the arm has to be above
 the shoulder the entire way through, because the rig will happily blend between
@@ -43,7 +48,7 @@ ROCK_IN_HAND = Vector((0, 0.2, 0))
 SHOULDER_HEIGHT = 2.68
 HEAD_HEIGHT = 3.00
 
-# Mirrors THROW_BEATS in src/rigwalker.ts.
+# Mirrors POSE_TUNING.throwBeats in src/pose-tuning.ts, which anim.html edits.
 BEATS = {
     'hurl': {
         'draw': (0, .26, .40, .56),
@@ -67,7 +72,7 @@ BEATS = {
 # Mirrors THROW_PROFILES in src/combat.ts.
 RELEASE = {'hurl': .58, 'pitch': .44, 'toss': .32}
 
-# Mirrors READY_THROW_ARM and THROW_ARM_KEYS in src/rigwalker.ts.
+# Mirrors POSE_TUNING.ready and POSE_TUNING.armKeys in src/pose-tuning.ts.
 # at, upper X, upper Y, upper Z, lower X, hand X
 READY_ARM = (0, -.35, 0, -.30, -.45, 0)
 ARM_KEYS = {
@@ -135,7 +140,7 @@ TRAIL_KNEE = STANDING_KNEE - HURLER_LOAD
 SUPPORT_HIP = -.06 - HURLER_STANCE
 SUPPORT_KNEE = STANDING_KNEE + HURLER_LOAD
 
-# The legs' own beats. See the comment on HURL_TUCK in src/rigwalker.ts: a foot
+# The legs' own beats. See POSE_TUNING.hurlLegs in src/pose-tuning.ts: a foot
 # has to be off the ground before it travels, and none of the body's four beats
 # start where a foot needs to.
 TUCK = (0, .12, .3, .48)
