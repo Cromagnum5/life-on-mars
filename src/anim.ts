@@ -13,6 +13,7 @@ import {
 import {
   FREE_ARM_DRIVES,
   POSE_TUNING,
+  restorePoseTuning,
   serializePoseTuning,
   type Beat,
   type PoseTuning,
@@ -1027,11 +1028,7 @@ saveButton.addEventListener("click", async () => {
 });
 
 revertButton.addEventListener("click", () => {
-  const restored = structuredClone(loadedTuning);
-  POSE_TUNING.ready = restored.ready;
-  POSE_TUNING.throwBeats = restored.throwBeats;
-  POSE_TUNING.armKeys = restored.armKeys;
-  POSE_TUNING.hurlLegs = restored.hurlLegs;
+  restorePoseTuning(loadedTuning);
   buildEditor();
   buildTimeline();
   exportBox.value = serializePoseTuning();

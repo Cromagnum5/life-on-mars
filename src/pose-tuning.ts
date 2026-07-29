@@ -235,6 +235,24 @@ function serializeFreeArm(pose: FreeArmPose): string {
     `      handX: ${serializeNumber(pose.handX)},\n`;
 }
 
+/**
+ * Puts every number back to a tuning taken earlier — what the tool's **Revert**
+ * does with the values the page loaded with.
+ *
+ * It copies whatever keys the object has rather than naming them, because the
+ * version that named them shipped broken the moment the free arm was added:
+ * `freeArm` and `readyArm` were not on the list, so reverting quietly left them
+ * edited. A restore that has to be updated every time the shape grows is a
+ * restore that will be wrong again.
+ *
+ * The clone matters as much as the assign. Handing over the same objects would
+ * leave the next edit writing straight into what Revert is holding, and there
+ * would be nothing to go back to.
+ */
+export function restorePoseTuning(source: PoseTuning, target: PoseTuning = POSE_TUNING): void {
+  Object.assign(target, structuredClone(source));
+}
+
 /** Marks where a **Save** from the animation tool starts overwriting this file. */
 export const TUNING_MARKER = "/* ANIM-TOOL — everything below is rewritten by anim.html. */";
 
