@@ -64,6 +64,11 @@ import "./anim.css";
  * this the same instrument as `tools/capture_sim.sh` rather than a fourth
  * opinion. The Blender tools stop after the first layer, and never agree.
  *
+ * Scrubbing is what the page is for, so it has as many ways in as it needs:
+ * drag the bar at the top of the timeline, step a frame with `,` and `.`, ten
+ * with those held under shift, jump to an arm key with `[` and `]`, or go to
+ * either end with `Home` and `End`. The camera keys are the sim's, unchanged.
+ *
  * URL parameters, all optional:
  *   motion=hurl   which motion is loaded; see `MOTIONS`
  *   phase=0.58    where to hold it, 0..1
@@ -840,7 +845,20 @@ function scrubFrom(event: PointerEvent): void {
   const bounds = band.getBoundingClientRect();
   setPhase((event.clientX - bounds.left) / bounds.width);
 }
+/**
+ * Hands the keyboard back to the page. A slider keeps focus after it is dragged,
+ * and a focused slider answers the arrow keys itself — so going back to the
+ * stage or the timeline has to be what puts the camera and the transport back in
+ * charge, or the next arrow press quietly edits the number you just set.
+ */
+function releaseFocus(): void {
+  const focused = document.activeElement;
+  if (focused instanceof HTMLElement && focused !== document.body) focused.blur();
+}
+
+canvas.addEventListener("pointerdown", releaseFocus);
 timeline.addEventListener("pointerdown", (event) => {
+  releaseFocus();
   if (event.target instanceof HTMLButtonElement) return;
   setPlaying(false);
   timeline.setPointerCapture(event.pointerId);
@@ -895,19 +913,42 @@ revertButton.addEventListener("click", () => {
   saveStatus.className = "";
 });
 
+/**
+ * Whether a key belongs to whatever has focus rather than to the page.
+ *
+ * Only the controls you *type* into get that: a number field and the line
+ * picker. A slider must not, and this used to say "any input", which meant that
+ * touching one slider killed every shortcut on the page until something else was
+ * clicked — the transport keys did nothing, and the arrow keys moved the slider
+ * you last touched instead of the camera. Dragging a value and then stepping
+ * through the frames it changed is the whole loop this tool is for; it cannot go
+ * through a click somewhere else first.
+ */
+function isTyping(target: EventTarget | null): boolean {
+  if (target instanceof HTMLSelectElement) return true;
+  return target instanceof HTMLInputElement && target.type === "number";
+}
+
 window.addEventListener("keydown", (event) => {
-  if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) {
-    return;
-  }
+  if (isTyping(event.target)) return;
   const current = motion();
+  // One frame of this motion at the rate the game plays it, or ten with shift —
+  // a frame of a toss is a third of a percent of it, and stepping across the
+  // whole motion one of those at a time is not scrubbing.
+  const frames = event.shiftKey ? 10 : 1;
   if (event.code === "Space") {
     event.preventDefault();
     setPlaying(!playing);
   } else if (event.code === "Comma" || event.code === "Period") {
-    // A frame of this motion, at the rate the game plays it.
+    event.preventDefault();
     setPlaying(false);
-    setPhase(phase + (event.code === "Period" ? 1 : -1) * (FRAME_STEP / current.seconds));
+    setPhase(phase + (event.code === "Period" ? frames : -frames) * (FRAME_STEP / current.seconds));
+  } else if (event.code === "Home" || event.code === "End") {
+    event.preventDefault();
+    setPlaying(false);
+    setPhase(event.code === "Home" ? 0 : 1);
   } else if (event.code === "BracketLeft" || event.code === "BracketRight") {
+    event.preventDefault();
     if (!current.tunable) return;
     setPlaying(false);
     const stops = [0, ...POSE_TUNING.armKeys[current.tunable].map((key) => key.at), 1];

@@ -49,7 +49,10 @@ select:disabled {
 
   position: fixed;
   bottom: 30px;
-  left: 372px;
+  /* Well clear of the editor column: a click that misses the strip to the left
+     used to land on whichever slider was under it, which moves the animation
+     rather than the playhead. */
+  left: 396px;
   right: 292px;
   padding: 8px 10px;
   border: 1px solid var(--edge);
@@ -85,13 +88,31 @@ select:disabled {
   background-color: rgb(255 255 255 / 6%);
 }
 
-/* Tenths, so a beat can be read off the strip without measuring it. */
+/*
+ * The scrub bar. Three times the height of a beat band, because it is the thing
+ * being aimed at: everything else on this strip is there to be read, and a thin
+ * target for the one control you drag is a control that gets missed.
+ */
+.anim-ruler {
+  margin-bottom: 5px;
+}
+
 .anim-ruler i {
+  height: 32px;
+  border: 1px solid var(--edge);
   background-image: repeating-linear-gradient(
     90deg,
     rgb(255 224 192 / 28%) 0 1px,
     transparent 1px 10%
   );
+}
+
+.anim-ruler i:hover {
+  background-color: rgb(255 255 255 / 10%);
+}
+
+.anim-keys {
+  margin-top: 4px;
 }
 
 .anim-tick {
@@ -115,17 +136,19 @@ select:disabled {
   position: absolute;
   top: 8px;
   bottom: 8px;
-  width: 1px;
   pointer-events: none;
 }
 
 .anim-playhead {
+  width: 2px;
+  margin-left: -1px;
   background: #ffb35d;
   box-shadow: 0 0 6px rgb(255 179 93 / 70%);
 }
 
 /* Where the rock leaves the hand: the frame a throw is actually judged on. */
 .anim-release {
+  width: 1px;
   background: repeating-linear-gradient(
     180deg,
     #9ad0ff 0 3px,
