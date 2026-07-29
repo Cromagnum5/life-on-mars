@@ -66,6 +66,18 @@ body,
   color: var(--dim);
 }
 
+/* The workbench pages link to each other, so whichever one is open is a way in
+   to the others. */
+.sim-bar a {
+  color: var(--dim);
+  text-decoration: none;
+  border-bottom: 1px solid var(--edge);
+}
+
+.sim-bar a:hover {
+  color: var(--ink);
+}
+
 button,
 input[type="number"] {
   padding: 3px 9px;

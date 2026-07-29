@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { BattleRuntime } from "./battle";
 import { STRATEGY_LABELS, type CombatCue } from "./combat";
 import { createSeededRandom } from "./random";
-import { createRigwalker, type Rigwalker } from "./rigwalker";
+import { createRigwalker, describeFeet, type Rigwalker } from "./rigwalker";
 import { loadRigwalkerAsset } from "./rigwalker-assets";
 import {
   addMarsLighting,
@@ -210,9 +210,6 @@ const showContacts = params.get("contacts") === "1";
 /** Label of the one fighter the camera rides, e.g. `on=HR1`. */
 const pinnedLabel = params.get("on");
 const showFeet = params.get("feet") === "1";
-const footProbe = new THREE.Vector3();
-const footFrame = new THREE.Quaternion();
-const footTilt = new THREE.Quaternion();
 let paused = false;
 let stepRequested = false;
 let simTime = 0;
@@ -384,37 +381,6 @@ function updateCamera(delta: number): void {
   }
   camera.position.copy(focus).add(orbitOffset(orbit, cameraOffset));
   camera.lookAt(focus);
-}
-
-/**
- * Where a fighter's feet actually are, in its own frame: +z is the way it is
- * facing, y is off the ground. Read off the posed skeleton after every layer
- * has been applied, which is the point — `applyThrowPose` is only the first of
- * three, and the Blender tools stop after it. A stance argued from those tools
- * is a stance nobody is looking at.
- */
-function describeFeet(unit: Rigwalker): string {
-  const reach: number[] = [];
-  const parts: string[] = [];
-  for (const name of ["foot.L", "foot.R"]) {
-    // The glTF conversion drops the dots from some exporters, so try both -
-    // the same fallback `findCombatBones` uses.
-    const bone = unit.group.getObjectByName(name) ??
-      unit.group.getObjectByName(name.replaceAll(".", ""));
-    if (!bone) return " · feet ?";
-    footFrame.copy(unit.group.quaternion).invert();
-    bone.getWorldPosition(footProbe).sub(unit.group.position).applyQuaternion(footFrame);
-    const ankle = footProbe.clone();
-    // Along the foot bone is toward the toe. A toe below the ankle is a heel
-    // in the air, which is what "up on its toes" means as a number.
-    bone.getWorldQuaternion(footTilt);
-    footProbe.set(0, 1, 0).applyQuaternion(footTilt).applyQuaternion(footFrame);
-    reach.push(ankle.z);
-    parts.push(`${name.slice(-1)} ${ankle.z >= 0 ? "+" : ""}${ankle.z.toFixed(2)}` +
-      ` h${ankle.y.toFixed(2)} toe${footProbe.y >= 0 ? "+" : ""}${footProbe.y.toFixed(2)}`);
-  }
-  const split = reach[0] - reach[1];
-  return ` · feet ${parts.join("  ")}  split ${split >= 0 ? "+" : ""}${split.toFixed(2)}`;
 }
 
 function describeCue(cue: CombatCue | undefined): { action: string; detail: string } {
