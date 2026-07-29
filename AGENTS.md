@@ -30,8 +30,9 @@ interaction over broad systems or premature engine architecture.
 - No physics engine or ECS dependency at this stage.
 - Development server listens on `0.0.0.0:5173` for access from another machine.
 - Run with `npm run dev`; validate with `npm run build`.
-- Two entry points: `index.html` for the game and `sim.html` for the combat sim.
-  Both are listed in `vite.config.ts`; a new page needs an entry there.
+- Three entry points: `index.html` for the game, `sim.html` for the combat sim,
+  and `anim.html` for the animation tool. All are listed in `vite.config.ts`; a
+  new page needs an entry there.
 - `src/world.ts` owns terrain, lighting, and the camera; `src/battle.ts` owns one
   frame of fighting end to end. The game and the sim share both, so a change
   seen in the sim is a change the player gets.
