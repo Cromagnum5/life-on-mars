@@ -318,6 +318,16 @@ edits is `src/pose-tuning.ts`.
   picks one, `Space` plays, `,` and `.` step one frame *of that motion* and ten
   under shift, `Home` and `End` go to the ends, `[` and `]` jump between arm
   keys. The camera keys are the sim's, unchanged.
+- **Every slider carries a mark at the value in the file**, and double-clicking
+  the row goes back to it — one number at a time, where `Revert` is all of them
+  at once. The mark only moves when the file is written, so it is what an edit is
+  judged against rather than a record of what has been touched. The slider is
+  styled all the way down for this: the mark has to line up with the thumb, which
+  means knowing how wide the thumb is, and a default thumb is whatever the
+  platform says. Arm keys lose their marks while the arc is a different length
+  from the one on disk, because adding or dropping a key makes every index past
+  it a different pose, and a mark that is quietly wrong is worse than one that is
+  missing.
 - **A slider does not own the keyboard.** Only the number fields and the line
   picker do, because they are typed into. Bailing out of the keydown handler on
   any focused input meant that touching one slider killed every shortcut on the

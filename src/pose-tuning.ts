@@ -340,8 +340,8 @@ export const POSE_TUNING: PoseTuning = {
   freeArm: {
     hurl: {
       upperX: { base: -0.4, wind: -0.72, whip: 1.35, follow: 0.34, aim: -0.34, open: 0 },
-      upperZ: { base: -0.14, wind: -0.5, whip: 0, follow: 0.2, aim: 0, open: 0.7 },
-      lowerX: { base: -0.08, wind: 0.72, whip: -0.5, follow: 0.2, aim: 0.35, open: 0 },
+      upperZ: { base: 0.16, wind: -0.24, whip: 0, follow: 0.2, aim: 0, open: 0.7 },
+      lowerX: { base: -1.34, wind: 0.72, whip: -0.43, follow: 0.2, aim: 0.35, open: 0.01 },
       lowerZ: -0.05,
       handX: -0.06,
     },

@@ -237,9 +237,77 @@ select:disabled {
   color: var(--dim);
 }
 
+/*
+ * The slider is styled all the way down rather than left to the browser, for one
+ * reason: the saved mark has to line up with the thumb, and that means knowing
+ * how wide the thumb is. A default thumb is whatever the platform says, and a
+ * mark drawn against a guess sits visibly wide of the value it names.
+ */
+.anim-slider {
+  --thumb: 12px;
+
+  position: relative;
+  display: block;
+  height: var(--thumb);
+}
+
 .anim-control input[type="range"] {
   width: 100%;
-  height: 12px;
+  height: var(--thumb);
+  margin: 0;
+  background: transparent;
+  appearance: none;
+}
+
+.anim-control input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  margin-top: 4px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 14%);
+}
+
+.anim-control input[type="range"]::-webkit-slider-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  margin-top: -4px;
+  border-radius: 50%;
+  background: #ffb35d;
+  appearance: none;
+}
+
+.anim-control input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: rgb(255 255 255 / 14%);
+}
+
+.anim-control input[type="range"]::-moz-range-thumb {
+  width: var(--thumb);
+  height: var(--thumb);
+  border: 0;
+  border-radius: 50%;
+  background: #ffb35d;
+}
+
+/*
+ * Where this number sits in the file on disk. It is what makes a slider safe to
+ * push around: drag it anywhere, and the way back is visible rather than
+ * remembered. Double-clicking the row goes back to it.
+ *
+ * It paints over the thumb rather than under it — it has to, because the track
+ * is the slider's own pseudo-element and anything drawn earlier goes behind it.
+ * That reads well enough: a control still on its saved value shows the mark as a
+ * notch through the middle of the thumb, which is its own kind of "unchanged".
+ */
+.anim-saved-mark {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: rgb(255 224 192 / 70%);
+  pointer-events: none;
 }
 
 .anim-control input[type="number"] {

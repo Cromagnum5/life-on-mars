@@ -66,6 +66,11 @@ import "./anim.css";
  * this the same instrument as `tools/capture_sim.sh` rather than a fourth
  * opinion. The Blender tools stop after the first layer, and never agree.
  *
+ * Every slider carries a pale mark at the value in the file, and a double-click
+ * on the row goes back to it — one number at a time, where **Revert** is all of
+ * them at once. The mark moves only when the file is written, so it is the thing
+ * an edit is being judged against rather than a record of what was touched.
+ *
  * Scrubbing is what the page is for, so it has as many ways in as it needs:
  * drag the bar at the top of the timeline, step a frame with `,` and `.`, ten
  * with those held under shift, jump to an arm key with `[` and `]`, or go to
@@ -571,18 +576,29 @@ function renderPlayhead(): void {
 // ---------------------------------------------------------------------------
 
 /** A labelled slider with the number beside it, both editable and kept in step. */
-function control(
-  parent: HTMLElement,
-  name: string,
-  value: number,
-  min: number,
-  max: number,
-  onChange: (next: number) => void,
-): void {
+type ControlSpec = {
+  name: string;
+  value: number;
+  min: number;
+  max: number;
+  /**
+   * What this number is on disk, marked on the track so a slider can be pushed
+   * around and put back by eye. Null when there is nothing to compare against —
+   * an arm key that has been added since the file was last written has no saved
+   * counterpart, and a mark drawn from a guess is worse than no mark.
+   */
+  saved: number | null;
+  onChange: (next: number) => void;
+};
+
+function control(parent: HTMLElement, spec: ControlSpec): void {
+  const { name, value, min, max, saved, onChange } = spec;
   const row = document.createElement("label");
   row.className = "anim-control";
   const label = document.createElement("span");
   label.textContent = name;
+  const track = document.createElement("i");
+  track.className = "anim-slider";
   const slider = document.createElement("input");
   slider.type = "range";
   const number = document.createElement("input");
@@ -593,15 +609,37 @@ function control(
     input.step = "0.01";
     input.value = String(Number(value.toFixed(3)));
   }
-  const apply = (source: HTMLInputElement, other: HTMLInputElement) => {
-    const next = THREE.MathUtils.clamp(Number(source.value), min, max);
-    other.value = String(Number(next.toFixed(3)));
-    onChange(next);
+  track.append(slider);
+  if (saved !== null) {
+    // Along the track the thumb's *centre* travels, which is inset by half a
+    // thumb at each end — measuring the mark against the full width puts it
+    // visibly wide of the thumb at either extreme, which is exactly where the
+    // interesting values sit.
+    const mark = document.createElement("b");
+    mark.className = "anim-saved-mark";
+    const fraction = THREE.MathUtils.clamp((saved - min) / (max - min), 0, 1);
+    mark.style.left = `calc(var(--thumb) / 2 + (100% - var(--thumb)) * ${fraction})`;
+    mark.title = `saved: ${Number(saved.toFixed(3))}`;
+    track.append(mark);
+  }
+  const apply = (next: number) => {
+    const clamped = THREE.MathUtils.clamp(next, min, max);
+    slider.value = String(clamped);
+    number.value = String(Number(clamped.toFixed(3)));
+    onChange(clamped);
     afterEdit();
   };
-  slider.addEventListener("input", () => apply(slider, number));
-  number.addEventListener("input", () => apply(number, slider));
-  row.append(label, slider, number);
+  slider.addEventListener("input", () => apply(Number(slider.value)));
+  number.addEventListener("input", () => apply(Number(number.value)));
+  // Double-click puts one number back to the mark, which is the other half of
+  // being able to push a slider around freely: Revert is all or nothing.
+  if (saved !== null) {
+    row.addEventListener("dblclick", (event) => {
+      event.preventDefault();
+      apply(saved);
+    });
+  }
+  row.append(label, track, number);
   parent.append(row);
 }
 
@@ -621,7 +659,9 @@ function section(title: string, note?: string): HTMLElement {
 }
 
 /** The four numbers of one beat: in over the first pair, out over the second. */
-function beatControls(parent: HTMLElement, name: string, beat: Beat): void {
+function beatControls(
+  parent: HTMLElement, name: string, beat: Beat, saved: Beat | null,
+): void {
   const group = document.createElement("div");
   group.className = "anim-beat";
   const heading = document.createElement("h3");
@@ -629,9 +669,12 @@ function beatControls(parent: HTMLElement, name: string, beat: Beat): void {
   group.append(heading);
   const names = ["in", "full", "hold", "out"];
   beat.forEach((value, index) => {
-    control(group, names[index], value, 0, 1, (next) => {
-      beat[index] = next;
-      refreshTimelineBands();
+    control(group, {
+      name: names[index], value, min: 0, max: 1, saved: saved ? saved[index] : null,
+      onChange: (next) => {
+        beat[index] = next;
+        refreshTimelineBands();
+      },
     });
   });
   parent.append(group);
@@ -640,7 +683,23 @@ function beatControls(parent: HTMLElement, name: string, beat: Beat): void {
 /** How far a shoulder or an elbow is allowed to be pushed, in radians. */
 const ANGLE_LIMIT = 2.4;
 
-function armKeyControls(parent: HTMLElement, key: ThrowArmKey, keys: ThrowArmKey[]): void {
+/**
+ * The saved counterpart of an arm key, matched by its place in the arc.
+ *
+ * Only while the arc is the same length as the one on disk. Add or drop a key
+ * and every index past it means a different pose, so the marks would point at
+ * the neighbours of what they claim to be — and a mark that is quietly wrong is
+ * worse than one that is missing. They come back on the next save.
+ */
+function savedArmKey(type: ThrowType, index: number): ThrowArmKey | null {
+  const saved = loadedTuning.armKeys[type];
+  if (saved.length !== POSE_TUNING.armKeys[type].length) return null;
+  return saved[index] ?? null;
+}
+
+function armKeyControls(
+  parent: HTMLElement, key: ThrowArmKey, keys: ThrowArmKey[], saved: ThrowArmKey | null,
+): void {
   const group = document.createElement("div");
   group.className = "anim-key";
   const heading = document.createElement("h3");
@@ -667,15 +726,20 @@ function armKeyControls(parent: HTMLElement, key: ThrowArmKey, keys: ThrowArmKey
   group.append(heading);
   // `at` is clamped inside the arc: a key at 0 or 1 would shadow the shared
   // ready pose that both ends of every arc are read from.
-  control(group, "at", key.at, 0.01, 0.99, (next) => {
-    key.at = next;
-    keys.sort((a, b) => a.at - b.at);
-    jump.textContent = `at ${next.toFixed(2)}`;
-    buildTimeline();
+  control(group, {
+    name: "at", value: key.at, min: 0.01, max: 0.99, saved: saved ? saved.at : null,
+    onChange: (next) => {
+      key.at = next;
+      keys.sort((a, b) => a.at - b.at);
+      jump.textContent = `at ${next.toFixed(2)}`;
+      buildTimeline();
+    },
   });
   for (const field of ["upperX", "upperY", "upperZ", "lowerX", "handX"] as const) {
-    control(group, field, key[field], -ANGLE_LIMIT, ANGLE_LIMIT, (next) => {
-      key[field] = next;
+    control(group, {
+      name: field, value: key[field], min: -ANGLE_LIMIT, max: ANGLE_LIMIT,
+      saved: saved ? saved[field] : null,
+      onChange: (next) => { key[field] = next; },
     });
   }
   parent.append(group);
@@ -698,11 +762,13 @@ function buildEditor(): void {
   const body = section(
     `${type} · body beats`,
     "Coil away, open, whip through, follow through. Each fades in over the " +
-    "first pair and out over the second.",
+    "first pair and out over the second. The pale line on every track is what " +
+    "that number is in the file — push a slider anywhere and double-click the " +
+    "row to put it back.",
   );
   const drive = POSE_TUNING.throwBeats[type];
   for (const name of ["draw", "stride", "whip", "follow"] as const) {
-    beatControls(body, name, drive[name]);
+    beatControls(body, name, drive[name], loadedTuning.throwBeats[type][name]);
   }
 
   if (type === "hurl") {
@@ -712,7 +778,7 @@ function buildEditor(): void {
       "travels, or it skates.",
     );
     for (const name of ["tuck", "swing", "step", "heel", "drive", "home", "open"] as const) {
-      beatControls(legs, name, POSE_TUNING.hurlLegs[name]);
+      beatControls(legs, name, POSE_TUNING.hurlLegs[name], loadedTuning.hurlLegs[name]);
     }
   }
 
@@ -723,7 +789,7 @@ function buildEditor(): void {
     "poses either side of it drops the elbow to the hip on the way past.",
   );
   const keys = POSE_TUNING.armKeys[type];
-  for (const key of keys) armKeyControls(arm, key, keys);
+  keys.forEach((key, index) => armKeyControls(arm, key, keys, savedArmKey(type, index)));
   const add = document.createElement("button");
   add.type = "button";
   add.textContent = "Add a key at the playhead";
@@ -751,6 +817,7 @@ function buildEditor(): void {
   );
   const drives = FREE_ARM_DRIVES[type];
   const freeArm = POSE_TUNING.freeArm[type];
+  const savedFreeArm = loadedTuning.freeArm[type];
   for (const joint of ["upperX", "upperZ", "lowerX"] as const) {
     const group = document.createElement("div");
     group.className = "anim-beat";
@@ -761,8 +828,10 @@ function buildEditor(): void {
     // and a slider that multiplies zero is a slider that lies about doing
     // something.
     for (const drive of drives) {
-      control(group, drive, freeArm[joint][drive], -ANGLE_LIMIT, ANGLE_LIMIT, (next) => {
-        freeArm[joint][drive] = next;
+      control(group, {
+        name: drive, value: freeArm[joint][drive],
+        min: -ANGLE_LIMIT, max: ANGLE_LIMIT, saved: savedFreeArm[joint][drive],
+        onChange: (next) => { freeArm[joint][drive] = next; },
       });
     }
     free.append(group);
@@ -772,11 +841,13 @@ function buildEditor(): void {
   const heldHeading = document.createElement("h3");
   heldHeading.textContent = "held";
   held.append(heldHeading);
-  control(held, "forearm", freeArm.lowerZ, -ANGLE_LIMIT, ANGLE_LIMIT, (next) => {
-    freeArm.lowerZ = next;
+  control(held, {
+    name: "forearm", value: freeArm.lowerZ, min: -ANGLE_LIMIT, max: ANGLE_LIMIT,
+    saved: savedFreeArm.lowerZ, onChange: (next) => { freeArm.lowerZ = next; },
   });
-  control(held, "wrist", freeArm.handX, -ANGLE_LIMIT, ANGLE_LIMIT, (next) => {
-    freeArm.handX = next;
+  control(held, {
+    name: "wrist", value: freeArm.handX, min: -ANGLE_LIMIT, max: ANGLE_LIMIT,
+    saved: savedFreeArm.handX, onChange: (next) => { freeArm.handX = next; },
   });
   free.append(held);
 
@@ -792,8 +863,10 @@ function buildEditor(): void {
   throwingHeading.textContent = "throwing arm";
   throwing.append(throwingHeading);
   for (const field of ["upperX", "upperY", "upperZ", "lowerX", "handX"] as const) {
-    control(throwing, field, POSE_TUNING.ready[field], -ANGLE_LIMIT, ANGLE_LIMIT, (next) => {
-      POSE_TUNING.ready[field] = next;
+    control(throwing, {
+      name: field, value: POSE_TUNING.ready[field], min: -ANGLE_LIMIT, max: ANGLE_LIMIT,
+      saved: loadedTuning.ready[field],
+      onChange: (next) => { POSE_TUNING.ready[field] = next; },
     });
   }
   ready.append(throwing);
@@ -803,8 +876,10 @@ function buildEditor(): void {
   readyFreeHeading.textContent = "free arm";
   readyFree.append(readyFreeHeading);
   for (const field of ["upperX", "upperAim", "upperZ", "lowerX"] as const) {
-    control(readyFree, field, POSE_TUNING.readyArm[field], -ANGLE_LIMIT, ANGLE_LIMIT, (next) => {
-      POSE_TUNING.readyArm[field] = next;
+    control(readyFree, {
+      name: field, value: POSE_TUNING.readyArm[field], min: -ANGLE_LIMIT, max: ANGLE_LIMIT,
+      saved: loadedTuning.readyArm[field],
+      onChange: (next) => { POSE_TUNING.readyArm[field] = next; },
     });
   }
   ready.append(readyFree);
