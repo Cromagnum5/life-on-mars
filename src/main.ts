@@ -20,8 +20,11 @@ import { loadRigwalkerAsset } from "./rigwalker-assets";
 import {
   addMarsLighting,
   applyMarsAtmosphere,
+  DEFAULT_FOV,
+  VIEW_HEIGHT,
   createCameraOrbit,
   createMarsRenderer,
+  createPerspectiveCamera,
   createRocks,
   createTabletopCamera,
   createTerrain,
@@ -29,7 +32,9 @@ import {
   orbitBy,
   orbitOffset,
   panFocus,
+  radiusForFov,
   terrainHeightAt,
+  type TabletopCamera,
 } from "./world";
 import "./style.css";
 
@@ -51,10 +56,48 @@ applyMarsAtmosphere(scene);
 addMarsLighting(scene);
 
 const renderer = createMarsRenderer(canvas);
-const camera = createTabletopCamera();
+/**
+ * The game is orthographic and the visual direction says so, but that choice is
+ * still open while the game is being decided, and it is the one thing you
+ * cannot judge from a still: orthographic holds a unit's size at any distance,
+ * which at a low camera angle reads as a giant standing at the horizon. `P`
+ * swaps the projection so the two can be compared on the same view.
+ */
+const params = new URLSearchParams(window.location.search);
+const fov = Number(params.get("fov") ?? DEFAULT_FOV);
+const orthographicCamera = createTabletopCamera();
+const perspectiveCamera = createPerspectiveCamera(1, fov);
+let camera: TabletopCamera = params.get("camera") === "perspective"
+  ? perspectiveCamera
+  : orthographicCamera;
+/** Magnification, held here because the two projections spend it differently. */
+let zoomLevel = orthographicCamera.zoom;
 const cameraTarget = new THREE.Vector3(0, 0, 0);
 const cameraOrbit = createCameraOrbit();
+// A headless capture cannot press a key, so the angle is a parameter too.
+orbitBy(
+  cameraOrbit,
+  THREE.MathUtils.degToRad(Number(params.get("yaw") ?? 0)),
+  THREE.MathUtils.degToRad(Number(params.get("pitch") ?? 0)),
+);
 const cameraOffset = new THREE.Vector3();
+
+/**
+ * Spends the zoom on whichever projection is drawing. Orthographic scales its
+ * frustum on the spot. Perspective leaves the lens alone and walks the eye in,
+ * because magnifying by narrowing the lens is what a telephoto does and a
+ * telephoto flattens the depth the projection was chosen for.
+ */
+function applyZoom(): void {
+  if (camera === perspectiveCamera) {
+    perspectiveCamera.zoom = 1;
+    cameraOrbit.radius = radiusForFov(fov, VIEW_HEIGHT / zoomLevel);
+  } else {
+    orthographicCamera.zoom = zoomLevel;
+    cameraOrbit.radius = radiusForFov(fov);
+  }
+  camera.updateProjectionMatrix();
+}
 
 const terrain = createTerrain(MAP_SIZE);
 const corporateBases = createBuildings(terrainHeightAt);
@@ -351,6 +394,13 @@ const keys = new Set<string>();
 window.addEventListener("keydown", (event) => {
   // The arrows drive the camera, so they must not also scroll the page.
   if (event.code.startsWith("Arrow")) event.preventDefault();
+  // A toggle, not a held key: it belongs on the edge, not in the frame loop.
+  if (event.code === "KeyP" && !event.repeat) {
+    camera = camera === orthographicCamera ? perspectiveCamera : orthographicCamera;
+    applyZoom();
+    resize();
+    updateProjectionHint();
+  }
   keys.add(event.code);
 });
 window.addEventListener("keyup", (event) => keys.delete(event.code));
@@ -359,12 +409,12 @@ window.addEventListener("blur", () => keys.clear());
 canvas.addEventListener(
   "wheel",
   (event) => {
-    camera.zoom = THREE.MathUtils.clamp(
-      camera.zoom * Math.exp(-event.deltaY * 0.001),
+    zoomLevel = THREE.MathUtils.clamp(
+      zoomLevel * Math.exp(-event.deltaY * 0.001),
       MIN_ZOOM,
       MAX_ZOOM,
     );
-    camera.updateProjectionMatrix();
+    applyZoom();
     event.preventDefault();
   },
   { passive: false },
@@ -374,8 +424,18 @@ function resize(): void {
   fitCameraToViewport(camera, renderer, window.innerWidth, window.innerHeight);
 }
 
+/** Names the projection in the control hint, so pressing `P` confirms itself. */
+function updateProjectionHint(): void {
+  const label = document.querySelector("#projection-label");
+  if (label) {
+    label.textContent = camera === perspectiveCamera ? "Depth view" : "Flat view";
+  }
+}
+
 window.addEventListener("resize", resize);
+applyZoom();
 resize();
+updateProjectionHint();
 
 function updateCamera(delta: number): void {
   const direction = new THREE.Vector2();
@@ -395,7 +455,7 @@ function updateCamera(delta: number): void {
 
   if (direction.lengthSq() > 0) {
     direction.normalize();
-    const speed = (23 * Math.SQRT2) / camera.zoom;
+    const speed = (23 * Math.SQRT2) / zoomLevel;
     // Panned in the camera's own frame, so W still walks the view away from the
     // player however far round the map has been swung.
     panFocus(cameraOrbit, cameraTarget, -direction.y, direction.x, speed * delta);

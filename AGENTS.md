@@ -43,11 +43,27 @@ Current camera controls are intentionally minimal after playtesting:
 - The left and right arrows orbit about what the camera is watching; the up and
   down arrows raise and lower it, between six and eighty-four degrees off the
   ground. The three-quarter view is where it starts and nothing else moves it.
-- Mouse wheel zooms.
+- Mouse wheel zooms. Under perspective the wheel walks the eye in rather than
+  narrowing the lens, because narrowing is what a telephoto does and a telephoto
+  flattens the depth the projection exists for.
+- `P` swaps the projection, in the game as well as the sim, and the control hint
+  names the one in use (`Flat view` / `Depth view`). Orthographic remains the
+  default and the documented visual direction; the toggle is there because the
+  choice cannot be judged from a still, only from moving the camera around under
+  both. Both pages also take `camera=perspective`, `fov`, `yaw` and `pitch` in
+  the URL, since a headless capture cannot press a key.
 - Do not add edge scrolling, arrow-key panning, or mouse-drag panning unless the
   user asks for them; those controls were tested and removed. The arrows orbit,
   which is a different question — what the scene looks like from elsewhere, not
   what is on screen — and was asked for while the game is still being decided.
+
+The reverse-perspective complaint that prompted the toggle is an orthographic
+camera doing exactly what it is: a unit's size never changes with distance, so
+at a low angle the ground shrinks toward the horizon while a distant unit does
+not, and it reads as a giant standing at the back. It is most obvious in the
+game, where units and buildings are spread across a hundred and eighty metres —
+never in the sim, where every fighter is within a few metres of the focus. Judge
+this one in the game.
 
 ## Initial game vocabulary
 
