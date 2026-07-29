@@ -236,7 +236,15 @@ distance, plus a timestamped event log and an outcome tally.
   around it. The toggle is how that choice gets questioned rather than argued.
   The default `fov` frames exactly what the orthographic view frames at the
   focus, so a swap holds the framing and changes only depth; a wider `fov`
-  comes in closer for the same framing and reads as deeper.
+  comes in closer for the same framing and reads as deeper. The status line
+  reports which projection is drawing, and for perspective the lens and how far
+  out the eye ended up.
+- Zoom is spent differently by the two. Orthographic narrows its frustum where
+  it stands. Perspective leaves the lens alone and walks the eye in until the
+  focus is framed the same, because magnifying by narrowing is what a telephoto
+  does and a telephoto flattens depth: at the sim's usual 3.2× that was a
+  fourteen-degree lens sixty-six metres out, which is orthographic in all but
+  name and made the toggle look like it did nothing.
 
 `t` is the headless capture mode: the page steps a fixed timestep fight to that
 exact sim time in one synchronous burst, renders one frame, and freezes. It

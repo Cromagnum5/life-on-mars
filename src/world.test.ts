@@ -138,4 +138,24 @@ describe("projection", () => {
     expect(radiusForFov(DEFAULT_FOV)).toBeCloseTo(createTabletopCamera().position.length(), 4);
     expect(radiusForFov(70)).toBeLessThan(radiusForFov(DEFAULT_FOV));
   });
+
+  /**
+   * Magnifying by narrowing the lens is what a telephoto does, and a telephoto
+   * flattens depth: at the sim's usual 3.2× that was a fourteen-degree lens
+   * sixty-six metres out, which is orthographic in all but name. Perspective
+   * has to spend zoom on the eye's distance instead, or the projection it was
+   * turned on to show is the one thing it cannot show.
+   */
+  it("spends zoom on the eye's distance under perspective, not on the lens", () => {
+    const lens = createPerspectiveCamera(1).fov;
+    let previous = Number.POSITIVE_INFINITY;
+    for (const zoom of [0.9, 1.6, 3.2, 7]) {
+      const radius = radiusForFov(lens, VIEW_HEIGHT / zoom);
+      // The frame holds what the orthographic view holds at the same zoom.
+      expect(viewSpan(createPerspectiveCamera(1), radius)).toBeCloseTo(VIEW_HEIGHT / zoom, 4);
+      // And it got there by coming closer, every time.
+      expect(radius).toBeLessThan(previous);
+      previous = radius;
+    }
+  });
 });

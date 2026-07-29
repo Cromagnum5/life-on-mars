@@ -129,6 +129,11 @@ output {
   font-weight: 600;
 }
 
+/* Which projection is drawing. Muted: it is a mode, not an event. */
+#projection {
+  color: rgb(255 224 192 / 55%);
+}
+
 .sim-fighters {
   display: grid;
   gap: 7px;

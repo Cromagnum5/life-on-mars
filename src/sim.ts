@@ -18,6 +18,7 @@ import {
   orbitBy,
   orbitOffset,
   panFocus,
+  VIEW_HEIGHT,
   radiusForFov,
   terrainHeightAt,
   type TabletopCamera,
@@ -134,6 +135,7 @@ const tallyList = requireElement<HTMLElement>("#tally");
 const logList = requireElement<HTMLElement>("#log");
 const clockValue = requireElement<HTMLElement>("#clock");
 const verdictValue = requireElement<HTMLElement>("#verdict");
+const projectionValue = requireElement<HTMLElement>("#projection");
 const speedInput = requireElement<HTMLInputElement>("#speed");
 const speedValue = requireElement<HTMLElement>("#speed-value");
 const seedInput = requireElement<HTMLInputElement>("#seed");
@@ -166,10 +168,12 @@ let camera: TabletopCamera = params.get("camera") === "perspective"
   ? perspectiveCamera
   : orthographicCamera;
 const orbit = createCameraOrbit();
-// A wider lens must come in closer to frame the same thing, and how close is
-// exactly how strong the perspective reads. Orthographic ignores the radius, so
-// setting it from the lens costs the default view nothing.
-orbit.radius = radiusForFov(fov);
+/**
+ * How much the view is magnified, held here rather than on a camera because the
+ * two projections spend it differently: orthographic narrows its frustum on the
+ * spot, perspective walks the eye in and leaves the lens alone.
+ */
+let zoomLevel = startingZoom;
 // A headless capture cannot press a key, so the angle is a URL parameter too:
 // degrees swung from the default three-quarter view.
 orbitBy(
@@ -248,8 +252,8 @@ function startMatch(): void {
   // when only the director's rolls change.
   const spawnRandom = createSeededRandom(seed * 2654435761 + 17);
   const setup = MATCHUPS[matchup];
-  camera.zoom = Number(params.get("zoom") ?? setup.zoom);
-  camera.updateProjectionMatrix();
+  zoomLevel = Number(params.get("zoom") ?? setup.zoom);
+  applyZoom();
 
   TEAMS.forEach((team, teamIndex) => {
     const roster = setup.teams[teamIndex];
@@ -425,6 +429,7 @@ function describeCue(cue: CombatCue | undefined): { action: string; detail: stri
 
 function renderReadout(): void {
   clockValue.textContent = `${simTime.toFixed(2)} s`;
+  projectionValue.textContent = describeProjection();
   verdictValue.textContent = verdict ?? (paused ? "paused" : "fighting");
 
   const byId = new Map(battle.units.map((unit) => [unit.combatId, unit]));
@@ -472,6 +477,40 @@ function renderReadout(): void {
   }));
 }
 
+/**
+ * Spends the zoom on whichever projection is drawing.
+ *
+ * Orthographic scales its frustum and stays where it is; distance means nothing
+ * to it. Perspective must not do that. Narrowing the lens to magnify is what a
+ * telephoto does, and a telephoto flattens depth — at the sim's usual 3.2× that
+ * is a fourteen-degree lens sixty-six metres out, which is orthographic in all
+ * but name and made the whole toggle look broken. So the lens is left alone and
+ * the eye walks in until the focus is framed the same, which is the one way to
+ * magnify that keeps the perspective it was turned on for.
+ */
+function applyZoom(): void {
+  if (camera === perspectiveCamera) {
+    perspectiveCamera.zoom = 1;
+    orbit.radius = radiusForFov(fov, VIEW_HEIGHT / zoomLevel);
+  } else {
+    orthographicCamera.zoom = zoomLevel;
+    orbit.radius = radiusForFov(fov);
+  }
+  camera.updateProjectionMatrix();
+}
+
+/**
+ * What the view is being drawn through. Perspective also reports the lens and
+ * how far out the eye ended up, because those are what decide how much depth
+ * the picture has — and because a mode with no readout is a mode that looks
+ * like it did nothing.
+ */
+function describeProjection(): string {
+  return camera === perspectiveCamera
+    ? `persp ${fov.toFixed(0)}° · ${orbit.radius.toFixed(0)} m`
+    : `ortho ${zoomLevel.toFixed(1)}×`;
+}
+
 function resize(): void {
   fitCameraToViewport(camera, renderer, window.innerWidth, window.innerHeight);
 }
@@ -484,8 +523,8 @@ function resize(): void {
 function setPerspective(next: boolean): void {
   const wanted = next ? perspectiveCamera : orthographicCamera;
   if (wanted === camera) return;
-  wanted.zoom = camera.zoom;
   camera = wanted;
+  applyZoom();
   resize();
   updateCamera(0);
 }
@@ -550,7 +589,7 @@ window.addEventListener("keydown", (event) => {
   } else if (/^Key[WASD]$/.test(event.code)) {
     // Panning is an explicit choice to stop following the fight.
     followInput.checked = false;
-    const pan = (2.4 * Math.SQRT2) / camera.zoom;
+    const pan = (2.4 * Math.SQRT2) / zoomLevel;
     if (event.code === "KeyA") panFocus(orbit, focus, 0, -1, pan);
     if (event.code === "KeyD") panFocus(orbit, focus, 0, 1, pan);
     if (event.code === "KeyW") panFocus(orbit, focus, 1, 0, pan);
@@ -569,10 +608,10 @@ window.addEventListener("keydown", (event) => {
 });
 
 canvas.addEventListener("wheel", (event) => {
-  camera.zoom = THREE.MathUtils.clamp(
-    camera.zoom * Math.exp(-event.deltaY * 0.001), MIN_ZOOM, MAX_ZOOM,
+  zoomLevel = THREE.MathUtils.clamp(
+    zoomLevel * Math.exp(-event.deltaY * 0.001), MIN_ZOOM, MAX_ZOOM,
   );
-  camera.updateProjectionMatrix();
+  applyZoom();
   event.preventDefault();
 }, { passive: false });
 
@@ -591,9 +630,8 @@ if (captureTime !== null) {
   while (simTime < captureTime) advance(captureStep);
   updateCamera(captureStep);
   renderReadout();
-  const projection = camera === perspectiveCamera ? `perspective ${fov.toFixed(0)}°` : "orthographic";
-  document.title =
-    `${matchup} seed ${seed} @ ${simTime.toFixed(2)}s · ${projection} — ${verdict ?? "fighting"}`;
+  document.title = `${matchup} seed ${seed} @ ${simTime.toFixed(2)}s` +
+    ` · ${describeProjection()} — ${verdict ?? "fighting"}`;
   Object.assign(window, { __simCapture: { matchup, seed, time: simTime, verdict, tally } });
   // Redraw the frozen frame every tick. A canvas rendered once is empty by the
   // time a screenshot is taken, and screenshots are the point of this mode.
