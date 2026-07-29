@@ -96,6 +96,77 @@ export type HurlLegBeats = {
   open: Beat;
 };
 
+/**
+ * One angle of the free arm, as a sum of the beats driving it.
+ *
+ * The throwing arm is keyed and this one is summed, and the difference is not an
+ * inconsistency. The throwing arm traces an arc through a narrow band of Euler
+ * angles that a sum walks straight out of; the free arm has no arc to trace. It
+ * is a counterweight — it lifts, folds across the chest, and is driven down and
+ * back as the body untwists — and each of those is one beat pulling one joint.
+ *
+ * Which drives a throw actually has differs:
+ *
+ * - `wind` is the wind-up. A hurl reads it as the *larger* of draw and stride
+ *   rather than their sum, because those two overlap and adding them lifts the
+ *   arm over the head halfway through the wind. A pitch reads it as `draw`. A
+ *   toss has no wind worth the name and leaves this at zero.
+ * - `aim` is the settle before a throw, and only a hurl has one.
+ * - `open` is `hurlLegs.open`, and only a hurl uses it. It exists because the
+ *   opening has to **lead** the swing-back: held across the chest while the
+ *   shoulder drove it down and back, the elbow went a quarter of a metre inside
+ *   the torso. Riding the whip is too late, because the whip is the swing. It is
+ *   the same rule the feet follow one limb down.
+ *
+ * Terms whose drive a throw does not have are left at zero, and the animation
+ * tool hides them rather than offering a slider that does nothing.
+ */
+export type FreeArmAngle = {
+  base: number;
+  wind: number;
+  whip: number;
+  follow: number;
+  aim: number;
+  open: number;
+};
+
+/**
+ * The free arm through one throw. `upperY` is not here because it is never
+ * anything but zero: this arm swings in the plane of the body and across it, and
+ * a twist at the shoulder only ever made it read as a shrug.
+ *
+ * `lowerZ` and `handX` are single numbers because they are constants in all
+ * three throws — the forearm's roll and the wrist, set once so the hand reads as
+ * a hand rather than tracking anything.
+ */
+export type FreeArmPose = {
+  /** Shoulder, forward and up. */
+  upperX: FreeArmAngle;
+  /** Shoulder, carrying the whole arm across the centre line. */
+  upperZ: FreeArmAngle;
+  /** Elbow. */
+  lowerX: FreeArmAngle;
+  lowerZ: number;
+  handX: number;
+};
+
+/**
+ * What the free arm is given on top while the hurler is settled between throws,
+ * scaled by how settled it is. This is the pose it holds for most of a fight —
+ * the throw itself is under a second of a cycle over two seconds long — so it is
+ * the one most worth getting right.
+ *
+ * The hand is carried up by the shoulder and across by its Z, not by folding the
+ * elbow: a folded elbow at this height reads as a gesture rather than a guard.
+ */
+export type ReadyArm = {
+  upperX: number;
+  /** Added to `upperX` again as the aim settles. */
+  upperAim: number;
+  upperZ: number;
+  lowerX: number;
+};
+
 export type PoseTuning = {
   /**
    * Bladed and settled: rock hand low at the hip, elbow loose. Shared by all
@@ -121,7 +192,17 @@ export type PoseTuning = {
    * pushing rather than throwing, however good the rest of the pose looks.
    */
   armKeys: Record<ThrowType, ThrowArmKey[]>;
+  /** The counterweight arm, which is summed rather than keyed. See `FreeArmAngle`. */
+  freeArm: Record<ThrowType, FreeArmPose>;
+  readyArm: ReadyArm;
   hurlLegs: HurlLegBeats;
+};
+
+/** Which drives a throw actually has. The rest of its terms stay at zero. */
+export const FREE_ARM_DRIVES: Record<ThrowType, ReadonlyArray<keyof FreeArmAngle>> = {
+  hurl: ["base", "wind", "whip", "follow", "aim", "open"],
+  pitch: ["base", "wind", "whip", "follow"],
+  toss: ["base", "whip", "follow"],
 };
 
 /** Trimmed, so a value nudged by a slider does not save as `0.30000000000000004`. */
@@ -140,6 +221,18 @@ function serializeArmKey(key: ThrowArmKey): string {
     `upperZ: ${serializeNumber(key.upperZ)}, ` +
     `lowerX: ${serializeNumber(key.lowerX)}, ` +
     `handX: ${serializeNumber(key.handX)} }`;
+}
+
+function serializeFreeArmAngle(angle: FreeArmAngle): string {
+  return `{ ${(["base", "wind", "whip", "follow", "aim", "open"] as const)
+    .map((name) => `${name}: ${serializeNumber(angle[name])}`).join(", ")} }`;
+}
+
+function serializeFreeArm(pose: FreeArmPose): string {
+  return (["upperX", "upperZ", "lowerX"] as const)
+    .map((name) => `      ${name}: ${serializeFreeArmAngle(pose[name])},\n`).join("") +
+    `      lowerZ: ${serializeNumber(pose.lowerZ)},\n` +
+    `      handX: ${serializeNumber(pose.handX)},\n`;
 }
 
 /** Marks where a **Save** from the animation tool starts overwriting this file. */
@@ -163,12 +256,18 @@ export function serializePoseTuning(tuning: PoseTuning = POSE_TUNING): string {
     `    ${type}: [\n` +
     tuning.armKeys[type].map((key) => `      ${serializeArmKey(key)},\n`).join("") +
     "    ],\n").join("");
+  const freeArm = throwTypes.map((type) =>
+    `    ${type}: {\n${serializeFreeArm(tuning.freeArm[type])}    },\n`).join("");
+  const readyArm = (["upperX", "upperAim", "upperZ", "lowerX"] as const)
+    .map((name) => `${name}: ${serializeNumber(tuning.readyArm[name])}`).join(", ");
   const legs = (["tuck", "swing", "step", "heel", "drive", "home", "open"] as const)
     .map((name) => `    ${name}: ${serializeBeat(tuning.hurlLegs[name])},\n`).join("");
   return `${TUNING_MARKER}\nexport const POSE_TUNING: PoseTuning = {\n` +
     `  ready: ${serializeArmKey(tuning.ready)},\n` +
     `  throwBeats: {\n${beats}  },\n` +
     `  armKeys: {\n${keys}  },\n` +
+    `  freeArm: {\n${freeArm}  },\n` +
+    `  readyArm: { ${readyArm} },\n` +
     `  hurlLegs: {\n${legs}  },\n};\n`;
 }
 
@@ -220,6 +319,30 @@ export const POSE_TUNING: PoseTuning = {
       { at: 0.7, upperX: -0.34, upperY: 0.4, upperZ: -0.32, lowerX: 0.95, handX: 0.2 },
     ],
   },
+  freeArm: {
+    hurl: {
+      upperX: { base: -0.4, wind: -0.72, whip: 1.35, follow: 0.34, aim: -0.34, open: 0 },
+      upperZ: { base: -0.14, wind: -0.5, whip: 0, follow: 0.2, aim: 0, open: 0.7 },
+      lowerX: { base: -0.08, wind: 0.72, whip: -0.5, follow: 0.2, aim: 0.35, open: 0 },
+      lowerZ: -0.05,
+      handX: -0.06,
+    },
+    pitch: {
+      upperX: { base: -0.32, wind: -0.3, whip: 0.75, follow: 0.5, aim: 0, open: 0 },
+      upperZ: { base: -0.08, wind: 0, whip: 0, follow: 0.12, aim: 0, open: 0 },
+      lowerX: { base: -0.18, wind: -0.04, whip: 0.55, follow: 0.45, aim: 0, open: 0 },
+      lowerZ: -0.05,
+      handX: -0.06,
+    },
+    toss: {
+      upperX: { base: -0.34, wind: 0, whip: 0.3, follow: 0.2, aim: 0, open: 0 },
+      upperZ: { base: -0.1, wind: 0, whip: 0, follow: 0, aim: 0, open: 0 },
+      lowerX: { base: -0.22, wind: 0, whip: 0.3, follow: 0.2, aim: 0, open: 0 },
+      lowerZ: -0.06,
+      handX: -0.06,
+    },
+  },
+  readyArm: { upperX: -0.42, upperAim: -0.18, upperZ: -0.18, lowerX: -0.1 },
   hurlLegs: {
     tuck: [0, 0.12, 0.3, 0.48],
     swing: [0.02, 0.3, 0.3, 0.48],

@@ -11,6 +11,7 @@ import {
   type ThrowType,
 } from "./combat";
 import {
+  FREE_ARM_DRIVES,
   POSE_TUNING,
   serializePoseTuning,
   type Beat,
@@ -355,6 +356,60 @@ function updateCamera(): void {
   camera.lookAt(focus);
 }
 
+const torsoBox = new THREE.Box3();
+const torsoCentre = new THREE.Vector3();
+const torsoHalf = new THREE.Vector3();
+const partProbe = new THREE.Vector3();
+
+/**
+ * How far clear of the torso the free arm is, in metres. Negative means it is
+ * inside the body.
+ *
+ * This is the one pose fault a picture cannot show you. The free arm folds
+ * across the chest on purpose, so the difference between going round the ribs
+ * and going through them is a few centimetres of one Euler angle — and the arm
+ * is drawn in front of the chest either way. Held across while the shoulder
+ * drove it down and back, the elbow once sat a quarter of a metre inside the
+ * torso for a fifth of the motion, and the only reason anybody found out was a
+ * measurement.
+ *
+ * It is a port of `inside_torso` in `tools/render_rigwalker_throw.py`, sign
+ * flipped so bigger is safer, and measured against the same three parts. The box
+ * is taken in the torso's **own** space, because the chest is twisted through
+ * most of a hurl and an axis-aligned box round a turned chest is a box round
+ * nothing.
+ */
+function freeArmClearance(unit: Rigwalker): number | null {
+  const torso = unit.group.getObjectByName("Torso");
+  if (!(torso instanceof THREE.Mesh)) return null;
+  torso.geometry.computeBoundingBox();
+  const bounds = torso.geometry.boundingBox;
+  if (!bounds) return null;
+  torsoBox.copy(bounds);
+  torsoBox.getCenter(torsoCentre);
+  torsoBox.getSize(torsoHalf).multiplyScalar(0.5);
+  let worst = Number.POSITIVE_INFINITY;
+  for (const name of ["Elbow.L", "Forearm.L", "Hand.L"]) {
+    // The glTF loader strips the dots out of a node's name, which is the same
+    // fallback `findCombatBones` needs. Without it this measured nothing at all
+    // and reported it as nothing to report.
+    const part = unit.group.getObjectByName(name) ??
+      unit.group.getObjectByName(name.replaceAll(".", ""));
+    if (!part) continue;
+    part.getWorldPosition(partProbe);
+    torso.worldToLocal(partProbe);
+    // Inside the box on every axis at once is inside the body; clear on any one
+    // of them is clear, so the axis with the most room is the one that decides.
+    const clearance = Math.max(
+      Math.abs(partProbe.x - torsoCentre.x) - torsoHalf.x,
+      Math.abs(partProbe.y - torsoCentre.y) - torsoHalf.y,
+      Math.abs(partProbe.z - torsoCentre.z) - torsoHalf.z,
+    );
+    worst = Math.min(worst, clearance);
+  }
+  return Number.isFinite(worst) ? worst : null;
+}
+
 /**
  * What the pose costs, in the fighter's own frame. The feet line is the same one
  * `feet=1` prints in the sim, from the same function, so a stance argued here
@@ -388,6 +443,11 @@ function renderReadout(): void {
     rock.getWorldPosition(rockProbe);
     rows.push(["rock", `${rockProbe.y.toFixed(2)} m`]);
   }
+  const clearance = current.role === "hurler" ? freeArmClearance(unit) : null;
+  if (clearance !== null) {
+    rows.push(["free arm", `${clearance >= 0 ? "clear " : "BURIED "}` +
+      `${Math.abs(clearance).toFixed(3)} m`]);
+  }
   rows.push(["feet", describeFeet(unit).replace(" · feet ", "")]);
 
   measureList.replaceChildren(...rows.flatMap(([name, value]) => {
@@ -395,6 +455,8 @@ function renderReadout(): void {
     term.textContent = name;
     const definition = document.createElement("dd");
     definition.textContent = value;
+    // The one row that is a pass or a fail rather than a reading.
+    if (name === "free arm") definition.className = clearance! < 0 ? "anim-failed" : "";
     return [term, definition];
   }));
 }
@@ -678,17 +740,81 @@ function buildEditor(): void {
   });
   arm.append(add);
 
+  const free = section(
+    `${type} · free arm`,
+    "The counterweight. Summed from the beats rather than keyed, because it has " +
+    "no arc to trace: it lifts, folds across the chest, and is driven down and " +
+    "back as the body untwists. Each row is one joint; each slider is how much " +
+    "of that beat it takes. Watch the free-arm clearance in the readout — this " +
+    "is the arm that goes through the ribs, and a silhouette will not show it.",
+  );
+  const drives = FREE_ARM_DRIVES[type];
+  const freeArm = POSE_TUNING.freeArm[type];
+  for (const joint of ["upperX", "upperZ", "lowerX"] as const) {
+    const group = document.createElement("div");
+    group.className = "anim-beat";
+    const heading = document.createElement("h3");
+    heading.textContent = FREE_ARM_LABELS[joint];
+    group.append(heading);
+    // Only the drives this throw has. A pitch has no aim and a toss has no wind,
+    // and a slider that multiplies zero is a slider that lies about doing
+    // something.
+    for (const drive of drives) {
+      control(group, drive, freeArm[joint][drive], -ANGLE_LIMIT, ANGLE_LIMIT, (next) => {
+        freeArm[joint][drive] = next;
+      });
+    }
+    free.append(group);
+  }
+  const held = document.createElement("div");
+  held.className = "anim-beat";
+  const heldHeading = document.createElement("h3");
+  heldHeading.textContent = "held";
+  held.append(heldHeading);
+  control(held, "forearm", freeArm.lowerZ, -ANGLE_LIMIT, ANGLE_LIMIT, (next) => {
+    freeArm.lowerZ = next;
+  });
+  control(held, "wrist", freeArm.handX, -ANGLE_LIMIT, ANGLE_LIMIT, (next) => {
+    freeArm.handX = next;
+  });
+  free.append(held);
+
   const ready = section(
     "ready pose",
-    "Both ends of all three arcs, and what a hurler stands in between throws. " +
-    "One copy, so changing throw never jumps the arm.",
+    "What a hurler stands in between throws, which is most of a fight. The " +
+    "throwing arm's is both ends of all three arcs as well — one copy, so " +
+    "changing throw never jumps it.",
   );
+  const throwing = document.createElement("div");
+  throwing.className = "anim-beat";
+  const throwingHeading = document.createElement("h3");
+  throwingHeading.textContent = "throwing arm";
+  throwing.append(throwingHeading);
   for (const field of ["upperX", "upperY", "upperZ", "lowerX", "handX"] as const) {
-    control(ready, field, POSE_TUNING.ready[field], -ANGLE_LIMIT, ANGLE_LIMIT, (next) => {
+    control(throwing, field, POSE_TUNING.ready[field], -ANGLE_LIMIT, ANGLE_LIMIT, (next) => {
       POSE_TUNING.ready[field] = next;
     });
   }
+  ready.append(throwing);
+  const readyFree = document.createElement("div");
+  readyFree.className = "anim-beat";
+  const readyFreeHeading = document.createElement("h3");
+  readyFreeHeading.textContent = "free arm";
+  readyFree.append(readyFreeHeading);
+  for (const field of ["upperX", "upperAim", "upperZ", "lowerX"] as const) {
+    control(readyFree, field, POSE_TUNING.readyArm[field], -ANGLE_LIMIT, ANGLE_LIMIT, (next) => {
+      POSE_TUNING.readyArm[field] = next;
+    });
+  }
+  ready.append(readyFree);
 }
+
+/** Which bone each free-arm row drives, in words rather than in axes. */
+const FREE_ARM_LABELS: Record<"upperX" | "upperZ" | "lowerX", string> = {
+  upperX: "shoulder · up",
+  upperZ: "shoulder · across",
+  lowerX: "elbow",
+};
 
 /**
  * The arm pose the arc already passes through at this phase, interpolated the
@@ -1001,6 +1127,22 @@ if (savedMark) {
   saveStatus.textContent = savedMark;
   saveStatus.className = "anim-saved";
 }
+
+/**
+ * A way in for a headless check, the way the sim exposes `__simCapture`. The
+ * measurements on this page are the ones a pose gets argued from, so something
+ * driving a browser has to be able to read them without scraping the panel.
+ */
+Object.assign(window, {
+  __anim: {
+    scene,
+    get subject() { return subject(); },
+    get phase() { return phase; },
+    get motion() { return motionKey; },
+    freeArmClearance: () => freeArmClearance(subject()),
+    tuning: POSE_TUNING,
+  },
+});
 
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {

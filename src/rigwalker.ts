@@ -1,6 +1,11 @@
 import * as THREE from "three";
 import { BalanceController, type BalancePose } from "./balance";
-import { POSE_TUNING, type Beat, type ThrowArmKey } from "./pose-tuning";
+import {
+  POSE_TUNING,
+  type Beat,
+  type FreeArmAngle,
+  type ThrowArmKey,
+} from "./pose-tuning";
 import type { RigwalkerAsset } from "./rigwalker-assets";
 import {
   BASE_FIGHT_DISTANCE,
@@ -497,6 +502,20 @@ function throwArmPose(throwType: ThrowType, phase: number): ThrowArmKey {
   return out;
 }
 
+/**
+ * One angle of the free arm: its own coefficients against the drives running
+ * this frame. Unlike the throwing arm this one is a sum, and can be, because it
+ * is a counterweight rather than an arc — see `FreeArmAngle` for which drives
+ * each throw actually has, and for why the opening gets a beat of its own.
+ */
+function freeArmAngle(
+  angle: FreeArmAngle,
+  wind: number, whip: number, follow: number, aim: number, open: number,
+): number {
+  return angle.base + angle.wind * wind + angle.whip * whip +
+    angle.follow * follow + angle.aim * aim + angle.open * open;
+}
+
 function throwDrive(throwType: ThrowType, phase: number): ThrowDrive {
   const beats = POSE_TUNING.throwBeats[throwType];
   return {
@@ -843,24 +862,12 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
     // Z carries the whole arm over the centre line so the flexion lands the
     // hand in front of the sternum rather than beside the ear.
     //
-    // It runs on the larger of the two wind beats rather than their sum. Draw
-    // and stride overlap, and adding them lifts the arm over the head halfway
-    // through the wind — the same trap the throwing arm's keys exist to avoid.
-    //
-    // The opening has to *lead* the swing-back, which is why it gets a beat of
-    // its own rather than riding the whip. Held across the chest while the
-    // shoulder drove it down and back, the elbow went a quarter of a metre
-    // inside the torso — measured, and visible in the game as the arm passing
-    // through the body instead of round it. `hurlLegs.open` gets the arm clear
-    // before the shoulder swings it through, exactly the rule the feet follow.
-    const sight = Math.max(draw, stride);
-    setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
-      -0.4 - 0.72 * sight + 1.35 * whip + 0.34 * follow - 0.34 * aim,
-      0, -0.14 - 0.5 * sight + 0.7 * beat(attackPhase, POSE_TUNING.hurlLegs.open) + 0.2 * follow);
-    setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
-      -0.08 + 0.72 * sight - 0.5 * whip + 0.2 * follow + 0.35 * aim,
-      0, -0.05);
-    setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
+    // Its coefficients are `POSE_TUNING.freeArm.hurl`, which is also where the
+    // two traps behind them are written down: the wind is the *larger* of draw
+    // and stride rather than their sum, and the opening leads the swing-back on
+    // a beat of its own instead of riding the whip.
+    setFreeArm(bones, "hurl",
+      Math.max(draw, stride), whip, follow, aim, beat(attackPhase, POSE_TUNING.hurlLegs.open));
 
     const legs = hurlLegs(attackPhase, { draw, stride, whip, follow });
     setLegs(bones,
@@ -876,16 +883,14 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
     setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08, -0.32 * coil, 0);
     setBoneOffset(bones.head, bones.bodyRest.head, -0.03 + 0.06 * aim, -0.24 * coil, 0);
 
-    // The free arm only counterbalances; there is no time to aim with it. Its
-    // elbow stays loose for the same reason the hurl's does.
-    // The small `follow` on the Z is the same fault as the hurl's, caught by
-    // the same check and a hundredth its size: without it the elbow grazes the
-    // torso by 5 mm as the arm settles back into the guard.
-    setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
-      -0.32 - 0.3 * draw + 0.75 * whip + 0.5 * follow, 0, -0.08 + 0.12 * follow);
-    setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
-      -0.18 - 0.04 * draw + 0.55 * whip + 0.45 * follow, 0, -0.05);
-    setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
+    // The free arm only counterbalances; there is no time to aim with it, and
+    // its wind is the draw rather than a hurl's larger of two. Its elbow stays
+    // loose for the same reason the hurl's does.
+    //
+    // The small `follow` on its Z is the same fault as the hurl's, caught by the
+    // same check and a hundredth its size: without it the elbow grazes the torso
+    // by 5 mm as the arm settles back into the guard.
+    setFreeArm(bones, "pitch", draw, whip, follow, 0, 0);
 
     // Bladed while it waits, square once it throws: a pitch is thrown off a
     // planted stance, and its legs are authored for that. Carrying the stance
@@ -912,11 +917,9 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
     setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08, -0.2 * coil, 0);
     setBoneOffset(bones.head, bones.bodyRest.head, -0.03, -0.16 * coil, 0);
 
-    setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
-      -0.34 + 0.3 * whip + 0.2 * follow, 0, -0.1);
-    setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL,
-      -0.22 + 0.3 * whip + 0.2 * follow, 0, -0.06);
-    setBoneOffset(bones.handL, bones.armRest.handL, -0.06, 0, 0);
+    // A toss is gone before the body has moved, so its free arm has no wind and
+    // nothing to aim with: it only gives a little back as the arm comes down.
+    setFreeArm(bones, "toss", 0, whip, follow, 0, 0);
 
     const upperL = 0.06 + HURLER_STANCE * ready - 0.08 * whip + combatStep;
     const lowerL = STANDING_KNEE - HURLER_LOAD * ready + 0.14 * draw + 0.1 * whip;
@@ -933,14 +936,33 @@ function applyThrowPose(bones: CombatBones, input: ThrowPoseInput): void {
   // folding the elbow — a folded elbow at this height reads as a gesture rather
   // than a guard, and it is the pose a hurler holds for longest.
   if (ready > 0.001) {
+    const readyArm = POSE_TUNING.readyArm;
     addBoneOffset(bones.root, 0, ready * 0.16, -ready * 0.05);
     addBoneOffset(bones.chest, 0, ready * 0.12, 0);
     addBoneOffset(bones.neck, 0, -ready * 0.16, 0);
-    addBoneOffset(bones.upperArmL, -ready * (0.42 + aim * 0.18), 0, -ready * 0.18);
-    addBoneOffset(bones.lowerArmL, -ready * 0.1, 0, 0);
+    addBoneOffset(bones.upperArmL,
+      ready * (readyArm.upperX + aim * readyArm.upperAim), 0, ready * readyArm.upperZ);
+    addBoneOffset(bones.lowerArmL, ready * readyArm.lowerX, 0, 0);
   }
 
   addHitReaction(bones, line, hitPhase, intensity);
+}
+
+/**
+ * The free arm, from the throw's own coefficients and the drives running this
+ * frame. All three throws set the same three bones; only the numbers differ, and
+ * they are all in `POSE_TUNING.freeArm` where the tool can reach them.
+ */
+function setFreeArm(
+  bones: CombatBones, throwType: ThrowType,
+  wind: number, whip: number, follow: number, aim: number, open: number,
+): void {
+  const pose = POSE_TUNING.freeArm[throwType];
+  const angle = (name: "upperX" | "upperZ" | "lowerX") =>
+    freeArmAngle(pose[name], wind, whip, follow, aim, open);
+  setBoneOffset(bones.upperArmL, bones.armRest.upperArmL, angle("upperX"), 0, angle("upperZ"));
+  setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL, angle("lowerX"), 0, pose.lowerZ);
+  setBoneOffset(bones.handL, bones.armRest.handL, pose.handX, 0, 0);
 }
 
 /** Sets both legs and cancels each ankle, so the soles stay flat on the ground. */

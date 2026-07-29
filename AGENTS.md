@@ -334,8 +334,23 @@ edits is `src/pose-tuning.ts`.
   motion's own fighting distance, so a cut has its opponent in frame and a throw
   does not.
 - The readout is live, after every pose layer: engagement, the step's forward
-  and drop, the rock's height off the ground, and the same feet string `feet=1`
-  prints in the sim, from the same `describeFeet`.
+  and drop, the rock's height off the ground, the free arm's clearance, and the
+  same feet string `feet=1` prints in the sim, from the same `describeFeet`.
+- **The free arm is editable and its clearance is measured, together.** The one
+  pose fault a picture cannot show you is this arm going *through* the chest
+  rather than round it — it is drawn in front of the torso either way, and the
+  difference is a few centimetres of one Euler angle. So the readout ports
+  `inside_torso` from the Blender tool, sign flipped so bigger is safer, and
+  turns red when the elbow, forearm or hand is inside the body. Verified against
+  that tool to the millimetre: 0.259 m clear at phase 0, 0.345 at 0.40, and 0.069
+  at 0.92, which is the tightest moment of a hurl and the first number to go
+  negative if this arm is pushed around.
+- The throwing arm is keyed and the free arm is summed, and that is not an
+  inconsistency: the throwing arm traces an arc through a narrow band of Euler
+  angles a sum walks out of, and the free arm has no arc to trace. Its editor is
+  one row per joint, one slider per beat, showing only the drives that throw
+  actually has — a pitch has no aim and a toss has no wind, and a slider that
+  multiplies zero is a slider that lies about doing something.
 - The timeline draws every beat as a band where it fades in and out, the arm
   keys as ticks, and the release phase as a dashed marker. Dragging it scrubs.
 - The balance layer is a damped spring, so a scrub takes a moment to settle.
@@ -356,6 +371,10 @@ Two consequences of saving worth knowing:
   frame, and carries the confirmation across in `saved=`.
 - **`Revert` means "back to what this page loaded with"**, which after a save is
   the saved values. To undo a save, use git.
+
+`window.__anim` exposes the scene, the subject, the phase and the clearance
+function, the way the sim exposes `__simCapture`, so a headless check can read a
+measurement instead of scraping the panel.
 
 `src/pose-tuning.test.ts` pins that `serializePoseTuning()` emits exactly what is
 checked in, so a save with nothing edited cannot rewrite the file, and that every
