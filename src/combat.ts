@@ -430,11 +430,26 @@ const STONE_LINES: Record<StoneStrike, AttackLine> = {
  */
 const STONE_REACTION_WINDOW = 0.85;
 /**
- * How far apart two blows have to be arriving from before one guard cannot
- * answer both. Roughly fifty degrees: two swordsmen shoulder to shoulder are one
- * problem, and two working opposite hips are two.
+ * How far apart two attackers have to be working from before one guard cannot
+ * answer both.
+ *
+ * Measured rather than picked. Two swordsmen on one target at fighting distance
+ * are held apart by the clearance floor and subtend about 39°; pushed out to a
+ * flanking pair, about 51°. At the fifty degrees this started at, the common
+ * case never qualified and the cover was seen roughly once a fight — reported
+ * from play as only ever seeing it on a corpse, which is exactly what it looked
+ * like, because a defeated fighter keeps the last pose it was given.
+ *
+ * Twenty-nine degrees is what two bodies genuinely on different sides of you
+ * comes to. One attacker can never reach it: two bearings are needed.
  */
-const STONE_COVER_ARC = 0.9;
+const STONE_COVER_ARC = 0.5;
+/**
+ * How much further than its reach an attacker counts as working a fighter. A
+ * supporter circling for an opening is not swinging, but it is why the guard
+ * stays up.
+ */
+const STONE_COVER_SLACK = 1.35;
 /**
  * Where in a cut the blow arrives, for working out how long there is left. The
  * outcome resolves at 0.46 and the damage lands at 0.54, so it is between them.
@@ -494,7 +509,18 @@ const EMPTY_CUE: CombatCue = {
  * lands. A hurler reads its whole close fight off this — the strike it picks
  * comes off the urgency and the guard it puts up comes off the bearings.
  */
-type Incoming = { bearings: number[]; urgency: number };
+type Incoming = {
+  /**
+   * Bearings of every enemy engaged on this fighter in melee, whether or not it
+   * has committed to a blow yet. Deliberately looser than `urgency`: whether to
+   * get the second arm up is a slower judgement than which strike to make. One
+   * is "who is working me", the other is "what lands soonest", and sharing a
+   * window between them is what made the cover a single-frame flinch.
+   */
+  bearings: number[];
+  /** How little time before the soonest *committed* blow lands. */
+  urgency: number;
+};
 
 /** Nothing arriving, shared rather than allocated per lookup. */
 const NOTHING_INCOMING: Incoming = { bearings: [], urgency: 0 };
@@ -819,12 +845,18 @@ export class CombatDirector {
       } else this.advanceEncounter(encounter, a, b, delta, cues, damage, events);
     }
 
-    // The second arm, and only once the whole frame's cues are in. Which fighters
-    // are answering two blows at once cannot be known while the encounters are
-    // still being walked — the second attacker may not have written its cue yet —
-    // and a guard that came up half the time would read as a twitch.
+    // The second arm, and only once the whole frame's cues are in: which fighters
+    // are being worked by two enemies cannot be known while the encounters are
+    // still being walked, because the second one may not have written its cue.
+    //
+    // A cover is a posture and not a flinch, so it is held for as long as two
+    // bodies are on the fighter rather than only on the frames a blow lands.
+    // Gated to `block` and `hit` it was up for one per cent of a crowded fight —
+    // and the one place it lasted was on a corpse, which keeps whatever pose it
+    // died in. The one thing it is not compatible with is swinging: a fighter
+    // committed to a strike has that arm doing something else.
     for (const [id, cue] of cues) {
-      if (cue.action !== "block" && cue.action !== "hit") continue;
+      if (cue.action === "attack" || cue.action === "idle") continue;
       cue.doubleGuard = this.isCovering(id);
     }
 
@@ -843,19 +875,40 @@ export class CombatDirector {
    */
   private readIncoming(byId: Map<number, CombatantSnapshot>): void {
     this.incoming.clear();
-    for (const encounter of this.encounters.values()) {
-      const exchange = encounter.exchange;
-      const remaining = this.timeToContact(exchange);
-      if (remaining === null || remaining > STONE_REACTION_WINDOW) continue;
-      const attacker = byId.get(exchange.attackerId);
-      const defender = byId.get(exchange.defenderId);
-      if (!attacker || !defender) continue;
-      let entry = this.incoming.get(defender.id);
+    const entryFor = (id: number) => {
+      let entry = this.incoming.get(id);
       if (!entry) {
         entry = { bearings: [], urgency: 0 };
-        this.incoming.set(defender.id, entry);
+        this.incoming.set(id, entry);
       }
-      entry.bearings.push(Math.atan2(attacker.x - defender.x, attacker.z - defender.z));
+      return entry;
+    };
+    for (const encounter of this.encounters.values()) {
+      const exchange = encounter.exchange;
+      // Who is working whom, which is what the guard is decided from. A charge
+      // is one-sided, so only the target is being worked; a trade is both ways.
+      // A supporter circling for an opening is filed too — it is not swinging,
+      // and it is exactly why the guard stays up.
+      if (!encounter.ranged) {
+        const a = byId.get(encounter.a);
+        const b = byId.get(encounter.b);
+        const reach = exchange.attackRange * STONE_COVER_SLACK;
+        if (a && b && this.distance(a, b) <= reach) {
+          entryFor(b.id).bearings.push(Math.atan2(a.x - b.x, a.z - b.z));
+          if (!encounter.support) {
+            entryFor(a.id).bearings.push(Math.atan2(b.x - a.x, b.z - a.z));
+          }
+        }
+      }
+      // And what is actually on its way, which is what the *strike* is chosen
+      // from. Strict on purpose: a rock still being wound up twelve metres away
+      // can be re-aimed and may never be thrown, so it is not pressure, while a
+      // rock already in the air is, and so is a blade halfway through its cut.
+      const remaining = this.timeToContact(exchange);
+      if (remaining === null || remaining > STONE_REACTION_WINDOW) continue;
+      const defender = byId.get(exchange.defenderId);
+      if (!defender) continue;
+      const entry = entryFor(defender.id);
       entry.urgency = Math.max(entry.urgency, 1 - remaining / STONE_REACTION_WINDOW);
     }
   }
@@ -876,11 +929,9 @@ export class CombatDirector {
   }
 
   /**
-   * Whether this fighter has more coming at it than one guard can answer: two
-   * blows on the way, far enough apart in bearing that meeting one turns the
-   * body away from the other. Two swordsmen shoulder to shoulder are one
-   * problem; two working opposite hips are two, and the answer to two is to stop
-   * choosing and cover.
+   * Whether this fighter has more on it than one guard can answer: two enemies
+   * working it from bearings far enough apart that turning into one turns the
+   * body away from the other. The answer to two is to stop choosing and cover.
    */
   private isCovering(id: number): boolean {
     const bearings = this.incoming.get(id)?.bearings;

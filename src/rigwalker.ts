@@ -1356,8 +1356,12 @@ type StonePoseInput = {
   defensePhase: number;
   /** 0..1 through a blow genuinely arriving, or -1. See `PARRY_MEET`. */
   blockPhase: number;
-  /** Both forearms up rather than one, because more than one blow is arriving. */
-  doubleGuard: boolean;
+  /**
+   * How far up the second forearm is, 0..1. A blend rather than the cue's own
+   * boolean, because a cover is held for as long as two bodies are on the
+   * fighter and has to be raised and lowered rather than switched.
+   */
+  cover: number;
   defenseSide: number;
   hitPhase: number;
   line: AttackLine;
@@ -1378,7 +1382,7 @@ function blendArm(out: ThrowArmKey, to: ThrowArmKey, amount: number): ThrowArmKe
 
 function applyStonePose(bones: CombatBones, input: StonePoseInput): void {
   const {
-    strike, attackPhase, defensePhase, blockPhase, doubleGuard, defenseSide,
+    strike, attackPhase, defensePhase, blockPhase, cover, defenseSide,
     hitPhase, line, intensity, combatStep,
   } = input;
   const striking = strike !== null && attackPhase >= 0;
@@ -1398,7 +1402,12 @@ function applyStonePose(bones: CombatBones, input: StonePoseInput): void {
     : 0;
   const meeting = beat(blockPhase, PARRY_MEET) * (1 - active);
   const jarring = beat(blockPhase, PARRY_JAR) * (1 - active);
-  const covering = doubleGuard ? Math.max(guarding, meeting) : 0;
+  // The cover stands on its own rather than riding the guard beat. Multiplied
+  // through `guarding`, it could only appear on the frames a blow was being
+  // answered — so a posture meant to be held while two fighters worked the
+  // hurler flashed on and off inside single exchanges. All a strike may do is
+  // take the arms back for as long as it owns them.
+  const covering = cover * (1 - active);
   const hitShock = hitPhase >= 0 ? Math.sin(Math.min(1, hitPhase) * Math.PI) * intensity : 0;
 
   // The body. The chest is given more of the coil than the hips and is given it
@@ -1979,6 +1988,13 @@ export function createRigwalker(
   /** A swing is 0.82 s to 1.08 s, so this is the middle of what a block runs at. */
   let blockRate = 1.05;
   let defenseSide = 1;
+  /**
+   * How far up the second forearm is. The director says whether two bodies are
+   * on this fighter; how fast the arms answer that is presentation, and it has
+   * to be a ramp — the condition flickers as attackers circle, and switched
+   * straight through, the arm would strobe.
+   */
+  let coverBlend = 0;
   let hitReactionSide: -1 | 1 = 1;
   let defeatElapsed = -1;
   const defeatStartRotation = new THREE.Quaternion();
@@ -2304,6 +2320,9 @@ export function createRigwalker(
       if (blockPlayhead >= 1) blockPlayhead = -1;
     }
     const blockPhase = blockPlayhead;
+    coverBlend = THREE.MathUtils.damp(
+      coverBlend, combatCue?.doubleGuard ? 1 : 0, 9, delta,
+    );
     defenseSide = combatCue?.side ?? defenseSide;
     const hitPhase = combatCue?.action === "hit" ? combatCue.phase : -1;
 
@@ -2661,7 +2680,7 @@ export function createRigwalker(
             attackPhase,
             defensePhase,
             blockPhase,
-            doubleGuard: combatCue?.doubleGuard ?? false,
+            cover: coverBlend,
             defenseSide,
             hitPhase,
             line,

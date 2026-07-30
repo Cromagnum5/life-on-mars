@@ -194,31 +194,47 @@ describe("a hurler charged into the close fight", () => {
     }
   });
 
-  it("gets both arms up when blows arrive from two bearings and one when they do not", () => {
+  it("holds a cover while two bodies work it, and never against one", () => {
+    // A cover is a posture, not a flinch. Gated to the frames a blow was landing
+    // it was up for one per cent of a crowded fight — which in play meant it was
+    // only ever seen on a corpse, because a defeated fighter keeps the last pose
+    // it was given. It is held now for as long as two enemies are on the
+    // fighter, and dropped only to swing.
     const covering = (positions: ReadonlyArray<readonly [number, number]>) => {
       const random = createSeededRandom(9);
       const fighters = [at(1, "A", 0, 0, random, "hurler")];
       positions.forEach(([x, z], index) =>
         fighters.push(at(index + 2, "B", x, z, random, "melee")));
       const { cues } = pinned(9, 20, fighters);
-      let guards = 0;
       let doubles = 0;
+      let striking = 0;
       for (const frame of cues) {
         const cue = frame.get(1);
-        if (cue?.action !== "block" && cue?.action !== "hit") continue;
-        guards += 1;
-        if (cue.doubleGuard) doubles += 1;
+        if (cue?.doubleGuard) doubles += 1;
+        if (cue?.action === "attack") striking += 1;
       }
-      return { guards, doubles };
+      return { doubles, striking, frames: cues.length };
     };
-    // Worked from opposite sides, it stops choosing and covers.
-    const opposed = covering([[STONE_FIGHT_DISTANCE, 0], [-STONE_FIGHT_DISTANCE, 0.3]]);
-    expect(opposed.guards).toBeGreaterThan(0);
-    expect(opposed.doubles).toBeGreaterThan(0);
-    // Shoulder to shoulder they are one problem, and one arm answers it.
-    const together = covering([[STONE_FIGHT_DISTANCE, 0.9], [STONE_FIGHT_DISTANCE, -0.9]]);
-    expect(together.guards).toBeGreaterThan(0);
-    expect(together.doubles).toBe(0);
+    // Two bodies on different bearings. The clearance floor holds a pair about
+    // 39° apart at fighting distance, so that is the case that has to work —
+    // written at fifty degrees, the common one never qualified at all.
+    for (const pair of [
+      [[STONE_FIGHT_DISTANCE, 0], [-STONE_FIGHT_DISTANCE, 0.3]],
+      [[STONE_FIGHT_DISTANCE, 1.3], [STONE_FIGHT_DISTANCE, -1.3]],
+      [[STONE_FIGHT_DISTANCE, 0.95], [STONE_FIGHT_DISTANCE, -0.95]],
+    ] as ReadonlyArray<ReadonlyArray<readonly [number, number]>>) {
+      const worked = covering(pair);
+      expect(worked.doubles / worked.frames, `cover up ${worked.doubles}/${worked.frames}`)
+        .toBeGreaterThan(0.4);
+      // But not while it is swinging: that arm has something else to do.
+      expect(worked.doubles + worked.striking).toBeLessThanOrEqual(worked.frames);
+    }
+    // One enemy is one problem, and one arm answers it — two bearings are needed
+    // and there is only ever one.
+    expect(covering([[STONE_FIGHT_DISTANCE, 0]]).doubles).toBe(0);
+    // And two stacked on the same line are one problem as well.
+    expect(covering([[STONE_FIGHT_DISTANCE, 0], [STONE_FIGHT_DISTANCE + 1.6, 0.1]]).doubles)
+      .toBe(0);
   });
 
   it("drops out of its team's battery while it is fighting", () => {

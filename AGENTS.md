@@ -540,15 +540,39 @@ give you the time for it, which is the whole of the decision.
   distinction is the whole value of the reading: it is what a fighter could
   actually see coming.
 - **One arm against one blow, both against two from different bearings.**
-  `isCovering` compares the bearings of everything arriving; more than about
-  fifty degrees apart and one guard cannot answer both, so the cue carries
-  `doubleGuard` and the pose puts up a boxer's high cover. It is worth something
-  mechanically as well as visually — `STONE_COVER_RECOVERY` buys back most of the
-  penalty a hurler pays for defending with arms rather than steel.
+  `isCovering` compares the bearings of the enemies working a fighter; far enough
+  apart and one guard cannot answer both, so the cue carries `doubleGuard` and
+  the pose puts up a boxer's high cover. It is worth something mechanically as
+  well as visually — `STONE_COVER_RECOVERY` buys back most of the penalty a
+  hurler pays for defending with arms rather than steel. Two swords still kill a
+  hurler in every seed at a median of 7.6 s; the cover makes it defend itself,
+  not survive.
 - **The `doubleGuard` pass runs after every encounter has written its cue.**
-  Which fighters are answering two blows cannot be known mid-walk, because the
-  second attacker may not have written yet, and a guard that came up half the
-  time reads as a twitch.
+  Which fighters are being worked by two enemies cannot be known mid-walk,
+  because the second one may not have written yet.
+- **A cover is a posture, not a flinch, and three things had to be right before
+  it was one.** Reported from play as only ever being seen on a corpse — which
+  is literally what was happening, since a defeated fighter keeps whatever pose
+  it was last given and `update` returns before posing once health hits zero. It
+  was up for about one per cent of a crowded fight. All three:
+  - **The arc has to be reachable.** Two swordsmen on one target at fighting
+    distance are held apart by the clearance floor and subtend about 39°, or
+    about 51° as a flanking pair. Written at 50°, the common case never
+    qualified. `STONE_COVER_ARC` is 0.5 rad — what two bodies genuinely on
+    different sides of you comes to. One attacker can never reach it; two
+    stacked on the same line do not either.
+  - **Who is working you and what lands soonest are different questions.**
+    `Incoming.bearings` is filed from every melee encounter within reach whether
+    or not it has committed — a supporter circling for an opening is why the
+    guard stays up. `Incoming.urgency` stays strict, because that one is about
+    whether there is time to load a swing. Sharing one window between them meant
+    each attacker only counted for the ~44% of its cycle it was committed, and
+    two coinciding was rare.
+  - **It is held on every frame the fighter is not swinging**, not only on the
+    ones a blow lands. It reads as up about 70% of a two-on-one now, dropped
+    only to strike, and eased in and out by a damped blend in `rigwalker.ts` —
+    the condition flickers as attackers circle, and switched straight through,
+    the arm strobes.
 - **A hurler is charged into a duel; it never walks into one.** Two ways in, and
   neither is redundant. The promotion pass turns a swordsman's support encounter
   into a trade once the charger is inside `STONE_RANGE`. The mutual-candidate
