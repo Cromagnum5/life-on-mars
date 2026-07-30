@@ -1354,21 +1354,6 @@ export function createRigwalker(
    */
   const variation = Math.floor(random() * 997);
 
-  const contactShadow = new THREE.Mesh(
-    new THREE.CircleGeometry(0.72, 24),
-    new THREE.MeshBasicMaterial({
-      color: 0x170b08,
-      transparent: true,
-      opacity: 0.38,
-      depthWrite: false,
-    }),
-  );
-  contactShadow.name = "Rigwalker contact shadow";
-  contactShadow.position.y = -0.17;
-  contactShadow.rotation.x = -Math.PI / 2;
-  contactShadow.scale.set(0.78, 1.15, 1);
-  group.add(contactShadow);
-
   const selectionRing = new THREE.Mesh(
     new THREE.RingGeometry(0.72, 0.84, 32),
     new THREE.MeshBasicMaterial({
