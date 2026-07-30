@@ -416,6 +416,15 @@ export class CombatDirector {
       primaryParticipants.add(encounter.a);
       primaryParticipants.add(encounter.b);
       promotedTargets.add(encounter.b);
+      // Turning to fight is now the whole of what the target does, so whatever
+      // it was walking at is let go: a fighter driving one encounter while
+      // defending another writes two cues a frame and reads as neither. This is
+      // what lets a screen hold. The fighter it drops re-acquires as soon as
+      // this pair breaks, and the target it drops is only ever a one-sided one,
+      // since anything mutual is already a primary participant.
+      for (const [key, other] of this.encounters) {
+        if (other.a === encounter.b) this.encounters.delete(key);
+      }
     }
 
     const reserved = new Set<number>();
@@ -470,7 +479,7 @@ export class CombatDirector {
       reserved.add(hurler.id);
     }
 
-    const primaryThreats: Array<{
+    const threats: Array<{
       ally: CombatantSnapshot; target: CombatantSnapshot; ranged: boolean;
     }> = [];
     for (const encounter of this.encounters.values()) {
@@ -480,16 +489,24 @@ export class CombatDirector {
       if (encounter.ranged) {
         // The fighter being shelled is the ally worth helping, and the hurler is
         // the thing to walk at.
-        primaryThreats.push({ ally: b, target: a, ranged: true });
-      } else if (!encounter.support) {
-        primaryThreats.push(
+        threats.push({ ally: b, target: a, ranged: true });
+      } else if (encounter.support) {
+        // A one-sided attacker threatens the fighter it is walking at like any
+        // other. Leaving these out made a fighter that already had a target
+        // invisible to the enemy it walked past to reach it: four swordsmen
+        // charging the hurlers behind a screen gave that screen nothing to do,
+        // because every one of them was busy. Only the fighter under attack is
+        // published — the attacker is already somebody's target.
+        threats.push({ ally: b, target: a, ranged: false });
+      } else {
+        threats.push(
           { ally: a, target: b, ranged: false }, { ally: b, target: a, ranged: false },
         );
       }
     }
     for (const helper of living) {
       if (reserved.has(helper.id)) continue;
-      const choices = primaryThreats
+      const choices = threats
         .filter(({ ally, target, ranged }) =>
           ally.corporation === helper.corporation &&
           // A fighter cannot help itself against a swordsman it is already

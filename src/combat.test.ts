@@ -7,6 +7,7 @@ import {
   createCombatProfile,
   type CombatCue,
   type CombatEvent,
+  type CombatRole,
   type CombatantSnapshot,
 } from "./combat";
 
@@ -23,6 +24,8 @@ function fighter(
   corporation: string,
   x: number,
   random: () => number,
+  role: CombatRole = "melee",
+  z = 0,
 ): CombatantSnapshot {
   return {
     id,
@@ -31,8 +34,9 @@ function fighter(
     maxHealth: 100,
     isAlive: true,
     x,
-    z: 0,
+    z,
     profile: createCombatProfile(random),
+    role,
   };
 }
 
@@ -135,6 +139,51 @@ describe("CombatDirector", () => {
     fighters[0].health = 20;
     const cues = director.update(1 / 30, fighters).cues;
     expect(cues.get(5)?.targetId).toBe(2);
+  });
+
+  it("lets a screen engage chargers that already have the hurlers targeted", () => {
+    const random = seededRandom(31);
+    const director = new CombatDirector(random);
+    const screen = [
+      fighter(1, "A", -10, random, "melee", -0.7),
+      fighter(2, "A", -10, random, "melee", 0.7),
+    ];
+    const hurlers = [
+      fighter(3, "A", -13.5, random, "hurler", -1.4),
+      fighter(4, "A", -13.5, random, "hurler", 1.4),
+    ];
+    const chargers = [5, 6, 7, 8].map((id, index) =>
+      fighter(id, "B", 2, random, "melee", (index - 1.5) * 1.4));
+    const fighters = [...screen, ...hurlers, ...chargers];
+    const hurlerIds = new Set(hurlers.map((item) => item.id));
+
+    // A hurler reaches across the field long before two swordsmen notice each
+    // other, so on the walk in every charger picks a hurler while the screen is
+    // still outside melee awareness. That ordering is the whole test: it is what
+    // left the screen with nothing to do.
+    const opening = director.update(1 / 30, fighters).cues;
+    for (const charger of chargers) {
+      expect(hurlerIds.has(opening.get(charger.id)!.targetId!)).toBe(true);
+    }
+    for (const unit of screen) expect(opening.get(unit.id)?.targetId).toBeNull();
+
+    // The chargers arrive at the screen, every one of them already spoken for.
+    for (const charger of chargers) charger.x = -8;
+    const contact = director.update(1 / 30, fighters).cues;
+    const held = screen.map((unit) => contact.get(unit.id)!.targetId);
+    for (const target of held) expect(chargers.some((item) => item.id === target)).toBe(true);
+    expect(new Set(held).size).toBe(2);
+
+    // Held means held: the charger turns on the swordsman rather than driving
+    // its own attack at the same time, which leaves the far hurler free.
+    const mutual = director.update(1 / 30, fighters).cues;
+    for (const unit of screen) {
+      const target = mutual.get(unit.id)!.targetId!;
+      expect(mutual.get(target)?.targetId).toBe(unit.id);
+    }
+    const stillCharging = chargers.filter((charger) =>
+      hurlerIds.has(mutual.get(charger.id)?.targetId ?? -1));
+    expect(stillCharging).toHaveLength(2);
   });
 
   it("never applies damage to a successfully blocked action", () => {
