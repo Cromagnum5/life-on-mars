@@ -48,24 +48,57 @@ def offset(rig,name,xyz):
     q=Euler(xyz,'ZYX').to_quaternion()
     b.rotation_quaternion=rests[rig][name] @ q
 
-def pose_combat(rig, phase, side=1, guarding=0, hit=0):
+def smoothstep(x, lo, hi):
+    if x <= lo: return 0.
+    if x >= hi: return 1.
+    t = (x - lo) / (hi - lo)
+    return t * t * (3 - 2 * t)
+
+def beat(phase, b):
+    # `beat` in rigwalker.ts. The older ramps in pose_combat below are linear
+    # approximations of the same idea, kept as they were; anything added since
+    # matches the runtime's curve.
+    if phase < 0: return 0.
+    return smoothstep(phase, b[0], b[1]) * (1 - smoothstep(phase, b[2], b[3]))
+
+# PARRY_MEET, PARRY_JAR and PARRY_ARM in rigwalker.ts. Hand-ported, like the rest
+# of this file: change one and change the other or the two instruments are
+# describing different animations.
+PARRY_MEET = (.34, .47, .53, .74)
+PARRY_JAR = (.47, .57, .64, .88)
+PARRY_ARM = dict(shoulder=(-1.15, 1.23, -.07), elbow=(-.24, 0., .15))
+
+def lerp(a, b, t):
+    return a + (b - a) * t
+
+def pose_combat(rig, phase, side=1, guarding=0, hit=0, block_phase=-1):
     winding=max(0,min(1,phase/.28))*(1-max(0,min(1,(phase-.28)/.30))) if phase>=0 else 0
     cutting=max(0,min(1,(phase-.28)/.28))*(1-max(0,min(1,(phase-.68)/.32))) if phase>=0 else 0
     impact=max(0,min(1,(phase-.38)/.16))*(1-max(0,min(1,(phase-.62)/.20))) if phase>=0 else 0
     follow=max(0,min(1,(phase-.54)/.16))*(1-max(0,min(1,(phase-.82)/.18))) if phase>=0 else 0
     shock=math.sin(min(1,hit)*math.pi) if hit>=0 else 0
     twist=side*(winding*-.58+impact*.76+follow*.28)
-    offset(rig,'root',(0,twist*.28,0)); offset(rig,'spine',(.04+cutting*.1-shock*.12,twist*.52,side*(winding-cutting)*.08)); offset(rig,'chest',(.03+cutting*.12-shock*.14,twist*.72,side*(winding-cutting)*.13))
+    parrying=beat(block_phase,PARRY_MEET); jar=beat(block_phase,PARRY_JAR)
+    brace=parrying*.05-jar*.07
+    offset(rig,'root',(brace,twist*.28,0)); offset(rig,'spine',(.04+cutting*.1-shock*.12+brace*.8,twist*.52,side*(winding-cutting)*.08)); offset(rig,'chest',(.03+cutting*.12-shock*.14+brace*.6,twist*.72,side*(winding-cutting)*.13))
     offset(rig,'neck',(.08+cutting*.08-shock*.12,-twist*.46,0)); offset(rig,'head',(-.03+shock*.1,-twist*.34,0))
-    # Enlarged runtime-like weapon arc for readable RTS silhouettes.
-    offset(rig,'upper_arm.R',(-.3-winding*.72-impact*.2+follow*.16-guarding*.22,side*(.1+winding*.22-impact*.38-follow*.22),side*(-.05-winding*.18+impact*.26+follow*.14)))
-    offset(rig,'lower_arm.R',(-.5-winding*.68+impact*.3+follow*.16-guarding*.24,side*(winding*.18-impact*.28-follow*.14),side*(.04+winding*.08-impact*.1+guarding*.08)))
+    # Enlarged runtime-like weapon arc for readable RTS silhouettes. The parry owns
+    # the sword arm while it lasts rather than adding to the guard, so these two
+    # bones are blended to PARRY_ARM, not offset by it.
+    offset(rig,'upper_arm.R',(
+        lerp(-.3-winding*.72-impact*.2+follow*.16-guarding*.22,PARRY_ARM['shoulder'][0],parrying)-jar*.12,
+        lerp(side*(.1+winding*.22-impact*.38-follow*.22),PARRY_ARM['shoulder'][1],parrying),
+        lerp(side*(-.05-winding*.18+impact*.26+follow*.14),PARRY_ARM['shoulder'][2],parrying)))
+    offset(rig,'lower_arm.R',(
+        lerp(-.5-winding*.68+impact*.3+follow*.16-guarding*.24,PARRY_ARM['elbow'][0],parrying)+jar*.22,
+        lerp(side*(winding*.18-impact*.28-follow*.14),PARRY_ARM['elbow'][1],parrying),
+        lerp(side*(.04+winding*.08-impact*.1+guarding*.08),PARRY_ARM['elbow'][2],parrying)))
     contact_x=.8 if side>0 else -1.2; contact_y=.25 if side>0 else 0; contact_z=2 if side>0 else 1.5
     offset(rig,'hand.R',((-.1-winding*.22)*(1-impact)+contact_x*impact+follow*.2,side*(-.12-winding*.26)*(1-impact)+contact_y*impact-side*follow*.12,side*(.12+winding*.18)*(1-impact)+contact_z*impact+side*follow*.3))
     offset(rig,'upper_arm.L',(-.24-guarding*.28,-side*(.08+winding*.1-impact*.08),-side*(.04+winding*.06)))
     offset(rig,'lower_arm.L',(-.38-guarding*.26,-side*(.06+winding*.08-impact*.06),-side*(.03+guarding*.05)))
     offset(rig,'hand.L',(-.06+guarding*.12,-side*.06,-side*.06))
-    lead=side*(impact*.24+follow*.08-winding*.16+guarding*.08-shock*.04); stance=.11; knee=.22
+    lead=side*(impact*.24+follow*.08-winding*.16+guarding*.08-shock*.04+parrying*.06); stance=.11; knee=.22
     ul=stance-lead; ll=knee+lead; ur=-stance+lead; lr=knee-lead
     offset(rig,'upper_leg.L',(ul,0,guarding*.025)); offset(rig,'lower_leg.L',(ll,0,0)); offset(rig,'foot.L',(-(ul+ll),0,-guarding*.025))
     offset(rig,'upper_leg.R',(ur,0,-guarding*.025)); offset(rig,'lower_leg.R',(lr,0,0)); offset(rig,'foot.R',(-(ur+lr),0,guarding*.025))
@@ -88,10 +121,16 @@ for f in range(1,169):
         rootA.location.y=-1.325; rootB.location.y=1.325
         cycle=(f-59)%54; attacker=((f-59)//54)%2
         phase=min(1,cycle/34) if cycle<=34 else -1
+        # The defender is given the attacker's own phase from 0.34 on, which is
+        # where the director starts saying `block`, so the parry lands on the frame
+        # the swing does.
+        block=phase if phase>=.34 else -1
+        guard=math.sin(min(1,cycle/34)*math.pi)
+        hit=(cycle-18)/12 if 18<=cycle<=30 else -1
         if attacker==0:
-            pose_combat(rigA,phase,1); pose_combat(rigB,-1,-1,guarding=math.sin(min(1,cycle/34)*math.pi),hit=(cycle-18)/12 if 18<=cycle<=30 else -1)
+            pose_combat(rigA,phase,1); pose_combat(rigB,-1,-1,guarding=guard,hit=hit,block_phase=block)
         else:
-            pose_combat(rigB,phase,-1); pose_combat(rigA,-1,1,guarding=math.sin(min(1,cycle/34)*math.pi),hit=(cycle-18)/12 if 18<=cycle<=30 else -1)
+            pose_combat(rigB,phase,-1); pose_combat(rigA,-1,1,guarding=guard,hit=hit,block_phase=block)
     for root in (rootA,rootB): root.keyframe_insert('location',frame=f)
     for rig in (rigA,rigB):
         for b in rig.pose.bones: b.keyframe_insert('rotation_quaternion',frame=f)

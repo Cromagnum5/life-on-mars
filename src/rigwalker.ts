@@ -225,6 +225,10 @@ function smoothRange(value: number, start: number, end: number): number {
   return THREE.MathUtils.smoothstep(value, start, end);
 }
 
+function lerp(from: number, to: number, amount: number): number {
+  return from + (to - from) * amount;
+}
+
 function findCombatBones(model: THREE.Object3D): CombatBones | null {
   const bone = (name: string) =>
     (model.getObjectByName(name) ?? model.getObjectByName(name.replaceAll(".", ""))) as
@@ -316,6 +320,13 @@ type CombatPoseInput = {
   /** The line the body is currently selling, which a feint changes mid-swing. */
   presentedLine: AttackLine;
   defensePhase: number;
+  /**
+   * 0..1 through a blow that is genuinely arriving, or -1. Separate from
+   * `defensePhase`, which sizing up feeds too: a guard may go up whenever a
+   * fighter feels like it, but a parry may only happen when there is something
+   * to parry. See `PARRY_MEET`.
+   */
+  blockPhase: number;
   defenseSide: number;
   hitPhase: number;
   /** The line being received, used for guard and hit-reaction shaping. */
@@ -325,9 +336,42 @@ type CombatPoseInput = {
   combatStep: number;
 };
 
+/**
+ * The two beats a block is made of, in the attacker's own phase, because that is
+ * what the defender is given: the blow resolves at 0.46 and the sparks fly on
+ * that frame.
+ *
+ * `PARRY_MEET` is the blade going out to meet the cut — 0.34 to 0.47 is about
+ * 120 ms of the ~0.95 s swing, which is a reaction rather than a pose change.
+ * `PARRY_JAR` is what comes back through the arms afterwards. Nothing here may
+ * start before 0.34, because that is when the director first says `block`.
+ */
+const PARRY_MEET: Beat = [0.34, 0.47, 0.53, 0.74];
+const PARRY_JAR: Beat = [0.47, 0.57, 0.64, 0.88];
+
+/**
+ * The sword arm at the moment the blades meet: shoulder driven up and across,
+ * elbow all but straight, so the blade lies over the incoming cut instead of
+ * standing upright beside the fighter's ear.
+ *
+ * Absolute angles rather than an offset, because this is the one pose in the
+ * fight aimed at something outside the fighter. They were fitted against the
+ * incoming percussion point measured on every line from both sides — the blade
+ * passes within 0.21 m of it in all ten cases, canted 42° to 64° off vertical,
+ * with the fighter's own head 0.76 m clear of its own edge.
+ */
+const PARRY_ARM = {
+  shoulderPitch: -1.15,
+  shoulderSwing: 1.23,
+  shoulderRoll: -0.07,
+  elbowPitch: -0.24,
+  elbowSwing: 0,
+  elbowRoll: 0.15,
+} as const;
+
 function applyCombatPose(bones: CombatBones, input: CombatPoseInput): void {
   const {
-    attackPhase, presentedLine, defensePhase, defenseSide, hitPhase,
+    attackPhase, presentedLine, defensePhase, blockPhase, defenseSide, hitPhase,
     line, intensity, deflected, combatStep,
   } = input;
   const attacking = attackPhase >= 0;
@@ -338,6 +382,20 @@ function applyCombatPose(bones: CombatBones, input: CombatPoseInput): void {
   const lineMotion = COMBAT_LINE_MOTION[attacking ? presentedLine : line];
   const attackSide = lineMotion.attackSide;
   const guarding = defensePhase >= 0 ? smoothRange(defensePhase, 0, 0.22) * (1 - smoothRange(defensePhase, 0.68, 1)) : 0;
+  /**
+   * A guard is not a parry, and until this beat existed the fight only had the
+   * former. Measured through a block, the defending blade stood still to the
+   * centimetre from the moment it came up to the moment the exchange was over —
+   * 17 degrees off vertical, and 1.6 m from where the sparks were flying. It was
+   * reported from play as swords that stay vertical and sparks in mid-air, which
+   * is exactly what one static near-vertical blade and a contact point on the
+   * other fighter's sword look like.
+   *
+   * This is the beat that drives the blade out across the incoming cut and brings
+   * it back; `PARRY_ARM` is where it goes.
+   */
+  const parrying = beat(blockPhase, PARRY_MEET);
+  const parryJar = beat(blockPhase, PARRY_JAR);
   const hitShock = hitPhase >= 0 ? Math.sin(Math.min(1, hitPhase) * Math.PI) * intensity : 0;
   const deflection = deflected && attacking
     ? smoothRange(attackPhase, 0.46, 0.6) * (1 - smoothRange(attackPhase, 0.72, 0.96))
@@ -346,9 +404,12 @@ function applyCombatPose(bones: CombatBones, input: CombatPoseInput): void {
     defenseSide * guarding * 0.2 + defenseSide * hitShock * 0.24 -
     attackSide * deflection * 0.34;
 
-  setBoneOffset(bones.root, bones.bodyRest.root, 0, torsoTwist * 0.28, 0);
-  setBoneOffset(bones.spine, bones.bodyRest.spine, 0.04 + cutting * 0.1 - hitShock * lineMotion.hitPitch, torsoTwist * 0.52, attackSide * (winding - cutting) * 0.08 + hitShock * lineMotion.hitRoll * 0.45);
-  setBoneOffset(bones.chest, bones.bodyRest.chest, 0.03 + cutting * 0.12 - hitShock * lineMotion.hitPitch * 1.15, torsoTwist * 0.72, attackSide * (winding - cutting) * 0.13 + hitShock * lineMotion.hitRoll);
+  // Meeting a cut is taken through the body, not just the arm: the fighter sets
+  // into it as the blades meet and is rocked back by what comes through them.
+  const brace = parrying * 0.05 - parryJar * 0.07;
+  setBoneOffset(bones.root, bones.bodyRest.root, brace, torsoTwist * 0.28, 0);
+  setBoneOffset(bones.spine, bones.bodyRest.spine, 0.04 + cutting * 0.1 - hitShock * lineMotion.hitPitch + brace * 0.8, torsoTwist * 0.52, attackSide * (winding - cutting) * 0.08 + hitShock * lineMotion.hitRoll * 0.45);
+  setBoneOffset(bones.chest, bones.bodyRest.chest, 0.03 + cutting * 0.12 - hitShock * lineMotion.hitPitch * 1.15 + brace * 0.6, torsoTwist * 0.72, attackSide * (winding - cutting) * 0.13 + hitShock * lineMotion.hitRoll);
   setBoneOffset(bones.neck, bones.bodyRest.neck, 0.08 + cutting * 0.08 - hitShock * 0.12, -torsoTwist * 0.46, defenseSide * guarding * 0.08);
   setBoneOffset(bones.head, bones.bodyRest.head, -0.03 + hitShock * (0.08 + lineMotion.hitPitch * 0.6), -torsoTwist * 0.34, -defenseSide * guarding * 0.1 + hitShock * lineMotion.hitRoll * 0.7);
 
@@ -357,15 +418,36 @@ function applyCombatPose(bones: CombatBones, input: CombatPoseInput): void {
   const rightShoulderForward = -0.3 - winding * 0.72 - impact * 0.2 + followThrough * 0.16 -
     guarding * (0.12 + lineMotion.guardLift * 0.24);
   const rightElbowBend = -0.5 - winding * 0.68 + impact * 0.3 + followThrough * 0.16 - guarding * 0.24;
+  const shoulderPitch = rightShoulderForward + hitShock * 0.08;
+  const shoulderSwing = attackSide * (0.1 + winding * 0.22 - impact * 0.38 - followThrough * 0.22) -
+    defenseSide * guarding * (0.08 + Math.abs(lineMotion.guardCross) * 0.18) +
+    attackSide * deflection * 0.28;
+  const shoulderRoll = attackSide * (-0.05 - winding * 0.18 + impact * 0.26 + followThrough * 0.14);
+  const elbowPitch = rightElbowBend + hitShock * 0.08;
+  const elbowSwing = attackSide * (winding * 0.18 - impact * 0.28 - followThrough * 0.14);
+  const elbowRoll = attackSide * (0.04 + winding * 0.08 - impact * 0.1 + guarding * 0.08);
+  // The parry owns the sword arm for as long as it lasts, rather than adding to
+  // whatever the guard was doing — the same rule the legs already follow, that
+  // only one layer may own a limb. Added on top, it inherited the guard's own
+  // `defenseSide` lean, which the arriving cut knows nothing about: a fighter
+  // parrying from the far side of an exchange overshot by up to a metre while the
+  // near side landed on 0.19 m. Blended to, one authored arm meets every line
+  // from either side, all ten cases inside 0.21 m.
+  //
+  // The jar is pitch and nothing else. Given any of the cross-body angle to undo,
+  // it drove the blade back through vertical while the parry was still decaying,
+  // and the blade wobbled either side of upright on the way home instead of
+  // settling: measured, 46° across the cut, then 2°, then 31° back the other way.
+  // Recoil belongs in the joint the shock travels up.
   setBoneOffset(bones.upperArmR, bones.armRest.upperArmR,
-    rightShoulderForward + hitShock * 0.08,
-    attackSide * (0.1 + winding * 0.22 - impact * 0.38 - followThrough * 0.22) - defenseSide * guarding * (0.08 + Math.abs(lineMotion.guardCross) * 0.18) + attackSide * deflection * 0.28,
-    attackSide * (-0.05 - winding * 0.18 + impact * 0.26 + followThrough * 0.14),
+    lerp(shoulderPitch, PARRY_ARM.shoulderPitch, parrying) - parryJar * 0.12,
+    lerp(shoulderSwing, PARRY_ARM.shoulderSwing, parrying),
+    lerp(shoulderRoll, PARRY_ARM.shoulderRoll, parrying),
   );
   setBoneOffset(bones.lowerArmR, bones.armRest.lowerArmR,
-    rightElbowBend + hitShock * 0.08,
-    attackSide * (winding * 0.18 - impact * 0.28 - followThrough * 0.14),
-    attackSide * (0.04 + winding * 0.08 - impact * 0.1 + guarding * 0.08),
+    lerp(elbowPitch, PARRY_ARM.elbowPitch, parrying) + parryJar * 0.22,
+    lerp(elbowSwing, PARRY_ARM.elbowSwing, parrying),
+    lerp(elbowRoll, PARRY_ARM.elbowRoll, parrying),
   );
   // The impact wrist mirrors with `attackSide`, like the rest of the arm chain.
   // The sword-side lines used to carry their own hand-tuned triple, which rolled
@@ -402,7 +484,8 @@ function applyCombatPose(bones: CombatBones, input: CombatPoseInput): void {
   // Keep a low, mechanically braced stance and counter-rotate each ankle.
   const stance = 0.11;
   const kneeBend = 0.22;
-  const legDrive = impact * 0.24 + followThrough * 0.08 - winding * 0.16 + guarding * 0.08 - hitShock * 0.04;
+  const legDrive = impact * 0.24 + followThrough * 0.08 - winding * 0.16 + guarding * 0.08 -
+    hitShock * 0.04 + parrying * 0.06;
   const lead = attackSide * legDrive;
   const upperL = stance - lead + combatStep;
   const lowerL = kneeBend + lead + Math.max(0, -combatStep) * 0.65;
@@ -1464,6 +1547,13 @@ export function createRigwalker(
   const restingFightDistance =
     role === "hurler" ? HURLER_FIGHT_DISTANCE : BASE_FIGHT_DISTANCE;
   let swinging = false;
+  /**
+   * How far through a block this fighter is, and how fast that was running, so a
+   * parry can finish after the cue describing it has gone. -1 when none is.
+   */
+  let blockPlayhead = -1;
+  /** A swing is 0.82 s to 1.08 s, so this is the middle of what a block runs at. */
+  let blockRate = 1.05;
   let defenseSide = 1;
   let hitReactionSide: -1 | 1 = 1;
   let defeatElapsed = -1;
@@ -1753,6 +1843,30 @@ export function createRigwalker(
     const defensePhase = combatCue?.action === "block" || combatCue?.action === "size-up"
       ? combatCue.phase
       : beatPreparation ? combatCue!.phase / 0.35 : -1;
+    // Only a blow actually on its way. The director says `block` from 0.34 of the
+    // attacker's swing, whether the outcome is a parry or a hit it has not landed
+    // yet, so a fighter about to be hit reaches for the block and gets caught —
+    // which is the pose it should be caught in.
+    //
+    // It is a playhead rather than the cue's own phase because the cue stops
+    // describing a block the frame the outcome is known: a landed hit becomes
+    // `hit` at 0.5 and a whiff falls back to sizing up at 0.46, and on that frame
+    // the blade is at full stretch across the cut. Read straight through, a
+    // full-amplitude pose vanished in one frame on every hit and every whiff. So
+    // it follows the cue while there is one and keeps running at the rate it was
+    // going, which plays `PARRY_MEET` and `PARRY_JAR` out to their authored end.
+    if (combatCue?.action === "block") {
+      if (blockPlayhead >= 0 && combatCue.phase > blockPlayhead && delta > 0) {
+        blockRate = THREE.MathUtils.clamp(
+          (combatCue.phase - blockPlayhead) / delta, 0.4, 4,
+        );
+      }
+      blockPlayhead = combatCue.phase;
+    } else if (blockPlayhead >= 0) {
+      blockPlayhead += blockRate * delta;
+      if (blockPlayhead >= 1) blockPlayhead = -1;
+    }
+    const blockPhase = blockPlayhead;
     defenseSide = combatCue?.side ?? defenseSide;
     const hitPhase = combatCue?.action === "hit" ? combatCue.phase : -1;
 
@@ -1798,6 +1912,7 @@ export function createRigwalker(
     swinging = inCombat && attackPhase >= 0;
     if (!inCombat && wasInCombat) {
       if (combatBones) resetCombatPose(combatBones);
+      blockPlayhead = -1;
       // A fight leaves a unit somewhere it did not choose, so the walk back to
       // the waypoint is a new approach. Judging it against the ground it had
       // made before the fight would have it give up before it set off.
@@ -2088,6 +2203,7 @@ export function createRigwalker(
             attackPhase,
             presentedLine,
             defensePhase,
+            blockPhase,
             defenseSide,
             hitPhase,
             line,

@@ -79,6 +79,10 @@ export class BattleRuntime {
   private readonly rockOrigin = new THREE.Vector3();
   private readonly rockLanding = new THREE.Vector3();
   private readonly rockLine = new THREE.Vector3();
+  /** The defending blade, for putting a parry's sparks on it. */
+  private readonly parryHilt = new THREE.Vector3();
+  private readonly parryTip = new THREE.Vector3();
+  private readonly parrySpan = new THREE.Vector3();
   /** Dust off a ground strike goes up and out, not along a blade. */
   private readonly dustUp = new THREE.Vector3(0, 1, 0);
   private readonly orderedEvents: CombatEvent[] = [];
@@ -238,6 +242,15 @@ export class BattleRuntime {
           this.bladeDirection.set(0, 0.4, 0);
         }
         this.bladeDirection.normalize();
+        // A parry happens on two blades at once, so it is the only contact in the
+        // fight that is not the attacker's alone. Thrown from the attacker's
+        // percussion point it landed over a metre from the defending sword, in
+        // open air — reported from play as the spark marking the spot the blocking
+        // blade should have been in. `applyCombatPose` now sends that blade out to
+        // meet the cut; this puts the shower on the steel that stopped it.
+        if (event.type === "block" && defender) {
+          this.slideOntoBlade(defender);
+        }
       }
       // Plans and ripostes are seen and not heard. Both draw a ring, and both
       // were playtested with a tone: announcing a decision as often as fighters
@@ -302,6 +315,25 @@ export class BattleRuntime {
           break;
       }
     }
+  }
+
+  /**
+   * Moves `contactPoint` to the nearest point on this fighter's blade, leaving it
+   * alone if the fighter has no blade to offer — a hurler swatting a rock away
+   * has only its arms, and its contact is already read off the rock.
+   */
+  private slideOntoBlade(defender: Rigwalker): void {
+    if (!defender.sampleBlade(this.parryHilt, this.parryTip)) return;
+    this.parrySpan.copy(this.parryTip).sub(this.parryHilt);
+    const lengthSquared = this.parrySpan.lengthSq();
+    if (lengthSquared < 0.0001) return;
+    const along = THREE.MathUtils.clamp(
+      ((this.contactPoint.x - this.parryHilt.x) * this.parrySpan.x +
+        (this.contactPoint.y - this.parryHilt.y) * this.parrySpan.y +
+        (this.contactPoint.z - this.parryHilt.z) * this.parrySpan.z) / lengthSquared,
+      0, 1,
+    );
+    this.contactPoint.copy(this.parryHilt).addScaledVector(this.parrySpan, along);
   }
 
   /**
