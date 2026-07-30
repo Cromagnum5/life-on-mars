@@ -50,7 +50,7 @@ function cueOf(
   return {
     plannerId: null, targetId, action, movement: "hold", phase,
     strategy: "react", line, feintLine: null, side, intensity: 0.78,
-    outcome: "blocked", preferredDistance: BASE_FIGHT_DISTANCE,
+    outcome: "blocked", preferredDistance: BASE_FIGHT_DISTANCE, doubleGuard: false,
   };
 }
 

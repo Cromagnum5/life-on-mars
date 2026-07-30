@@ -148,10 +148,11 @@ stages seeded sword and hurler matchups against the same runtime, with a
 per-fighter readout and an event log, and renders headlessly for review.
 
 The Rigwalker Hurler is a second unit built on the same skeleton and the same
-runtime: no sword, a rock in its hand and a cache of them on its hip, and three
-throws picked by how far away its target is. It is produced by its own building,
-the Stoneworks, one per opening, so the game fields a mixed line without new
-interface.
+runtime: no sword, a rock in its hand, and three throws picked by how far away its
+target is. Walked down to arm's length it fights with that rock rather than
+throwing it — four strikes chosen by how much time it has, and its forearms for a
+guard. It is produced by its own building, the Stoneworks, one per opening, so
+the game fields a mixed line without new interface.
 
 ## Current playtest
 
@@ -230,9 +231,13 @@ distance, plus a timestamped event log and an outcome tally.
 
 - Sword matchups are `1v1`, `2v2`, `3v2`, `3v3`, and `5v5`. Hurler matchups are
   `1h v 1` (the whole unit in one fight: it opens at maximum range and is walked
-  down through all three throws), `1h v 1h`, `2h+2 v 4`, and `2h v 3`. All
-  seeded, so a fight replays — see "What a seed is worth" below for what that
-  does and does not survive.
+  down through all three throws), `1h v 1h`, `2h+2 v 4`, and `2h v 3`. Two more
+  stage the close fight rather than waiting fifteen seconds for it: `1h in close`
+  starts a hurler inside stone reach, and `1h v 2 close` crowds it from two sides,
+  which is what puts both forearms up. Both set `setback: 0` — a hurler normally
+  starts three and a half metres behind its own line, so one put on the line at
+  three metres still opens six and a half away. All seeded, so a fight replays —
+  see "What a seed is worth" below for what that does and does not survive.
 - A matchup carries its own starting standoff and zoom. A hurler works from
   sixteen metres, which needs both a longer approach and a wider view than two
   swordsmen walking into each other; `zoom` in the URL still overrides it.
@@ -314,10 +319,16 @@ model; they are written as offsets from the rest pose, driven by beats. What it
 edits is `src/pose-tuning.ts`.
 
 - Motions: the three throws, `aim`, the `ready` stance a hurler holds between
-  throws, and `cut`, `guard` and `struck` on the sword for comparison. `1`-`9`
-  picks one, `Space` plays, `,` and `.` step one frame *of that motion* and ten
-  under shift, `Home` and `End` go to the ends, `[` and `]` jump between arm
-  keys. The camera keys are the sim's, unchanged.
+  throws, `cut`, `guard` and `struck` on the sword for comparison, and the close
+  fight — `hammer`, `swing`, `jab`, `punch`, and the two guards `ward` and
+  `cover`. There are more of them than there are number keys: `1`-`9` reach the
+  first nine and the rest are a click on the bar. `Space` plays, `,` and `.` step
+  one frame *of that motion* and ten under shift, `Home` and `End` go to the
+  ends, `[` and `]` jump between arm keys. The camera keys are the sim's,
+  unchanged.
+- A motion may carry its own `mark` distance. The role is not enough any more:
+  the same unit throws from sixteen metres and fights with the stone from under
+  three, and a strike has to have its opponent in frame to be judged.
 - **Every slider carries a mark at the value in the file**, and double-clicking
   the row goes back to it — one number at a time, where `Revert` is all of them
   at once. The mark only moves when the file is written, so it is what an edit is
@@ -432,6 +443,9 @@ The Rigwalker Hurler throws rocks. It has one job — stand off and be deadly at
 the top of its range — and one weakness, which is everything that happens once
 somebody crosses that range.
 
+Everything below is the *ranged* half of the unit. What it does once somebody has
+crossed that range is "The hurler's close fight", further down.
+
 Its bands are stated in the units the model itself defines, in `combat.ts`:
 
 | throw | band | speed | damage | motion | releases at |
@@ -451,13 +465,23 @@ in, so moving `ATTACK_RANGE` or rebuilding the model moves them too.
 - **The gap picks the throw, and only while the hurler is still aiming.** Once
   the motion starts it is committed, the way a real thrower is. A swordsman
   walking a hurler down therefore visibly degrades it from hurl to pitch to
-  toss, which is the fight the unit exists to produce.
-- **A hurler never enters a mutual duel.** It gets a one-sided `ranged`
-  encounter, is never promoted into a trade, and never ripostes or picks up a
-  sword plan. Crowded, it keeps throwing and the throws get worse. A swordsman
-  attacking a hurler gets a normal support encounter and does not defer to it:
-  a hurler is permanently mid-throw at somebody else, and treating that as
-  "busy" left swordsmen standing next to one watching it work.
+  toss, and then out of throwing altogether, which is the fight the unit exists
+  to produce.
+- **The toss band is what is left of sword reach once stone reach is taken out
+  of the bottom of it** — 3.2 m to 4.3 m. Close enough to be worth a pebble, far
+  enough that nobody has actually reached the thrower. A hurler does not throw at
+  a body standing inside `STONE_RANGE`; it hits it with the rock instead, and
+  `throwTarget` rejects anything that close.
+- **A hurler never walks into a mutual duel, but it is charged into one.** At
+  throwing range it gets a one-sided `ranged` encounter, is never promoted into a
+  trade, and never picks up a sword plan. Inside `STONE_RANGE` that changes: the
+  rock in its hand becomes a weapon and the pair is an ordinary trade, with
+  ripostes and blocks and everything else. See "The hurler's close fight".
+- A swordsman attacking a hurler **out at range** does not defer to it: a hurler
+  is permanently mid-throw at somebody else, and treating that as "busy" left
+  swordsmen standing next to one watching it work. A hurler in a *stone*
+  exchange is genuinely busy and is deferred to like anyone else, which falls out
+  of the deference test reading `isThrow` rather than the role.
 - **The strike is resolved at release and replayed on arrival.** The `throw`
   event carries speed, flight time, and the already-rolled outcome, so
   presentation launches a rock that lands on the exact frame the director
@@ -484,6 +508,117 @@ in, so moving `ATTACK_RANGE` or rebuilding the model moves them too.
   there — so it keeps the sideways roll off `side`. Before this every rock kill
   in the game toppled the same way, because `planThrow` has no side to give and
   hardcodes `1`.
+
+## The hurler's close fight
+
+Once somebody crosses the standoff, the rock stops being ammunition and becomes a
+weight in the hand. The hurler plans and reacts the way a swordsman does — it is
+not a static animation played back — and it fights with four strikes and its
+forearms. `src/stone.test.ts` pins all of it.
+
+The strikes mirror how a weight in the hand is actually fought with. Power comes
+from the ground up: the rear foot drives, the hips come round ahead of the
+shoulders, and the arm arrives last. That sequence is slow and somebody has to
+give you the time for it, which is the whole of the decision.
+
+| strike | needs | motion | recovery | damage | reads as |
+| --- | --- | --- | --- | --- | --- |
+| `hammer` | most warning | 1.22 s | 0.68 s | 38 | both hands, overhead, straight down |
+| `swing` | a window | 1.02 s | 0.54 s | 28 | the whole body, horizontal, arm last |
+| `jab` | a moment | 0.56 s | 0.28 s | 14 | a thrust straight from the shoulder |
+| `punch` | nothing | 0.36 s | 0.20 s | 9 | the fist the rock happens to be in |
+
+- **The strike is chosen from how much time there is, and that reading is real.**
+  `readIncoming` walks every encounter each frame and files what is *committed* —
+  a blade past its measure, a rock already in the air — under the fighter it is
+  arriving at, with how many seconds are left. `STONE_PROFILES.load` is what each
+  strike costs out of that. A punch costs nothing, so there is always something
+  left to throw. A riposte is planned with no room at all and therefore always
+  comes out as a punch.
+- **A rock still being wound up twelve metres away is not pressure.** It can be
+  re-aimed and may never be thrown. Only committed strikes count, and that
+  distinction is the whole value of the reading: it is what a fighter could
+  actually see coming.
+- **One arm against one blow, both against two from different bearings.**
+  `isCovering` compares the bearings of everything arriving; more than about
+  fifty degrees apart and one guard cannot answer both, so the cue carries
+  `doubleGuard` and the pose puts up a boxer's high cover. It is worth something
+  mechanically as well as visually — `STONE_COVER_RECOVERY` buys back most of the
+  penalty a hurler pays for defending with arms rather than steel.
+- **The `doubleGuard` pass runs after every encounter has written its cue.**
+  Which fighters are answering two blows cannot be known mid-walk, because the
+  second attacker may not have written yet, and a guard that came up half the
+  time reads as a twitch.
+- **A hurler is charged into a duel; it never walks into one.** Two ways in, and
+  neither is redundant. The promotion pass turns a swordsman's support encounter
+  into a trade once the charger is inside `STONE_RANGE`. The mutual-candidate
+  pass pairs a hurler with an enemy already that close — needed because a hurler
+  does not throw at a body standing on top of it, so it may have no encounter to
+  be promoted out of, and with nothing published nobody would ever engage it.
+- **A defensive plan hands the attack to the other fighter, so a swordsman may
+  not choose one against a hurler.** `react` and `distance-trap` made the hurler
+  the attacker of a *sword* exchange: a fighter cutting with a weapon it does not
+  carry, announcing plans it could not execute. Sizing one up is still fine —
+  that leaves the attack where it was.
+- **A duel involving a hurler is held together only to stone reach**
+  (`releaseRange`), not to a hurler's throwing awareness. Left on the throwing
+  range, a promoted pair stayed a "duel" fifteen metres apart with the hurler
+  walking at the swordsman. A charge on a hurler still reaches as far as the
+  hurler throws, because crossing that ground is the fight.
+- **A hurler in a stone duel is out of its team's battery.** Left in, it dragged
+  the focus onto the body standing in its own melee and had its teammates
+  throwing rocks into it. `primaryParticipants` is what the battery pass reads,
+  which is why the mutual-candidate pass has to add to it — it did not, and a
+  hurler that paired off there was handed a second, ranged encounter on the same
+  frame and drove both.
+
+### The poses, and the measurement they are all built on
+
+**The grip only reaches about 1.65 m in front of the fighter.** Measured on the
+rig, not assumed. A blade is 2.65 m of steel and a hurler has an arm; two
+Rigwalkers may not stand closer than `MIN_FIGHT_DISTANCE` without merging into
+one silhouette. So the arm alone cannot cross the gap, and everything follows
+from that:
+
+- **A stone strike lunges**, and the legs stride under it. `STONE_LUNGE` is a
+  model offset like the hurl's, and `stoneLegs` opens the stance to match —
+  travel the legs do not make is a foot sliding along the ground. Measured at the
+  frame the director resolves on, the hammer and the swing put the stone within
+  0.1 m of the opponent's torso; the punch, which reaches least, sits at 0.44 m.
+- **`STONE_FIGHT_DISTANCE` sits all but on the floor of the readable band** for
+  the same reason, and that is not taste. Any further out and the stone resolves
+  in the air between them.
+- **The torso numbers are a quarter of what they first looked like they should
+  be.** The root and the spine carry the arm with them, so a fold that reads as
+  modest is a metre at the end of a reach: authored at four times a swordsman's
+  cutting values, the jab's stone arrived at the opponent's knees and the swing
+  crossed a metre and a half past the centre line. The sword's whole cut is 0.1
+  rad of spine. Read `STONE_BODY` against that.
+- **The arcs are keyed, not summed**, for the reason written on
+  `POSE_TUNING.armKeys` — and both throws and strikes now go through one
+  `keyedArmPose`, whose two ends are the single pose the fighter waits in.
+- **The free arm's Z mirrors the striking arm's.** On the left arm negative Z is
+  *across* the chest. The swing's counterweight was authored driving across
+  through the whip and put the elbow 0.16 m inside the torso for a fifth of the
+  strike — invisible in a silhouette, and the same fault `HURL_OPEN` exists to
+  avoid one throw over. `stone.test.ts` now measures both arms against the torso
+  box at twenty phases of every strike.
+- **The stance is deliberately nothing like the throwing stance**: rock cocked at
+  the shoulder rather than hanging at the hip, free arm up. It is what tells a
+  player at a glance which fight this hurler thinks it is in.
+- **Which pose runs is decided by the gap, not by the cue** — `closeFight` in
+  `rigwalker.ts`. A defender's cue carries the *attacker's* plan, so a stance
+  keyed off the cue's strategy would flicker several times an exchange. Throwing
+  is exclusive of it: without that second rule, a hurler tossing a pebble at
+  something three metres off was posed swinging a rock it was about to let go of.
+- **The stone gets a trail.** `sampleBlade` offers the forearm-to-rock segment
+  while a stone strike is running, so a heavy swing draws a smear and a block's
+  sparks land on the arm that caught it. Only while striking: a rock being wound
+  up to be thrown is not a weapon travelling through anything.
+
+The strikes are not tunable in the animation tool, the way the sword's poses are
+not: their numbers are constants in `rigwalker.ts` rather than in
+`pose-tuning.ts`. They scrub there, which is what a pose needs.
 
 ## Throw animation validation
 

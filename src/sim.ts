@@ -90,7 +90,17 @@ type Matchup = {
   teams: readonly [Roster, Roster];
   standoff: number;
   zoom: number;
+  /**
+   * How far behind its own line a hurler starts, which is what makes a mixed
+   * team read as a screen with the throwers behind it. A matchup staging the
+   * close fight has no screen and no use for it: set-back, a hurler put on the
+   * line at three metres still opens six and a half away and spends the first
+   * seconds throwing, which is the thing the matchup exists to skip.
+   */
+  setback?: number;
 };
+
+const HURLER_SETBACK = 3.5;
 type Roster = { melee: number; hurlers: number };
 
 const MATCHUPS: Record<string, Matchup> = {
@@ -114,6 +124,19 @@ const MATCHUPS: Record<string, Matchup> = {
   },
   "2h v 3": {
     teams: [{ melee: 0, hurlers: 2 }, { melee: 3, hurlers: 0 }], standoff: 10, zoom: 1.6,
+  },
+  // The close fight, staged rather than waited for. Started inside stone reach,
+  // so the hurler is fighting with the rock from the first second instead of
+  // spending fifteen of them being walked down to it — which is the only way to
+  // look at the strikes and the arm guard at any length.
+  "1h in close": {
+    teams: [{ melee: 0, hurlers: 1 }, { melee: 1, hurlers: 0 }],
+    standoff: 1.5, zoom: 3.2, setback: 0,
+  },
+  // Crowded from two sides, which is what puts both forearms up.
+  "1h v 2 close": {
+    teams: [{ melee: 0, hurlers: 1 }, { melee: 2, hurlers: 0 }],
+    standoff: 1.8, zoom: 2.6, setback: 0,
   },
 };
 
@@ -264,7 +287,8 @@ function startMatch(): void {
         { role: hurler ? "hurler" : "melee" },
       );
       const lateral = (index - (count - 1) / 2) * LINE_SPACING;
-      const x = team.side * (setup.standoff + (hurler ? 3.5 : 0));
+      const x = team.side *
+        (setup.standoff + (hurler ? setup.setback ?? HURLER_SETBACK : 0));
       unit.group.position.set(x, terrainHeightAt(x, lateral) + 0.2, lateral);
       // Walk in rather than starting inside awareness range, so the approach
       // and the first sizing-up read as part of the fight.

@@ -2,12 +2,16 @@ import * as THREE from "three";
 import {
   BASE_FIGHT_DISTANCE,
   MEDIUM_THROW_RANGE,
+  STONE_FIGHT_DISTANCE,
+  STONE_PROFILES,
   THROW_PROFILES,
+  isStoneStrike,
   type AttackLine,
   type CombatAction,
   type CombatCue,
   type CombatRole,
   type CombatStrategy,
+  type StoneStrike,
   type ThrowType,
 } from "./combat";
 import {
@@ -19,7 +23,9 @@ import {
   type PoseTuning,
   type ThrowArmKey,
 } from "./pose-tuning";
-import { createRigwalker, describeFeet, hurlStep, type Rigwalker } from "./rigwalker";
+import {
+  createRigwalker, describeFeet, hurlStep, stoneStep, type Rigwalker,
+} from "./rigwalker";
 import { loadRigwalkerAsset } from "./rigwalker-assets";
 import {
   addMarsLighting,
@@ -102,10 +108,11 @@ const FRAME_STEP = 1 / 60;
  */
 const SUBJECT_BEARING = Math.PI * 0.75;
 /**
- * How far the mark stands, by what the motion is. A sword cut wants its opponent
- * in the frame, at the distance the director actually holds a duel, so a blade
- * falling short is visible as falling short. A throw does not: its target is tens
- * of metres off and would only drag the eye away from the thrower.
+ * How far the mark stands, by what the motion is. A cut and a stone strike both
+ * want their opponent in the frame, at the distance the director actually holds
+ * that fight, so a blow falling short is visible as falling short. A throw does
+ * not: its target is tens of metres off and would only drag the eye away from
+ * the thrower.
  */
 const MARK_DISTANCE: Record<CombatRole, number> = {
   melee: BASE_FIGHT_DISTANCE,
@@ -119,8 +126,12 @@ const MARK_DISTANCE: Record<CombatRole, number> = {
  * every throw is really judged on.
  *
  * `tunable` names the throw whose numbers the editor panel opens. The sword
- * poses have none yet — `applyCombatPose` still sums its coefficients inline —
- * so those motions scrub but do not edit.
+ * poses have none, and neither do the stone strikes — `applyCombatPose` and
+ * `applyStonePose` both keep their coefficients inline — so those motions scrub
+ * but do not edit.
+ *
+ * There are more motions than there are number keys. `1`-`9` reach the first
+ * nine, in the order below; the rest are a click on the bar.
  */
 type Motion = {
   label: string;
@@ -132,6 +143,14 @@ type Motion = {
   tunable: ThrowType | null;
   /** Uses the line picker, which only means anything to a sword. */
   lined: boolean;
+  /**
+   * How far the mark stands, when the motion's role is not the whole answer. A
+   * hurler throws from sixteen metres and fights with the stone from under
+   * three, and the same unit does both.
+   */
+  mark?: number;
+  /** Both forearms up: the cover a hurler makes against more than one blow. */
+  doubleGuard?: boolean;
 };
 
 function throwMotion(type: ThrowType): Motion {
@@ -145,6 +164,27 @@ function throwMotion(type: ThrowType): Motion {
     release: profile.release,
     tunable: type,
     lined: false,
+  };
+}
+
+/**
+ * One of the four close-in stone strikes. They are not tunable here — like the
+ * sword's poses, their numbers are constants in `rigwalker.ts` rather than in
+ * `pose-tuning.ts` — but they scrub, which is what a pose needs: the frame worth
+ * looking at goes past in a tenth of a second and never comes back at the same
+ * value.
+ */
+function stoneMotion(strike: StoneStrike): Motion {
+  return {
+    label: strike,
+    role: "hurler",
+    action: "attack",
+    strategy: strike,
+    seconds: STONE_PROFILES[strike].motion,
+    release: null,
+    tunable: null,
+    lined: false,
+    mark: STONE_FIGHT_DISTANCE,
   };
 }
 
@@ -176,6 +216,25 @@ const MOTIONS: Record<string, Motion> = {
   struck: {
     label: "struck", role: "melee", action: "hit", strategy: null,
     seconds: 0.42, release: null, tunable: null, lined: true,
+  },
+  // The close fight. A hurler that has been walked down puts the rock to a
+  // different use, and the stance it does it from is deliberately nothing like
+  // the throwing one — which is only judgeable with both a keystroke apart.
+  hammer: stoneMotion("hammer"),
+  swing: stoneMotion("swing"),
+  jab: stoneMotion("jab"),
+  punch: stoneMotion("punch"),
+  // The two guards, which is the other half of the close fight: one forearm
+  // turned into a single blow, and both up when there is more than one.
+  ward: {
+    label: "ward", role: "hurler", action: "block", strategy: "rush",
+    seconds: 0.6, release: null, tunable: null, lined: true,
+    mark: STONE_FIGHT_DISTANCE,
+  },
+  cover: {
+    label: "cover", role: "hurler", action: "block", strategy: "rush",
+    seconds: 0.6, release: null, tunable: null, lined: true,
+    mark: STONE_FIGHT_DISTANCE, doubleGuard: true,
   },
 };
 
@@ -273,8 +332,12 @@ const mark = spawn("melee", 0, 0);
 for (const unit of [hurler, swordsman]) unit.group.rotation.y = SUBJECT_BEARING;
 mark.group.rotation.y = SUBJECT_BEARING + Math.PI;
 
+function markDistance(current: Motion): number {
+  return current.mark ?? MARK_DISTANCE[current.role];
+}
+
 function placeMark(): void {
-  const distance = MARK_DISTANCE[motion().role];
+  const distance = markDistance(motion());
   const x = Math.sin(SUBJECT_BEARING) * distance;
   const z = Math.cos(SUBJECT_BEARING) * distance;
   mark.group.position.set(x, terrainHeightAt(x, z) + 0.2, z);
@@ -315,7 +378,8 @@ function currentCue(): CombatCue {
     side: 1,
     intensity,
     outcome: "pending",
-    preferredDistance: MARK_DISTANCE[current.role],
+    preferredDistance: markDistance(current),
+    doubleGuard: current.doubleGuard ?? false,
   };
 }
 
@@ -433,8 +497,11 @@ function renderReadout(): void {
   const rows: Array<[string, string]> = [
     ["phase", phase.toFixed(3)],
   ];
-  if (current.tunable && current.action === "attack") {
-    const step = hurlStep(current.tunable, phase);
+  const step = current.action !== "attack" ? null
+    : isStoneStrike(current.strategy) ? stoneStep(current.strategy, phase)
+    : current.tunable ? hurlStep(current.tunable, phase)
+    : null;
+  if (step) {
     rows.push(
       ["engagement", step.engagement.toFixed(2)],
       ["forward", `${step.forward >= 0 ? "+" : ""}${step.forward.toFixed(3)} m`],

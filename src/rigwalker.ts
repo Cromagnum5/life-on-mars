@@ -10,13 +10,17 @@ import type { RigwalkerAsset } from "./rigwalker-assets";
 import {
   BASE_FIGHT_DISTANCE,
   HURLER_FIGHT_DISTANCE,
+  STONE_RANGE,
+  STONE_RELEASE_RANGE,
   createCombatProfile,
+  isStoneStrike,
   isThrow,
   type AttackLine,
   type CombatCue,
   type CombatProfile,
   type CombatRole,
   type CombatStrategy,
+  type StoneStrike,
   type ThrowType,
 } from "./combat";
 
@@ -548,34 +552,28 @@ function beat(phase: number, [inStart, inEnd, outStart, outEnd]: Beat): number {
 type ThrowDrive = { draw: number; stride: number; whip: number; follow: number };
 
 const throwArmScratch: ThrowArmKey = { ...POSE_TUNING.ready };
-/** The ready pose again at phase 1, refreshed per call because it is editable. */
-const endArmScratch: ThrowArmKey = { ...POSE_TUNING.ready, at: 1 };
 
 /**
- * The keys of one throw's arm arc, counting the ready pose at either end: index
- * 0 is the ready pose at phase 0, the last is the same pose at phase 1, and
- * `POSE_TUNING.armKeys` holds what happens in between. The ends are read rather
- * than stored so all three throws start and finish in the one shared pose — a
- * hurler between throws is standing in it, and two copies of it would jump the
- * arm whenever the gap called for a different throw.
+ * The arm pose partway between the two keys a phase falls between, where the
+ * arc's two ends are the same `ready` pose: at phase 0 the arm is standing in
+ * it, and at phase 1 it is back in it. Read rather than stored, so every arc a
+ * fighter has starts and finishes in the one pose it waits in — two copies of it
+ * would jump the arm whenever the fight called for a different motion.
+ *
+ * Shared by the throws and the stone strikes because the rule is the same one,
+ * and it is the rule that matters: the shoulder only holds the arm above
+ * shoulder height through a narrow band of Euler angles, so an arc has to be
+ * keyed along its length rather than summed from beats.
  */
-function armKeyAt(keys: readonly ThrowArmKey[], index: number): ThrowArmKey {
-  if (index === 0) return POSE_TUNING.ready;
-  if (index > keys.length) return endArmScratch;
-  return keys[index - 1];
-}
-
-/** The arm pose partway between the two keys the phase falls between. */
-function throwArmPose(throwType: ThrowType, phase: number): ThrowArmKey {
-  const out = throwArmScratch;
-  if (phase < 0) return Object.assign(out, POSE_TUNING.ready);
-  const keys = POSE_TUNING.armKeys[throwType];
-  Object.assign(endArmScratch, POSE_TUNING.ready, { at: 1 });
+function keyedArmPose(
+  keys: readonly ThrowArmKey[], ready: ThrowArmKey, phase: number, out: ThrowArmKey,
+): ThrowArmKey {
+  if (phase < 0) return Object.assign(out, ready);
   let index = 0;
-  while (index < keys.length && phase > armKeyAt(keys, index + 1).at) index += 1;
-  const from = armKeyAt(keys, index);
-  const to = armKeyAt(keys, index + 1);
-  const blend = smoothRange(phase, from.at, to.at);
+  while (index < keys.length && phase > keys[index].at) index += 1;
+  const from = index === 0 ? ready : keys[index - 1];
+  const to = index === keys.length ? ready : keys[index];
+  const blend = smoothRange(phase, index === 0 ? 0 : from.at, index === keys.length ? 1 : to.at);
   out.at = phase;
   out.upperX = from.upperX + (to.upperX - from.upperX) * blend;
   out.upperY = from.upperY + (to.upperY - from.upperY) * blend;
@@ -583,6 +581,13 @@ function throwArmPose(throwType: ThrowType, phase: number): ThrowArmKey {
   out.lowerX = from.lowerX + (to.lowerX - from.lowerX) * blend;
   out.handX = from.handX + (to.handX - from.handX) * blend;
   return out;
+}
+
+/** The throwing arm partway through one of the three throws. */
+function throwArmPose(throwType: ThrowType, phase: number): ThrowArmKey {
+  return keyedArmPose(
+    POSE_TUNING.armKeys[throwType], POSE_TUNING.ready, phase, throwArmScratch,
+  );
 }
 
 /**
@@ -1060,6 +1065,400 @@ function setLegs(
   setBoneOffset(bones.footR, bones.legRest.footR, -(upperR + lowerR), 0, 0.09);
 }
 
+/**
+ * The close fight, when the rock in a hurler's hand stops being a missile.
+ *
+ * Every pose below was solved against the imported skeleton for a written-down
+ * grip position, the same way the throw keys were, and the measurement that
+ * shaped all of it is this: **the grip only reaches about 1.65 m in front of the
+ * fighter.** A blade is 2.65 m of steel and a hurler has an arm. Two Rigwalkers
+ * may not stand closer than `MIN_FIGHT_DISTANCE` without merging into one
+ * silhouette, so the arm alone cannot cross the gap — which is why a stone strike
+ * lunges, and why the four of them are ordered the way they are.
+ *
+ * They mirror how a weight in the hand is fought with:
+ *
+ * - `hammer` is the two-handed blow: both hands on the stone, up over the head,
+ *   and straight down the centre line. Slowest, heaviest, and the one thing here
+ *   that cannot be turned aside with an angle — it arrives from directly above.
+ * - `swing` is the whole body. The stone loads out behind the right shoulder,
+ *   the rear foot drives, the hips come round *ahead* of the shoulders, and the
+ *   arm arrives last: the separation between hips and chest is where the power
+ *   is, and it is the thing worth being able to see.
+ * - `jab` is the patu's technique — a short thrust straight from the shoulder,
+ *   which is what the Māori short clubs were actually used for and is unusual
+ *   among clubs, most of which are swung like an axe. It commits to nothing.
+ * - `punch` is what is left when there is no time to pick. The rock goes along
+ *   for the ride.
+ *
+ * The free arm is the other half of it, and it is the same weapon the patu was
+ * paired with: the off hand was wrapped in a thick woven mat and used to ward
+ * blows off. Here it is a forearm, and it comes up alone against one blow and
+ * alongside the other against two.
+ */
+const STONE_BEATS: Record<StoneStrike, {
+  /** Coiling away, loading the weight. */
+  load: Beat;
+  /** The stone travelling. */
+  drive: Beat;
+  /** Arrival, which the director resolves between phase 0.46 and 0.54. */
+  impact: Beat;
+  /** What a heavy head does afterwards, which is most of why it costs anything. */
+  recover: Beat;
+}> = {
+  hammer: {
+    load: [0, 0.22, 0.3, 0.44], drive: [0.3, 0.5, 0.56, 0.7],
+    impact: [0.36, 0.5, 0.56, 0.74], recover: [0.58, 0.76, 0.9, 1],
+  },
+  swing: {
+    load: [0, 0.2, 0.28, 0.42], drive: [0.26, 0.46, 0.52, 0.66],
+    impact: [0.34, 0.48, 0.54, 0.7], recover: [0.56, 0.74, 0.88, 1],
+  },
+  jab: {
+    load: [0, 0.16, 0.22, 0.36], drive: [0.2, 0.42, 0.48, 0.62],
+    impact: [0.3, 0.44, 0.5, 0.66], recover: [0.52, 0.7, 0.86, 1],
+  },
+  punch: {
+    load: [0, 0.14, 0.18, 0.3], drive: [0.16, 0.38, 0.44, 0.58],
+    impact: [0.28, 0.42, 0.48, 0.64], recover: [0.5, 0.66, 0.84, 1],
+  },
+};
+
+/**
+ * The stance the close fight is fought out of: the rock cocked at the shoulder
+ * rather than hanging at the hip, and the free arm carried up in front of the
+ * chest. Both ends of every strike's arc, and the pose a hurler holds between
+ * them — so it is what tells a player at a glance which fight this hurler thinks
+ * it is in, and it is deliberately nothing like the throwing stance.
+ */
+const STONE_STANCE_ARM: ThrowArmKey =
+  { at: 0, upperX: -0.24, upperY: -0.45, upperZ: -0.8, lowerX: -2.31, handX: 0.72 };
+const STONE_STANCE_FREE: ThrowArmKey =
+  { at: 0, upperX: -0.92, upperY: -0.2, upperZ: -0.58, lowerX: -0.54, handX: 0 };
+/** The forearm turned into the blow: elbow tucked, forearm up across the head. */
+const STONE_GUARD_FREE: ThrowArmKey =
+  { at: 0, upperX: -1.12, upperY: -0.29, upperZ: -0.47, lowerX: -1.58, handX: 0.17 };
+/**
+ * Both forearms in front of the face, elbows in. A boxer's high cover, and the
+ * same answer for the same reason: when more is arriving than can be met one at
+ * a time, you stop choosing and take it on the arms.
+ */
+const STONE_COVER_FREE: ThrowArmKey =
+  { at: 0, upperX: -1.35, upperY: -0.54, upperZ: -0.04, lowerX: -2.01, handX: -0.38 };
+const STONE_COVER_ARM: ThrowArmKey =
+  { at: 0, upperX: -0.8, upperY: 0.47, upperZ: -0.78, lowerX: -1.94, handX: -0.54 };
+
+/** The striking arm through each strike. Solved for the grip positions in the comments. */
+const STONE_ARM_KEYS: Record<StoneStrike, ThrowArmKey[]> = {
+  hammer: [
+    { at: 0.2, upperX: -1.83, upperY: 0.67, upperZ: -2.01, lowerX: -1.78, handX: -1.09 },
+    { at: 0.36, upperX: -0.95, upperY: 1.45, upperZ: -2.01, lowerX: -0.57, handX: -1.09 },
+    { at: 0.5, upperX: -0.58, upperY: 1.59, upperZ: -1.45, lowerX: -0.43, handX: -1.09 },
+    { at: 0.62, upperX: -0.04, upperY: 1.64, upperZ: -1.31, lowerX: -0.33, handX: -1.09 },
+    { at: 0.78, upperX: 0.17, upperY: 1.64, upperZ: -1.02, lowerX: -0.26, handX: -1.09 },
+  ],
+  swing: [
+    { at: 0.24, upperX: 0.68, upperY: -0.7, upperZ: -0.89, lowerX: -0.08, handX: 1.04 },
+    { at: 0.42, upperX: 0.59, upperY: -0.11, upperZ: -1.95, lowerX: -1.12, handX: 1.04 },
+    { at: 0.56, upperX: 0.42, upperY: 1.19, upperZ: -2.09, lowerX: -0.34, handX: -0.61 },
+    { at: 0.68, upperX: 0.42, upperY: 1.8, upperZ: -1.91, lowerX: -0.52, handX: -0.61 },
+    { at: 0.84, upperX: 0.56, upperY: 1.8, upperZ: -1.46, lowerX: -1.06, handX: -0.61 },
+  ],
+  jab: [
+    { at: 0.24, upperX: 1.24, upperY: -0.41, upperZ: -0.85, lowerX: -2.17, handX: 0.65 },
+    { at: 0.5, upperX: -0.62, upperY: 1.2, upperZ: -0.85, lowerX: -0.48, handX: -0.9 },
+    { at: 0.74, upperX: 0.15, upperY: 0.04, upperZ: -0.81, lowerX: -1.93, handX: -0.23 },
+  ],
+  punch: [
+    { at: 0.22, upperX: 0.29, upperY: -0.01, upperZ: -0.86, lowerX: -1.93, handX: 0.95 },
+    { at: 0.46, upperX: -0.53, upperY: 1.35, upperZ: -0.86, lowerX: -0.36, handX: -0.75 },
+    { at: 0.72, upperX: 0.25, upperY: 0.2, upperZ: -0.86, lowerX: -1.72, handX: -0.14 },
+  ],
+};
+
+/**
+ * The free hand joining the right one for the two-handed blow, keyed to the same
+ * phases so the pair travel together. There is no IK here — the hands are not
+ * welded, they are two arms told to be in the same place — so what this buys is
+ * a silhouette that reads as both hands on the stone, which at RTS scale is the
+ * whole of the claim.
+ */
+const STONE_HAMMER_FREE: ThrowArmKey[] = [
+  // The first key only lifts; it does not cross yet. Solved to meet the right
+  // hand at the load, this arm reached over the chest while the chest was still
+  // turned into it and cleared the torso by two centimetres. The hands have
+  // nothing to hold together until the stone is overhead anyway.
+  { at: 0.2, upperX: -1.3, upperY: 0.3, upperZ: -0.9, lowerX: -0.6, handX: -0.15 },
+  { at: 0.36, upperX: -1.6, upperY: 0.79, upperZ: -1.34, lowerX: -0.54, handX: -0.28 },
+  { at: 0.5, upperX: -1.29, upperY: 0.79, upperZ: -0.78, lowerX: -0.23, handX: -0.28 },
+  { at: 0.62, upperX: -0.69, upperY: 0.79, upperZ: -0.66, lowerX: -0.23, handX: -0.28 },
+  { at: 0.78, upperX: -0.25, upperY: 0.79, upperZ: -0.65, lowerX: -0.23, handX: -0.28 },
+];
+
+/**
+ * How far a strike carries the fighter forward, in metres. This is not
+ * decoration: the arm reaches 1.65 m and the pair stands at nearly three, so
+ * without it every stone strike resolves on nobody and throws its sparks into
+ * the gap between them. A blow you step into is also what the technique is —
+ * power comes off the back foot and travels.
+ *
+ * Sized like the hurl's step, and paid for the same way: `stoneLegs` is where
+ * the angles live, and the drop that keeps the feet on the ground is derived
+ * from those exact angles rather than guessed alongside them.
+ */
+const STONE_LUNGE: Record<StoneStrike, number> = {
+  hammer: 0.46, swing: 0.4, jab: 0.35, punch: 0.26,
+};
+
+const stoneArmScratch: ThrowArmKey = { ...STONE_STANCE_ARM };
+const stoneFreeScratch: ThrowArmKey = { ...STONE_STANCE_FREE };
+const stoneLegsScratch: HurlLegs = { upperL: 0, lowerL: 0, upperR: 0, lowerR: 0 };
+const stoneStepScratch: HurlStep = { forward: 0, drop: 0, engagement: 0 };
+
+/** The four drives of a stone strike, or all zero when none is running. */
+type StoneDrive = { load: number; drive: number; impact: number; recover: number };
+
+function stoneDrive(strike: StoneStrike, phase: number): StoneDrive {
+  const beats = STONE_BEATS[strike];
+  return {
+    load: beat(phase, beats.load),
+    drive: beat(phase, beats.drive),
+    impact: beat(phase, beats.impact),
+    recover: beat(phase, beats.recover),
+  };
+}
+
+/**
+ * How far the hips are wound off the target through a strike. Positive is coiled
+ * away, negative is whipped through — and every one of these goes further
+ * negative than it went positive, because a body that only returns to square has
+ * spent its coil stopping itself rather than delivering.
+ *
+ * Shared with the legs, which have to undo their share of it: the root turns the
+ * whole skeleton about a point on the ground between the feet, so the hips
+ * opening is the planted foot being swept round with them.
+ */
+function stoneHips(strike: StoneStrike, drive: StoneDrive): number {
+  return STONE_BODY[strike].coil *
+    (0.85 * drive.load - 1.15 * drive.impact - 0.4 * drive.recover);
+}
+
+/**
+ * How much of the body each strike puts behind it: `coil` is the turn about the
+ * spine and `fold` the bend over the front leg.
+ *
+ * Both are small numbers, and they have to be. The root and the spine carry the
+ * arm with them, so a fold that looks modest as an angle is a metre at the end of
+ * a reach: authored at a swordsman's cutting values times four, the jab's stone
+ * arrived at the opponent's knees rather than its head, and the swing crossed a
+ * metre and a half past the centre line before it landed. The sword's whole cut
+ * is 0.1 rad of spine. These are read against that.
+ */
+const STONE_BODY: Record<StoneStrike, { coil: number; fold: number }> = {
+  hammer: { coil: 0.3, fold: 1 },
+  swing: { coil: 0.55, fold: 0.5 },
+  jab: { coil: 0.42, fold: 0.35 },
+  punch: { coil: 0.3, fold: 0.3 },
+};
+
+/**
+ * The legs of a stone strike. The front leg blocks and the rear one drives,
+ * which is the whole of where the power comes from: the torso whips around a
+ * leg that has stopped moving.
+ *
+ * Written once because `stoneStep` derives its drop from these exact angles —
+ * two copies would have the hips paying for a reach the legs are not making. The
+ * bladed stance underneath is the throwing stance to the decimal, so a hurler
+ * caught mid-fight does not change which foot it is standing on.
+ */
+function stoneLegs(drive: StoneDrive, hips: number): HurlLegs {
+  const out = stoneLegsScratch;
+  const { load, impact, recover } = drive;
+  // The lead leg, throwing side and forward. It strides into the blow and then
+  // holds: everything above it turns around this, which is where the power comes
+  // from, and the stride is what the body travels over. The angle here and the
+  // lunge in `STONE_LUNGE` have to be of a size with each other — the body is
+  // translated bodily and there is no IK, so travel the legs do not make is a
+  // foot sliding along the ground.
+  out.upperR = -0.06 - HURLER_STANCE - 0.3 * impact - 0.08 * recover;
+  out.lowerR = STANDING_KNEE + HURLER_LOAD + 0.16 * load + 0.2 * impact + 0.1 * recover;
+  // The trailing leg, which loads under the coil and then extends behind as the
+  // body goes over the front foot. Its `hips` term is the coil being undone —
+  // nothing in the planar arithmetic here could predict it, because that is a
+  // rotation about the vertical, and it is the same correction `hurlLegs` makes.
+  out.upperL = 0.06 + HURLER_STANCE + 0.11 * hips + 0.1 * load + 0.34 * impact + 0.1 * recover;
+  out.lowerL = STANDING_KNEE - HURLER_LOAD + 0.2 * load - 0.06 * impact;
+  return out;
+}
+
+/**
+ * Where a stone strike puts the body: forward along the blow, down by whatever
+ * the legs cost, and how much of the fighter the strike currently owns.
+ *
+ * The same three answers `hurlStep` gives for the same three reasons, and read
+ * once per frame for the same one: the pose, the balance layer's remaining
+ * authority over the legs, and the model offset all have to come from one answer
+ * or they fight each other. `drop` follows the **lower** of the two feet, which
+ * is the one standing on the ground.
+ */
+export function stoneStep(strike: StoneStrike, phase: number): HurlStep {
+  const out = stoneStepScratch;
+  const drive = stoneDrive(strike, phase);
+  out.engagement = phase < 0 ? 0 : Math.max(drive.load, drive.drive, drive.impact, drive.recover);
+  // Out on the drive and the impact, home over the recovery: the fighter travels
+  // over the foot it planted and then steps back onto the ground it holds.
+  out.forward = phase < 0 ? 0
+    : STONE_LUNGE[strike] *
+      Math.min(1, 0.35 * drive.drive + drive.impact) * (1 - drive.recover);
+  const legs = phase < 0
+    ? Object.assign(stoneLegsScratch, {
+      upperL: 0.06 + HURLER_STANCE, lowerL: STANDING_KNEE - HURLER_LOAD,
+      upperR: -0.06 - HURLER_STANCE, lowerR: STANDING_KNEE + HURLER_LOAD,
+    })
+    : stoneLegs(drive, stoneHips(strike, drive));
+  // The bladed stance is owed whenever the hurler is standing in it, so the two
+  // branches have to agree at phase 0 — otherwise every strike opens with a foot
+  // jumping to a new spot, which is invisible in a still and loud in motion.
+  const standing = (upper: number, knee: number) => ankleLift(upper, knee) - STANDING_LIFT;
+  out.drop = Math.min(
+    standing(legs.upperL, legs.lowerL), standing(legs.upperR, legs.lowerR),
+  );
+  return out;
+}
+
+type StonePoseInput = {
+  /** The strike running, or null when the hurler is standing and guarding. */
+  strike: StoneStrike | null;
+  attackPhase: number;
+  /** 0..1 through a guard, or -1. Sizing up raises one as well as blocking does. */
+  defensePhase: number;
+  /** 0..1 through a blow genuinely arriving, or -1. See `PARRY_MEET`. */
+  blockPhase: number;
+  /** Both forearms up rather than one, because more than one blow is arriving. */
+  doubleGuard: boolean;
+  defenseSide: number;
+  hitPhase: number;
+  line: AttackLine;
+  intensity: number;
+  combatStep: number;
+};
+
+/** Blends one arm toward a written-down pose, in place. */
+function blendArm(out: ThrowArmKey, to: ThrowArmKey, amount: number): ThrowArmKey {
+  if (amount <= 0) return out;
+  out.upperX = lerp(out.upperX, to.upperX, amount);
+  out.upperY = lerp(out.upperY, to.upperY, amount);
+  out.upperZ = lerp(out.upperZ, to.upperZ, amount);
+  out.lowerX = lerp(out.lowerX, to.lowerX, amount);
+  out.handX = lerp(out.handX, to.handX, amount);
+  return out;
+}
+
+function applyStonePose(bones: CombatBones, input: StonePoseInput): void {
+  const {
+    strike, attackPhase, defensePhase, blockPhase, doubleGuard, defenseSide,
+    hitPhase, line, intensity, combatStep,
+  } = input;
+  const striking = strike !== null && attackPhase >= 0;
+  const drive = striking
+    ? stoneDrive(strike, attackPhase)
+    : { load: 0, drive: 0, impact: 0, recover: 0 };
+  const { load, impact, recover } = drive;
+  const active = Math.max(load, drive.drive, impact, recover);
+  const hips = striking ? stoneHips(strike, drive) : 0;
+  const fold = striking ? STONE_BODY[strike].fold : 0;
+  // A guard may go up whenever the fighter feels like it; a block only when
+  // there is something to block. The same split the sword makes, for the reason
+  // written on `PARRY_MEET` — driven off `defensePhase` alone, the arm swung at
+  // thin air every time the fighter sized somebody up.
+  const guarding = defensePhase >= 0
+    ? smoothRange(defensePhase, 0, 0.22) * (1 - smoothRange(defensePhase, 0.72, 1)) * (1 - active)
+    : 0;
+  const meeting = beat(blockPhase, PARRY_MEET) * (1 - active);
+  const jarring = beat(blockPhase, PARRY_JAR) * (1 - active);
+  const covering = doubleGuard ? Math.max(guarding, meeting) : 0;
+  const hitShock = hitPhase >= 0 ? Math.sin(Math.min(1, hitPhase) * Math.PI) * intensity : 0;
+
+  // The body. The chest is given more of the coil than the hips and is given it
+  // later, which is the separation the power is stored in: the hips come round
+  // first and the shoulders are dragged after them.
+  const chest = hips * 1.3;
+  const brace = meeting * 0.06 - jarring * 0.08;
+  const bend = (back: number, through: number, after: number) =>
+    (-back * load + through * impact + after * recover) * fold;
+  setBoneOffset(bones.root, bones.bodyRest.root,
+    bend(0.04, 0.06, 0.07) + brace,
+    0.3 * hips,
+    bend(0.05, -0.04, 0) - defenseSide * guarding * 0.05);
+  setBoneOffset(bones.spine, bones.bodyRest.spine,
+    0.04 + bend(0.1, 0.09, 0.12) + brace * 0.8 -
+      hitShock * COMBAT_LINE_MOTION[line].hitPitch,
+    0.34 * chest,
+    bend(-0.04, 0, 0.03) + hitShock * COMBAT_LINE_MOTION[line].hitRoll * 0.45);
+  setBoneOffset(bones.chest, bones.bodyRest.chest,
+    0.03 + bend(0.12, 0.1, 0.14) + brace * 0.6 +
+      covering * 0.14 - hitShock * COMBAT_LINE_MOTION[line].hitPitch * 1.15,
+    0.46 * chest,
+    bend(-0.03, 0, 0.05) + hitShock * COMBAT_LINE_MOTION[line].hitRoll);
+  // The eyes stay on what is being hit, both ways through the coil.
+  setBoneOffset(bones.neck, bones.bodyRest.neck,
+    0.08 - 0.05 * recover + covering * 0.1, -0.5 * chest, defenseSide * guarding * 0.06);
+  setBoneOffset(bones.head, bones.bodyRest.head,
+    -0.03 + covering * 0.12 + hitShock * (0.08 + COMBAT_LINE_MOTION[line].hitPitch * 0.6),
+    -0.34 * chest,
+    -defenseSide * guarding * 0.08 + hitShock * COMBAT_LINE_MOTION[line].hitRoll * 0.7);
+
+  // The striking arm, and the free one. Only one layer may own a limb, so the
+  // guard is blended toward rather than added on — added, it inherited whatever
+  // the strike was doing and the arm ended up somewhere neither pose describes.
+  const arm = striking
+    ? keyedArmPose(STONE_ARM_KEYS[strike], STONE_STANCE_ARM, attackPhase, stoneArmScratch)
+    : Object.assign(stoneArmScratch, STONE_STANCE_ARM);
+  blendArm(arm, STONE_COVER_ARM, covering);
+  setBoneOffset(bones.upperArmR, bones.armRest.upperArmR,
+    arm.upperX + hitShock * 0.1, arm.upperY, arm.upperZ);
+  setBoneOffset(bones.lowerArmR, bones.armRest.lowerArmR, arm.lowerX, 0, 0);
+  setBoneOffset(bones.handR, bones.armRest.handR, arm.handX, 0, 0);
+
+  // Two hands on the stone for the hammer and one for everything else, which is
+  // the difference between the two-handed blow and the rest of them.
+  const free = strike === "hammer" && striking
+    ? keyedArmPose(STONE_HAMMER_FREE, STONE_STANCE_FREE, attackPhase, stoneFreeScratch)
+    : Object.assign(stoneFreeScratch, STONE_STANCE_FREE);
+  if (striking && strike === "swing") {
+    // The counterweight. Pulling this elbow down and back is a good part of what
+    // turns the shoulders through, and it is the half of the swing that happens
+    // on the side the stone is not on.
+    //
+    // Its Z has to go **out** as the body comes round, not across. On this arm
+    // negative Z is across the chest — the mirror of the striking arm, the same
+    // rule the sword lines follow — and driven across through the whip the elbow
+    // ended up 0.16 m inside the torso for a fifth of the strike. Invisible in a
+    // silhouette, and the same fault `HURL_OPEN` exists to avoid one throw over.
+    free.upperX += -0.3 * load + 0.45 * impact;
+    free.upperZ += -0.15 * load + 0.68 * impact;
+    free.lowerX += 0.2 * load - 0.15 * impact;
+  }
+  blendArm(free, STONE_GUARD_FREE, Math.max(guarding * 0.55, meeting));
+  blendArm(free, STONE_COVER_FREE, covering);
+  setBoneOffset(bones.upperArmL, bones.armRest.upperArmL,
+    free.upperX + hitShock * 0.1 + jarring * 0.14,
+    free.upperY - defenseSide * meeting * 0.12,
+    free.upperZ);
+  setBoneOffset(bones.lowerArmL, bones.armRest.lowerArmL, free.lowerX - jarring * 0.2, 0, 0);
+  setBoneOffset(bones.handL, bones.armRest.handL, free.handX, 0, 0);
+
+  const stanceLegs = striking
+    ? stoneLegs(drive, hips)
+    : Object.assign(stoneLegsScratch, {
+      upperL: 0.06 + HURLER_STANCE, lowerL: STANDING_KNEE - HURLER_LOAD,
+      upperR: -0.06 - HURLER_STANCE, lowerR: STANDING_KNEE + HURLER_LOAD,
+    });
+  setLegs(bones,
+    stanceLegs.upperL + combatStep, stanceLegs.lowerL + guarding * 0.05,
+    stanceLegs.upperR - combatStep, stanceLegs.lowerR + guarding * 0.05);
+}
+
 function resetCombatPose(bones: CombatBones): void {
   bones.root.quaternion.copy(bones.bodyRest.root);
   bones.spine.quaternion.copy(bones.bodyRest.spine);
@@ -1507,6 +1906,25 @@ export function createRigwalker(
   let activeStrategy: CombatStrategy | null = null;
   /** Keeps a hurler standing like the throw it last loaded while it reloads. */
   let lastThrowType: ThrowType = "hurl";
+  /**
+   * Whether the rock in this hurler's hand is a weapon rather than a missile,
+   * which decides its whole stance.
+   *
+   * Read off the gap rather than off the cue, because the cue only names a stone
+   * strike on the frames the hurler is the one striking: blocking, being hit and
+   * waiting between blows all carry the *attacker's* plan, and a stance that
+   * flickered between the throwing pose and the fighting one on those frames
+   * would jump several times an exchange.
+   *
+   * The band is the director's own — it turns a charge into a trade at
+   * `STONE_RANGE` and lets that trade go at `STONE_RELEASE_RANGE` — so the
+   * stance changes where the planning does, and the hysteresis comes free.
+   */
+  let closeFight = false;
+  /** The strike being made, for the pose and for what the trail is drawn along. */
+  let stoneStrike: StoneStrike | null = null;
+  /** Keeps it standing like the strike it last made while it waits for the next. */
+  let lastStoneStrike: StoneStrike = "swing";
   const restingFightDistance =
     role === "hurler" ? HURLER_FIGHT_DISTANCE : BASE_FIGHT_DISTANCE;
   let swinging = false;
@@ -1560,6 +1978,19 @@ export function createRigwalker(
   let hasPreviousContact = false;
 
   function sampleBlade(hilt: THREE.Vector3, tip: THREE.Vector3): boolean {
+    // A stone strike has an edge worth trailing too: the forearm out to the rock
+    // is the swept part of a hurler mid-swing, and it is what a block's sparks
+    // should land on when a swordsman's cut is caught on it. Offered only while
+    // a strike is actually running — a rock being wound up to be thrown is not a
+    // weapon travelling through anything, and trailing it would draw a sword the
+    // unit does not carry.
+    if (heldRock && combatBones) {
+      if (!stoneStrike) return false;
+      combatBones.lowerArmR.getWorldPosition(hilt);
+      heldRock.updateWorldMatrix(true, false);
+      tip.setFromMatrixPosition(heldRock.matrixWorld);
+      return true;
+    }
     if (!weaponVisual || !bladeEndsFound) return false;
     weaponVisual.updateWorldMatrix(true, false);
     bladeEndScratch.copy(bladeEndA).applyMatrix4(weaponVisual.matrixWorld);
@@ -1873,6 +2304,14 @@ export function createRigwalker(
     activeStrategy = inCombat ? combatCue?.strategy ?? null : null;
     if (throwType) lastThrowType = throwType;
     swinging = inCombat && attackPhase >= 0;
+    // Its own strike, not the one being made at it: the cue a defender is given
+    // carries the attacker's plan, and a hurler must not be posed swinging
+    // somebody else's stone.
+    stoneStrike = role === "hurler" && combatCue?.plannerId === group.id &&
+      isStoneStrike(combatCue.strategy)
+      ? combatCue.strategy
+      : null;
+    if (stoneStrike) lastStoneStrike = stoneStrike;
     if (!inCombat && wasInCombat) {
       if (combatBones) resetCombatPose(combatBones);
       blockPlayhead = -1;
@@ -1884,12 +2323,31 @@ export function createRigwalker(
     wasInCombat = inCombat;
     if (weaponVisual) weaponVisual.visible = inCombat;
     // The rock leaves the hand on the release event, and the hurler has another
-    // in it by the time the motion is over.
-    if (heldRock && combatCue?.action !== "attack") heldRock.visible = true;
+    // in it by the time the motion is over. A stone strike is the one attack
+    // that keeps hold of it — it is the weapon, not the ammunition — so only a
+    // throw may take it out of the hand.
+    if (heldRock && !(combatCue?.action === "attack" && isThrow(combatCue.strategy))) {
+      heldRock.visible = true;
+    }
 
     const enemyDistance = combatTarget
       ? group.position.distanceTo(combatTarget.group.position)
       : Number.POSITIVE_INFINITY;
+    if (role === "hurler") {
+      if (!combatTarget) closeFight = false;
+      // Its own stone strike settles it outright, and so does a throw: a hurler
+      // that is throwing is throwing, whatever the gap has done. Without that
+      // second rule the gap alone decided, and a hurler tossing a pebble at
+      // something three metres off — which is inside stone reach but is nobody
+      // fighting it — was posed swinging a rock it was about to let go of.
+      else if (stoneStrike) closeFight = true;
+      else if (isThrow(combatCue?.strategy ?? null)) closeFight = false;
+      // Otherwise the gap, on the director's own band, so the stance changes
+      // where the planning does.
+      else if (attackPhase < 0) {
+        closeFight = enemyDistance <= (closeFight ? STONE_RELEASE_RANGE : STONE_RANGE);
+      }
+    }
     if (combatTarget) {
       const fightDistance = combatCue?.preferredDistance ?? restingFightDistance;
       if (observedCombatTargetId !== combatTarget.combatId) {
@@ -2134,7 +2592,9 @@ export function createRigwalker(
     // throw is loaded — the drop pays for the bladed stance, and the hurler is
     // standing in that whenever it is posed as one.
     const step = combatTarget && role === "hurler"
-      ? hurlStep(throwType ?? lastThrowType, attackPhase)
+      ? closeFight
+        ? stoneStep(stoneStrike ?? lastStoneStrike, attackPhase)
+        : hurlStep(throwType ?? lastThrowType, attackPhase)
       : EMPTY_HURL_STEP;
 
     if (mixer) {
@@ -2149,7 +2609,23 @@ export function createRigwalker(
       mixer.update(delta);
       if (combatBones && combatTarget) {
         const combatStep = moving ? Math.sin(elapsed * 5.8 + variation * 0.7) * 0.24 : 0;
-        if (role === "hurler") {
+        if (role === "hurler" && closeFight) {
+          applyStonePose(combatBones, {
+            // Between strikes it stands in the stance the last one left it in,
+            // the same way a hurler between throws stands like the throw it last
+            // loaded — the arc's two ends are one shared pose either way.
+            strike: stoneStrike ?? lastStoneStrike,
+            attackPhase,
+            defensePhase,
+            blockPhase,
+            doubleGuard: combatCue?.doubleGuard ?? false,
+            defenseSide,
+            hitPhase,
+            line,
+            intensity: combatCue?.intensity ?? 0.72,
+            combatStep,
+          });
+        } else if (role === "hurler") {
           applyThrowPose(combatBones, {
             // Between throws the hurler still stands like one, so the ready
             // stance comes from the last throw it was loading.

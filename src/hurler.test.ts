@@ -249,7 +249,9 @@ describe("a hurler in an exchange", () => {
   });
 
   it("only ever throws, and never picks up a sword plan", () => {
-    for (const gap of [14, 6.5, 3]) {
+    // Out where it is throwing. Inside stone reach it fights, which is the whole
+    // of "a hurler in the close fight" and is pinned in `stone.test.ts`.
+    for (const gap of [14, 6.5, 4]) {
       const { events } = throwAt(gap, 25);
       expect(events.length).toBeGreaterThan(0);
       for (const event of events) {
@@ -261,7 +263,10 @@ describe("a hurler in an exchange", () => {
   });
 
   it("throws the band the gap calls for", () => {
-    for (const [gap, expected] of [[14, "hurl"], [6.5, "pitch"], [3, "toss"]] as const) {
+    // The toss band is what is left of sword reach once stone reach is taken out
+    // of the bottom of it: close enough to be worth a pebble, far enough that
+    // nobody has actually reached the thrower yet.
+    for (const [gap, expected] of [[14, "hurl"], [6.5, "pitch"], [4, "toss"]] as const) {
       const releases = throwAt(gap, 25).events.filter((event) => event.type === "throw");
       expect(releases.length).toBeGreaterThan(0);
       for (const release of releases) expect(release.projectile?.throwType).toBe(expected);
@@ -270,7 +275,7 @@ describe("a hurler in an exchange", () => {
 
   it("lands each rock exactly once, a flight after it leaves the hand", () => {
     const outcomes = new Set(["hit", "glance", "whiff", "block"]);
-    for (const gap of [14, 6.5, 3]) {
+    for (const gap of [14, 6.5, 4]) {
       const { events } = throwAt(gap, 40);
       const releases = events.filter((event) => event.type === "throw");
       const landings = events.filter((event) => outcomes.has(event.type));

@@ -6,6 +6,16 @@ export type CombatRole = "melee" | "hurler";
 /** The three throws, longest first. A hurler picks one from the current gap. */
 export type ThrowType = "hurl" | "pitch" | "toss";
 
+/**
+ * The four ways a hurler uses the rock once somebody is inside its guard,
+ * heaviest first. A stone is not a missile it has run out of: it is a weight in
+ * the hand, and the fight it makes is the one a weight in the hand makes.
+ *
+ * They are ordered by how much warning each one needs, which is the whole of the
+ * decision — see `STONE_PROFILES.load`.
+ */
+export type StoneStrike = "hammer" | "swing" | "jab" | "punch";
+
 export type CombatStrategy =
   | "rush"
   | "react"
@@ -14,7 +24,8 @@ export type CombatStrategy =
   | "distance-trap"
   | "beat"
   | "riposte"
-  | ThrowType;
+  | ThrowType
+  | StoneStrike;
 
 export type AttackLine = "overhead" | "forehand" | "backhand" | "flank" | "rising";
 export type CombatAction = "idle" | "size-up" | "attack" | "block" | "hit" | "recover" | "defeated";
@@ -48,6 +59,15 @@ export type CombatCue = {
   intensity: number;
   outcome: CombatOutcome;
   preferredDistance: number;
+  /**
+   * Both arms up rather than one. A fighter with a single blow to answer puts an
+   * arm on it and keeps the other hand working; blows arriving from more than one
+   * bearing at once cannot each be met, so they are taken behind a cover instead.
+   *
+   * Only a hurler is posed from it — a swordsman answers with the blade, and
+   * `applyCombatPose` has a parry for that.
+   */
+  doubleGuard: boolean;
 };
 
 export type CombatantSnapshot = {
@@ -159,7 +179,11 @@ type Encounter = {
   a: number;
   b: number;
   support: boolean;
-  /** A hurler shelling `b`. One-sided, never promoted, never riposted. */
+  /**
+   * A hurler shelling `b` from range. One-sided, and never promoted: the pair is
+   * not trading and `b` may be too far away to have noticed. A hurler that is
+   * charged gets a separate, ordinary encounter and fights back with the stone.
+   */
   ranged: boolean;
   exchange: Exchange;
 };
@@ -176,12 +200,23 @@ export const STRATEGY_LABELS: Record<CombatStrategy, string> = {
   hurl: "Winding up a hurl",
   pitch: "Pitching",
   toss: "Tossing close",
+  hammer: "Hammering two-handed",
+  swing: "Swinging the stone",
+  jab: "Driving the stone in",
+  punch: "Punching",
 };
 
 export const THROW_TYPES: readonly ThrowType[] = ["hurl", "pitch", "toss"];
+/** Heaviest first, which is also slowest first. `weightedChoice` falls back to the last. */
+export const STONE_STRIKES: readonly StoneStrike[] = ["hammer", "swing", "jab", "punch"];
 
 export function isThrow(strategy: CombatStrategy | null): strategy is ThrowType {
   return strategy === "hurl" || strategy === "pitch" || strategy === "toss";
+}
+
+export function isStoneStrike(strategy: CombatStrategy | null): strategy is StoneStrike {
+  return strategy === "hammer" || strategy === "swing" ||
+    strategy === "jab" || strategy === "punch";
 }
 
 const AWARENESS_RANGE = 8.5;
@@ -293,6 +328,125 @@ const ACQUIRE_SLACK = 1.15;
 const UNCLAIMED_ACQUIRE_SLACK = 1.25;
 /** Slack on the range an encounter survives to, which sets the hysteresis band. */
 const RELEASE_SLACK = 1.35;
+
+/**
+ * How far a stone held in the hand reaches. A broadsword is 2.65 m of steel; an
+ * arm and a rock are most of a metre short of that, so a hurler that wants to use
+ * the stone has to stand inside the band a swordsman is happiest in. That is the
+ * trade the close fight is made of, and it is why crossing a hurler's standoff is
+ * still how a hurler is killed.
+ */
+export const STONE_RANGE = 3.2;
+/**
+ * Where a hurler stands to use it. All but on the floor of the readable band, and
+ * that is not taste: the grip only reaches about 1.65 m in front of the fighter,
+ * measured on the rig, and a strike lunges for the rest. Any further out and the
+ * stone resolves in the air between them. Held clear of `STONE_RANGE` by more
+ * than the jitter, so a pair drifting cannot cross the range check and rewind the
+ * exchange every frame.
+ */
+export const STONE_FIGHT_DISTANCE = 2.7;
+/**
+ * How far a pair trading stone blows may drift before it stops being a trade.
+ * The band between this and `STONE_RANGE` is the hysteresis: a charge becomes a
+ * duel at reach and the duel is let go a good half-metre further out, so a hurler
+ * shoved a step back is still fighting rather than flickering between the two.
+ *
+ * Presentation reads it too — `rigwalker.ts` swaps the hurler's whole stance on
+ * this band — so it is one number rather than two that have to agree.
+ */
+export const STONE_RELEASE_RANGE = STONE_RANGE * RELEASE_SLACK;
+
+export type StoneProfile = {
+  /**
+   * How much warning the strike needs, as a fraction of `STONE_REACTION_WINDOW`.
+   * A fighter with less room than this will not choose it, which is the whole of
+   * "swings when it has time and punches when it does not": the punch needs none,
+   * so there is always something left to throw.
+   */
+  load: number;
+  /** Seconds spent judging the strike, as a base plus a random span. */
+  measure: readonly [number, number];
+  /** Seconds the striking motion itself runs. */
+  motion: number;
+  /**
+   * Seconds of recovery. A heavy head needs room to come back — the one real
+   * cost of choosing the big strike, and what makes committing to it a decision.
+   */
+  recovery: number;
+  damage: number;
+  /** How hard the strike is to stop, before the defender's own qualities. */
+  pressure: number;
+  /** How loudly it reads when it lands. */
+  intensity: number;
+};
+
+/**
+ * The four stone strikes.
+ *
+ * They mirror how a weight in the hand is actually fought with. Power comes from
+ * the ground up — the rear foot drives, the hips turn ahead of the shoulders, and
+ * the arm arrives last — which is slow and has to be bought with time. The
+ * two-handed blow is the extreme of that: slower still, and the hardest thing in
+ * the fight to stand under. At the other end, a short thrust straight from the
+ * shoulder is the Māori patu's whole technique, and a punch is what is left when
+ * there is no time to pick.
+ *
+ * Damage per second is deliberately *not* flat across them: with time to load,
+ * the big strikes are worth having, and the fighter denied that time is reduced
+ * to the fast ones. Every one of them is under what a swordsman does in the same
+ * second, because the hurler's job is still to be somewhere else.
+ */
+export const STONE_PROFILES: Record<StoneStrike, StoneProfile> = {
+  hammer: {
+    load: 0.62, measure: [0.34, 0.3], motion: 1.22, recovery: 0.68,
+    damage: 38, pressure: 0.16, intensity: 1,
+  },
+  swing: {
+    load: 0.44, measure: [0.26, 0.26], motion: 1.02, recovery: 0.54,
+    damage: 28, pressure: 0.11, intensity: 0.88,
+  },
+  jab: {
+    load: 0.16, measure: [0.14, 0.18], motion: 0.56, recovery: 0.28,
+    damage: 14, pressure: 0.05, intensity: 0.6,
+  },
+  punch: {
+    load: 0, measure: [0.05, 0.1], motion: 0.36, recovery: 0.2,
+    damage: 9, pressure: 0, intensity: 0.42,
+  },
+};
+
+/** How each strike reads on the body it lands against, and which way it topples one. */
+const STONE_LINES: Record<StoneStrike, AttackLine> = {
+  hammer: "overhead", swing: "forehand", jab: "rising", punch: "flank",
+};
+
+/**
+ * How long a fighter has to see a blow coming and answer it with something
+ * better than a reflex. Anything landing sooner than this is pressure; anything
+ * further off is room. It is a shade under a full swing's motion on purpose — a
+ * fighter that could load a swing inside the time one takes to arrive would never
+ * be caught short, and being caught short is the point.
+ */
+const STONE_REACTION_WINDOW = 0.85;
+/**
+ * How far apart two blows have to be arriving from before one guard cannot
+ * answer both. Roughly fifty degrees: two swordsmen shoulder to shoulder are one
+ * problem, and two working opposite hips are two.
+ */
+const STONE_COVER_ARC = 0.9;
+/**
+ * Where in a cut the blow arrives, for working out how long there is left. The
+ * outcome resolves at 0.46 and the damage lands at 0.54, so it is between them.
+ */
+const MELEE_CONTACT_PHASE = 0.5;
+/**
+ * What defending with arms rather than steel costs, and what getting the second
+ * arm up buys back. A hurler stops fewer cuts than a swordsman does however well
+ * it reads them, which is why closing on one still works.
+ */
+const STONE_GUARD_PENALTY = -0.13;
+const STONE_COVER_RECOVERY = 0.09;
 const MAX_SUPPORTERS_PER_TARGET = 2;
 /**
  * What each body already on a target adds to the cost of choosing it, so a
@@ -331,7 +485,19 @@ const EMPTY_CUE: CombatCue = {
   intensity: 0,
   outcome: "pending",
   preferredDistance: BASE_FIGHT_DISTANCE,
+  doubleGuard: false,
 };
+
+/**
+ * What is on its way to one fighter this frame: the bearing every committed
+ * strike is arriving on, and how little time there is before the soonest of them
+ * lands. A hurler reads its whole close fight off this — the strike it picks
+ * comes off the urgency and the guard it puts up comes off the bearings.
+ */
+type Incoming = { bearings: number[]; urgency: number };
+
+/** Nothing arriving, shared rather than allocated per lookup. */
+const NOTHING_INCOMING: Incoming = { bearings: [], urgency: 0 };
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
@@ -400,6 +566,8 @@ export class CombatDirector {
   private readonly fighters = new Map<number, FighterState>();
   /** The body each team's hurlers are working on together, by corporation. */
   private readonly hurlerFocus = new Map<string, number>();
+  /** What is arriving at each fighter, rebuilt every frame. See `Incoming`. */
+  private readonly incoming = new Map<number, Incoming>();
 
   constructor(private readonly random: () => number = Math.random) {}
 
@@ -408,6 +576,7 @@ export class CombatDirector {
     this.encounters.clear();
     this.fighters.clear();
     this.hurlerFocus.clear();
+    this.incoming.clear();
   }
 
   update(delta: number, snapshots: readonly CombatantSnapshot[]): CombatFrame {
@@ -426,7 +595,7 @@ export class CombatDirector {
       const a = byId.get(encounter.a);
       const b = byId.get(encounter.b);
       if (!a || !b || a.corporation === b.corporation ||
-          this.distance(a, b) > this.awareness(a, b) * RELEASE_SLACK) {
+          this.distance(a, b) > this.releaseRange(encounter, a, b)) {
         this.encounters.delete(key);
       }
     }
@@ -442,12 +611,21 @@ export class CombatDirector {
     for (const encounter of this.encounters.values()) {
       // A ranged encounter is never promoted: a hurler and its target are not
       // trading, and making the pair mutual would hand the target's cue to a
-      // fighter standing twelve metres away. Nor is a swordsman's encounter
-      // *on* a hurler, which would hand the hurler a sword and a riposte —
-      // crowded, a hurler keeps throwing, and the throws get worse.
+      // fighter standing twelve metres away.
       if (!encounter.support || encounter.ranged ||
-          byId.get(encounter.b)?.role === "hurler" ||
           primaryParticipants.has(encounter.b) || promotedTargets.has(encounter.b)) {
+        continue;
+      }
+      // A hurler is promoted only once the fight has actually reached it. Out at
+      // throwing range it has no answer to a swordsman walking at it, and a
+      // mutual pair would hand its cue to somebody it cannot touch; inside stone
+      // reach the rock in its hand stops being a missile and becomes a weapon,
+      // and the pair is a trade like any other. This is the one way into a duel
+      // a hurler ever gets — it is charged into one, never walks into one.
+      const charged = byId.get(encounter.a);
+      const target = byId.get(encounter.b);
+      if (target?.role === "hurler" &&
+          (!charged || this.distance(charged, target) > STONE_RANGE)) {
         continue;
       }
       encounter.support = false;
@@ -493,11 +671,20 @@ export class CombatDirector {
         const a = living[aIndex];
         const b = living[bIndex];
         if (a.corporation === b.corporation || reserved.has(a.id) || reserved.has(b.id)) continue;
-        // Hurlers never enter a mutual duel; they take a one-sided encounter of
-        // their own below and are charged rather than traded with.
-        if (a.role === "hurler" || b.role === "hurler") continue;
+        // A hurler pairs off only with somebody already inside stone reach.
+        // Further out it is throwing, and a mutual pair would hand its cue to a
+        // fighter it cannot touch; nearer than that the rock in its hand is a
+        // weapon like any other and the two are simply fighting.
+        //
+        // This is the second way into a duel and it is not redundant with the
+        // promotion pass. A hurler does not throw at a body standing on top of
+        // it, so it may have no encounter at all to be promoted out of — and
+        // with nothing published, nobody would ever engage it.
+        const bound = a.role === "hurler" || b.role === "hurler"
+          ? STONE_RANGE
+          : AWARENESS_RANGE;
         const distance = this.distance(a, b);
-        if (distance <= AWARENESS_RANGE) candidates.push({ a, b, distance });
+        if (distance <= bound) candidates.push({ a, b, distance });
       }
     }
     candidates.sort((left, right) => left.distance - right.distance);
@@ -508,6 +695,13 @@ export class CombatDirector {
       this.encounters.set(this.key(candidate.a.id, candidate.b.id), encounter);
       reserved.add(candidate.a.id);
       reserved.add(candidate.b.id);
+      // A fresh duel is a mutual pair like a promoted one, and the battery pass
+      // below reads this to know which of its throwers are busy. Left out, a
+      // hurler that paired off here was handed a second, ranged encounter on the
+      // same frame and drove both — throwing at the far flank while trading
+      // blows with the body in front of it.
+      primaryParticipants.add(candidate.a.id);
+      primaryParticipants.add(candidate.b.id);
     }
 
     // A team's hurlers work as one battery. They pick a body together, walk it
@@ -523,10 +717,17 @@ export class CombatDirector {
       else batteries.set(fighter.corporation, [fighter]);
     }
     for (const [corporation, battery] of batteries) {
-      const focus = this.chooseFocus(battery, living, this.hurlerFocus.get(corporation) ?? null);
+      // A hurler with somebody inside its guard has put the rock to another use
+      // and is out of the battery until it is free again. Left in, it would drag
+      // the whole team's focus onto the body standing on top of it and have its
+      // teammates throwing rocks into their own melee.
+      const free = battery.filter((hurler) => !primaryParticipants.has(hurler.id));
+      const focus = free.length
+        ? this.chooseFocus(free, living, this.hurlerFocus.get(corporation) ?? null)
+        : null;
       if (focus) this.hurlerFocus.set(corporation, focus.id);
       else this.hurlerFocus.delete(corporation);
-      for (const hurler of battery) {
+      for (const hurler of free) {
         const target = this.throwTarget(hurler, focus, living);
         if (!target) continue;
         throwTargets.set(hurler.id, target);
@@ -602,6 +803,11 @@ export class CombatDirector {
       addAttacker(choice.target.id);
     }
 
+    // Read before anything is advanced, because a plan made this frame is made
+    // against what is already on its way — not against what this frame's own
+    // exchanges are about to become.
+    this.readIncoming(byId);
+
     for (const encounter of this.encounters.values()) {
       const a = byId.get(encounter.a);
       const b = byId.get(encounter.b);
@@ -613,7 +819,100 @@ export class CombatDirector {
       } else this.advanceEncounter(encounter, a, b, delta, cues, damage, events);
     }
 
+    // The second arm, and only once the whole frame's cues are in. Which fighters
+    // are answering two blows at once cannot be known while the encounters are
+    // still being walked — the second attacker may not have written its cue yet —
+    // and a guard that came up half the time would read as a twitch.
+    for (const [id, cue] of cues) {
+      if (cue.action !== "block" && cue.action !== "hit") continue;
+      cue.doubleGuard = this.isCovering(id);
+    }
+
     return { cues, damage, events };
+  }
+
+  /**
+   * Everything committed to a strike, filed under the fighter it is arriving at:
+   * which bearing it comes in on and how long there is left before it lands.
+   *
+   * Only committed strikes count. A rock still being wound up twelve metres away
+   * is not pressure — it can be re-aimed, and the hurler holding it may never
+   * throw — but a rock already in the air is, and so is a blade halfway through
+   * its cut. That distinction is the whole value of the reading: it is what a
+   * fighter could actually see coming.
+   */
+  private readIncoming(byId: Map<number, CombatantSnapshot>): void {
+    this.incoming.clear();
+    for (const encounter of this.encounters.values()) {
+      const exchange = encounter.exchange;
+      const remaining = this.timeToContact(exchange);
+      if (remaining === null || remaining > STONE_REACTION_WINDOW) continue;
+      const attacker = byId.get(exchange.attackerId);
+      const defender = byId.get(exchange.defenderId);
+      if (!attacker || !defender) continue;
+      let entry = this.incoming.get(defender.id);
+      if (!entry) {
+        entry = { bearings: [], urgency: 0 };
+        this.incoming.set(defender.id, entry);
+      }
+      entry.bearings.push(Math.atan2(attacker.x - defender.x, attacker.z - defender.z));
+      entry.urgency = Math.max(entry.urgency, 1 - remaining / STONE_REACTION_WINDOW);
+    }
+  }
+
+  /**
+   * Seconds until this exchange's blow lands, or null when there is no blow left
+   * in it — one already resolved, or one still loose enough that the attacker
+   * could change its mind.
+   */
+  private timeToContact(exchange: Exchange): number | null {
+    if (exchange.throwType) {
+      if (!exchange.released || exchange.impactAnnounced) return null;
+      return Math.max(0, exchange.impactAt! - exchange.elapsed);
+    }
+    if (exchange.damageApplied) return null;
+    return Math.max(0, exchange.measureDuration +
+      exchange.attackDuration * MELEE_CONTACT_PHASE - exchange.elapsed);
+  }
+
+  /**
+   * Whether this fighter has more coming at it than one guard can answer: two
+   * blows on the way, far enough apart in bearing that meeting one turns the
+   * body away from the other. Two swordsmen shoulder to shoulder are one
+   * problem; two working opposite hips are two, and the answer to two is to stop
+   * choosing and cover.
+   */
+  private isCovering(id: number): boolean {
+    const bearings = this.incoming.get(id)?.bearings;
+    if (!bearings || bearings.length < 2) return false;
+    for (let left = 0; left < bearings.length; left += 1) {
+      for (let right = left + 1; right < bearings.length; right += 1) {
+        let apart = Math.abs(bearings[left] - bearings[right]) % (Math.PI * 2);
+        if (apart > Math.PI) apart = Math.PI * 2 - apart;
+        if (apart > STONE_COVER_ARC) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * How far apart a pair may drift before the encounter is let go.
+   *
+   * A charge on a hurler reaches as far as the hurler throws, because crossing
+   * that ground is the whole of the fight. A pair actually trading blows is held
+   * to reach instead — and when one of them is a hurler, reach is the stone's,
+   * which is the shorter of the two. That is what lets a hurler shoved clear of
+   * a swordsman go back to throwing rather than staying locked in a duel it has
+   * walked out of.
+   */
+  private releaseRange(
+    encounter: Encounter, a: CombatantSnapshot, b: CombatantSnapshot,
+  ): number {
+    if (!encounter.support && !encounter.ranged &&
+        (a.role === "hurler" || b.role === "hurler")) {
+      return STONE_RELEASE_RANGE;
+    }
+    return this.awareness(a, b) * RELEASE_SLACK;
   }
 
   /**
@@ -698,13 +997,21 @@ export class CombatDirector {
     living: readonly CombatantSnapshot[],
   ): CombatantSnapshot | null {
     const reach = LONG_THROW_RANGE * ACQUIRE_SLACK;
-    if (focus && this.distance(hurler, focus) <= reach) return focus;
+    // Nothing standing inside arm's length. A rock is not thrown at a body that
+    // close — it is hit with — and the frame between a charger arriving and the
+    // duel being struck used to be spent flicking a pebble at somebody already
+    // on top of the thrower, plan ring and all.
+    const throwable = (candidate: CombatantSnapshot) => {
+      const distance = this.distance(hurler, candidate);
+      return distance > STONE_RANGE && distance <= reach;
+    };
+    if (focus && throwable(focus)) return focus;
     let best: CombatantSnapshot | null = null;
     let bestScore = Number.POSITIVE_INFINITY;
     for (const candidate of living) {
       if (candidate.corporation === hurler.corporation) continue;
       const distance = this.distance(hurler, candidate);
-      if (distance > reach) continue;
+      if (!throwable(candidate)) continue;
       const score = distance + (candidate.health / candidate.maxHealth) * FOCUS_HEALTH_WEIGHT;
       if (score < bestScore) {
         bestScore = score;
@@ -771,6 +1078,86 @@ export class CombatDirector {
     };
   }
 
+  /**
+   * A stone strike, picked by how much room the fighter has to make it.
+   *
+   * This is the reactive half of the close fight and the reason it is planned
+   * rather than played back. Power in a weight-in-the-hand blow comes from the
+   * ground up — rear foot, then hips, then shoulders, with the arm arriving
+   * last — and that sequence takes time somebody has to give you. Given it, a
+   * hurler turns its whole body into the blow; given none, it hits with the fist
+   * the rock is already in. The `load` on each profile is that price, and the
+   * urgency reading is what it is paid out of.
+   *
+   * A riposte is the extreme case: the fighter has just taken a cut off its arms
+   * and the window is whatever is left of the attacker's recovery, so it is
+   * planned with no room at all and comes out short.
+   */
+  private planStone(
+    attacker: CombatantSnapshot,
+    defender: CombatantSnapshot,
+    chainDepth: number,
+    riposting: boolean,
+  ): Exchange {
+    const state = this.ensureFighter(attacker.id);
+    state.plans += 1;
+    const room = riposting
+      ? 0
+      : 1 - (this.incoming.get(attacker.id) ?? NOTHING_INCOMING).urgency;
+    const p = attacker.profile;
+    const weights = STONE_STRIKES.map((strike) => {
+      // Nothing it has not got the warning for. A punch needs none, which is why
+      // there is always something left on the table.
+      if (room < STONE_PROFILES[strike].load) return 0;
+      let weight =
+        strike === "hammer" ? p.aggression + p.patience * 0.5 :
+        strike === "swing" ? p.aggression * 0.8 + p.initiative * 0.6 :
+        strike === "jab" ? p.adaptability + p.deception * 0.5 :
+        p.initiative + p.defense * 0.4;
+      if (p.temperament === "bold" && (strike === "swing" || strike === "hammer")) weight += 0.9;
+      if (p.temperament === "patient" && strike === "hammer") weight += 0.8;
+      if (p.temperament === "adaptive" && strike === "jab") weight += 0.8;
+      if (p.temperament === "reactive" && strike === "punch") weight += 0.7;
+      if (state.recentStrategies.includes(strike)) weight *= 0.55;
+      return weight;
+    });
+    const strike = weightedChoice(STONE_STRIKES, weights, this.random);
+    const profile = STONE_PROFILES[strike];
+    const line = STONE_LINES[strike];
+    return {
+      plannerId: attacker.id,
+      attackerId: attacker.id,
+      defenderId: defender.id,
+      strategy: strike,
+      line,
+      feintLine: null,
+      side: line === "backhand" || line === "rising" ? -1 : 1,
+      measureDuration: profile.measure[0] + this.random() * profile.measure[1],
+      attackDuration: profile.motion,
+      recoveryDuration: profile.recovery,
+      elapsed: 0,
+      outcome: "pending",
+      damageApplied: false,
+      swingAnnounced: false,
+      chainDepth,
+      // A stone reaches less far than a blade, so a hurler that means to use one
+      // has to stand where the swordsman wants it. See `STONE_FIGHT_DISTANCE`.
+      preferredDistance: Math.max(
+        MIN_FIGHT_DISTANCE,
+        Math.min(
+          STONE_RANGE - 0.35,
+          STONE_FIGHT_DISTANCE + (this.random() - 0.5) * 0.3,
+        ),
+      ),
+      throwType: null,
+      attackRange: STONE_RANGE,
+      releasePhase: 0,
+      released: false,
+      impactAt: null,
+      impactAnnounced: false,
+    };
+  }
+
   private planExchange(
     attacker: CombatantSnapshot,
     defender: CombatantSnapshot,
@@ -778,16 +1165,31 @@ export class CombatDirector {
     forcedStrategy?: CombatStrategy,
     offensiveOnly = false,
   ): Exchange {
+    // A hurler plans with what it is holding. Every way into an exchange comes
+    // through here — the first plan, the one after it, and the riposte — so this
+    // is the one place the close fight has to be handed over, and a hurler can
+    // never be dealt a sword plan it has no sword for.
+    if (attacker.role === "hurler") {
+      return this.planStone(attacker, defender, chainDepth, forcedStrategy === "riposte");
+    }
     const state = this.ensureFighter(attacker.id);
     const healthRatio = attacker.health / attacker.maxHealth;
     const opponentRatio = defender.health / defender.maxHealth;
     const firstExchange = state.plans === 0;
     state.plans += 1;
+    // Waiting to counter hands the attack to the other fighter, and what a
+    // hurler attacks with is a stone strike planned by the hurler itself. Left
+    // on the table against one, `react` and `distance-trap` made the hurler the
+    // attacker of a sword exchange — a fighter cutting with a weapon it does not
+    // carry, announcing plans it cannot execute. Sizing one up is still fine:
+    // that leaves the attack where it was.
     const strategies: readonly CombatStrategy[] = offensiveOnly
       ? ["rush", "feint", "beat"]
-      : firstExchange
-        ? ["rush", "react", "size-up", "feint"]
-        : ["rush", "react", "size-up", "feint", "distance-trap", "beat"];
+      : defender.role === "hurler"
+        ? ["rush", "size-up", "feint", "beat"]
+        : firstExchange
+          ? ["rush", "react", "size-up", "feint"]
+          : ["rush", "react", "size-up", "feint", "distance-trap", "beat"];
     const p = attacker.profile;
     const weights = strategies.map((strategy) => {
       let weight =
@@ -1059,7 +1461,9 @@ export class CombatDirector {
     const distance = this.distance(attacker, defender);
     exchange.elapsed += delta;
 
-    if (distance > ATTACK_RANGE) {
+    // A cut reaches 4.3 m and a stone in the hand a good deal less, so the gate
+    // is the exchange's own reach rather than the sword's.
+    if (distance > exchange.attackRange) {
       exchange.elapsed = Math.min(exchange.elapsed, exchange.measureDuration);
       writeCue(cues, attacker.id, this.cue(exchange, defender.id, "size-up", "close", 0));
       if (!encounter.support) {
@@ -1134,6 +1538,7 @@ export class CombatDirector {
       if (!exchange.damageApplied && phase >= 0.54) {
         if (exchange.outcome === "hit" || exchange.outcome === "glancing") {
           const base =
+            isStoneStrike(exchange.strategy) ? STONE_PROFILES[exchange.strategy].damage :
             exchange.strategy === "rush" ? 28 :
             exchange.strategy === "beat" ? 20 :
             exchange.strategy === "riposte" ? 22 :
@@ -1201,14 +1606,24 @@ export class CombatDirector {
         ? defender.profile.defense * 0.18 + defender.profile.adaptability * 0.1
         : exchange.strategy === "distance-trap" ? defender.profile.patience * 0.12 : 0;
     const attackPressure =
+      isStoneStrike(exchange.strategy) ? STONE_PROFILES[exchange.strategy].pressure :
       exchange.strategy === "feint" ? attacker.profile.deception * 0.25 :
       exchange.strategy === "beat" ? 0.12 + attacker.profile.aggression * 0.12 :
       exchange.strategy === "rush" ? attacker.profile.initiative * 0.1 :
       exchange.strategy === "size-up" ? attacker.profile.adaptability * 0.1 :
       exchange.strategy === "riposte" ? 0.18 : 0;
+    // Arms, not steel. A hurler meeting a cut on its forearms turns fewer of
+    // them than a swordsman with a blade to put in the way, however well it
+    // reads the line — which is why walking one down still works. Getting the
+    // second arm up buys most of that back, and costs it the hand it strikes
+    // with for as long as it is up.
+    const armedDefense = defender.role !== "hurler" ? 0
+      : this.isCovering(defender.id) ? STONE_GUARD_PENALTY + STONE_COVER_RECOVERY
+      : STONE_GUARD_PENALTY;
     const defenseChance = clamp01(
       0.17 + defender.profile.defense * 0.25 +
-      defender.profile.adaptability * learnedLine * 0.25 + tacticalDefense - attackPressure,
+      defender.profile.adaptability * learnedLine * 0.25 + tacticalDefense +
+      armedDefense - attackPressure,
     );
     const roll = this.random();
     if (roll < defenseChance) return "blocked";
@@ -1249,18 +1664,25 @@ export class CombatDirector {
         this.swingWeight(exchange),
       outcome: exchange.outcome,
       preferredDistance: exchange.preferredDistance,
+      // Filled in once every encounter has had its say; see the pass at the foot
+      // of `update`.
+      doubleGuard: false,
     };
   }
 
   private swingWeight(exchange: Exchange): number {
     if (exchange.throwType) return THROW_PROFILES[exchange.throwType].intensity;
+    if (isStoneStrike(exchange.strategy)) return STONE_PROFILES[exchange.strategy].intensity;
     return exchange.strategy === "rush" ? 1 : exchange.strategy === "riposte" ? 0.88 : 0.72;
   }
 
   private event(exchange: Exchange, type: CombatEventType): CombatEvent {
     // A rock's arrival reads as loudly as the throw that sent it, so a swatted
-    // hurl is a bigger moment than a swatted pebble.
-    const weight = exchange.throwType ? this.swingWeight(exchange) : 1;
+    // hurl is a bigger moment than a swatted pebble — and a two-handed hammer
+    // turned aside is a bigger one than a punch that went nowhere.
+    const weight = exchange.throwType || isStoneStrike(exchange.strategy)
+      ? this.swingWeight(exchange)
+      : 1;
     return {
       type,
       attackerId: exchange.attackerId,
