@@ -1126,15 +1126,29 @@ const STONE_BEATS: Record<StoneStrike, {
 
 /**
  * The stance the close fight is fought out of: the rock cocked at the shoulder
- * rather than hanging at the hip, and the free arm carried up in front of the
- * chest. Both ends of every strike's arc, and the pose a hurler holds between
- * them — so it is what tells a player at a glance which fight this hurler thinks
- * it is in, and it is deliberately nothing like the throwing stance.
+ * rather than hanging at the hip, and the free hand carried forward as a lead.
+ * Both ends of every strike's arc, and the pose a hurler holds between them — so
+ * it is what tells a player at a glance which fight this hurler thinks it is in,
+ * and it is deliberately nothing like the throwing stance.
+ *
+ * Two things about it were reported from play and both are measurable, which is
+ * why they are written down here rather than fixed by eye:
+ *
+ * - **The wrist is near neutral, and has to be.** The rock rides the wrist bone
+ *   at `ROCK_IN_HAND`, so cocking the wrist swings the stone back along the
+ *   forearm. At the 0.72 rad this used to carry, the rock sat at 0.80 of the way
+ *   from elbow to fist — behind the hand, lying on the arm. The number to watch
+ *   is that ratio: 1.0 is in the fist, and every strike's own keys are checked
+ *   against it too.
+ * - **The free hand stays on its own side.** Solved to a guard across the chest
+ *   it ended up 0.12 m past the centre line with the forearm folded over the
+ *   sternum, which reads as a fighter hugging itself rather than leading with a
+ *   hand. It is a lead hand now: forward, a little across, mostly its own.
  */
 const STONE_STANCE_ARM: ThrowArmKey =
-  { at: 0, upperX: -0.24, upperY: -0.45, upperZ: -0.8, lowerX: -2.31, handX: 0.72 };
+  { at: 0, upperX: 0, upperY: -0.23, upperZ: -1.15, lowerX: -2.03, handX: -0.05 };
 const STONE_STANCE_FREE: ThrowArmKey =
-  { at: 0, upperX: -0.92, upperY: -0.2, upperZ: -0.58, lowerX: -0.54, handX: 0 };
+  { at: 0, upperX: -0.91, upperY: -0.75, upperZ: 0.09, lowerX: -0.94, handX: 0.08 };
 /** The forearm turned into the blow: elbow tucked, forearm up across the head. */
 const STONE_GUARD_FREE: ThrowArmKey =
   { at: 0, upperX: -1.12, upperY: -0.29, upperZ: -0.47, lowerX: -1.58, handX: 0.17 };
@@ -1539,6 +1553,27 @@ export const ROCK_MATERIAL = new THREE.MeshStandardMaterial({
 // sparks were: at gameplay zoom a rock under about a quarter of a metre is a
 // three-pixel speck and the throw reads as a fighter miming one.
 const heldRockGeometry = createRockGeometry(0.28, 3);
+/**
+ * Where the held rock sits in the wrist bone's own space. The hand bone runs
+ * forward from the wrist, so local +Y is out through the palm.
+ *
+ * It has to clear the fist, and that is a measurement rather than a preference:
+ * the rock is 0.56 m across and the hand is 0.28 m, with the hand mesh centred on
+ * the wrist bone itself. At the 0.2 m this used to be, the rock's near face sat
+ * 0.08 m *behind* the wrist — it swallowed the whole hand and poked back into the
+ * forearm, which reads as a stone worn on the arm rather than held in the
+ * fingers. Out here the fist overlaps the near side of it, which is a grip.
+ *
+ * Reported from play, and only once the close fight existed to report it from: a
+ * throwing hurler carries this hand down at its hip where the rock is half hidden
+ * against the body, and a fighting one holds it up at the shoulder and swings it
+ * across the frame at head height.
+ *
+ * `tools/render_rigwalker_throw.py` has this number as `ROCK_IN_HAND` too, and
+ * the release heights it checks are measured from it — so the two have to move
+ * together or the tool starts validating a rock the game does not draw.
+ */
+const ROCK_IN_HAND = new THREE.Vector3(0, 0.32, 0);
 
 function addMesh(
   parent: THREE.Object3D,
@@ -1863,7 +1898,7 @@ export function createRigwalker(
     heldRock.castShadow = true;
     heldRock.visible = false;
     if (combatBones) {
-      heldRock.position.set(0, 0.2, 0);
+      heldRock.position.copy(ROCK_IN_HAND);
       combatBones.handR.add(heldRock);
     } else {
       heldRock.position.set(0.68, 1.5, 0.1);

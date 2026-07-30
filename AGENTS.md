@@ -604,8 +604,28 @@ from that:
   avoid one throw over. `stone.test.ts` now measures both arms against the torso
   box at twenty phases of every strike.
 - **The stance is deliberately nothing like the throwing stance**: rock cocked at
-  the shoulder rather than hanging at the hip, free arm up. It is what tells a
-  player at a glance which fight this hurler thinks it is in.
+  the shoulder rather than hanging at the hip, free hand forward as a lead. It is
+  what tells a player at a glance which fight this hurler thinks it is in, and
+  because it is held for most of a fight it is the pose most worth getting right.
+  Two faults in it were reported from play and both are measurable:
+  - **A cocked wrist swings the rock back along the forearm.** The rock rides the
+    wrist bone at `ROCK_IN_HAND`, so `handX` moves it. At the 0.72 rad the stance
+    first carried, the stone sat at 0.80 of the way from elbow to fist — behind
+    the hand, lying on the arm. The number to watch is that ratio; 1.0 is in the
+    fist, and it is worth checking on every key, not just the stance.
+  - **A guard folded across the chest reads as a fighter hugging itself.** Solved
+    for a hand in front of the sternum it crossed 0.12 m past the centre line with
+    the forearm over the ribs. A lead hand — forward, a little across, mostly its
+    own side — reads as a guard.
+- **The rock has to clear the fist, and it is bigger than the fist.** The stone is
+  0.56 m across, the hand is 0.28 m, and the hand mesh is centred on the wrist
+  bone itself, so at `ROCK_IN_HAND` = 0.2 m the rock's near face sat 0.08 m
+  *behind* the wrist and swallowed the whole hand. This was always true and only
+  became visible with the close fight, because a throwing hurler carries that hand
+  down at its hip where the rock is half hidden against the body. It is 0.32 m
+  now. **`tools/render_rigwalker_throw.py` has the same constant and measures
+  every release height from it**, so the two move together or the tool starts
+  validating a rock the game does not draw.
 - **Which pose runs is decided by the gap, not by the cue** — `closeFight` in
   `rigwalker.ts`. A defender's cue carries the *attacker's* plan, so a stance
   keyed off the cue's strategy would flicker several times an exchange. Throwing

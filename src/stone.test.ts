@@ -488,6 +488,51 @@ describe("the stone strikes", () => {
     }
   }, 300_000);
 
+  it("holds the stone in the fist rather than back along the arm", async () => {
+    // Reported from play, and measurable. The rock rides the wrist bone at a
+    // fixed offset, so cocking the wrist swings it back down the forearm — at
+    // the 0.72 rad the stance first carried, the stone sat at 0.80 of the way
+    // from elbow to fist, behind the hand and lying on the arm.
+    //
+    // The ratio is what to check: 1 is the fist, more than 1 is out past it, and
+    // anything short of about 0.9 is a hurler wearing its rock rather than
+    // holding it. It is a claim about the guard as much as the strike, because
+    // the stance is the pose held for most of a fight.
+    const bench = stageFight(await loadAsset());
+    const alongArm = () => {
+      const elbow = partAt(bench.hurler, "lower_arm.R");
+      const fist = partAt(bench.hurler, "Hand.R");
+      const span = fist.clone().sub(elbow);
+      return bench.rock().clone().sub(elbow).dot(span) / span.lengthSq();
+    };
+    const cases: Array<[string, () => void]> = [
+      ["the stance", () => bench.hold("size-up", 0, "swing")],
+      ["a guard", () => bench.hold("block", 0.47, "rush")],
+      ["a cover", () => bench.hold("block", 0.47, "rush", true)],
+      ...STONE_STRIKES.map((strike) =>
+        [strike as string, () => bench.hold("attack", 0.5, strike)] as [string, () => void]),
+    ];
+    for (const [name, hold] of cases) {
+      hold();
+      const along = alongArm();
+      expect(along, `${name} carries the stone at ${along.toFixed(2)} of the way to the fist`)
+        .toBeGreaterThan(0.9);
+    }
+  }, 300_000);
+
+  it("keeps the off hand on its own side while it waits", async () => {
+    // A free arm folded across the sternum reads as a fighter hugging itself
+    // rather than leading with a hand. It may cross to block — that is what a
+    // block is — but not to stand.
+    const bench = stageFight(await loadAsset());
+    bench.hold("size-up", 0, "swing");
+    const lead = partAt(bench.hurler, "Hand.L").sub(bench.hurler.group.position);
+    expect(lead.x, `the off hand stands ${lead.x.toFixed(2)} across the centre line`)
+      .toBeLessThan(-0.15);
+    // And it is out in front rather than tucked into the chest.
+    expect(lead.z).toBeGreaterThan(0.9);
+  }, 300_000);
+
   it("moves the guard out to meet a blow, and puts the second arm up to cover", async () => {
     const bench = stageFight(await loadAsset());
     bench.hold("size-up", 0, "rush");

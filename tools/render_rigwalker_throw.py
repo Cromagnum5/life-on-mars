@@ -42,8 +42,11 @@ OUTPUT.mkdir(parents=True, exist_ok=True)
 # Measured off the rig, not assumed: the model faces -Y and stands up +Z.
 FORWARD = Vector((0, -1, 0))
 UP = Vector((0, 0, 1))
-# Where the held rock sits in the wrist bone's own space, matching the runtime.
-ROCK_IN_HAND = Vector((0, 0.2, 0))
+# Where the held rock sits in the wrist bone's own space, matching the runtime's
+# `ROCK_IN_HAND` — far enough out that the fist grips the near side of the rock
+# rather than being swallowed by it. Every release height below is measured from
+# this point, so it and the runtime have to move together.
+ROCK_IN_HAND = Vector((0, 0.32, 0))
 # Landmarks on the skeleton, read off the imported rest pose.
 SHOULDER_HEIGHT = 2.68
 HEAD_HEIGHT = 3.00
