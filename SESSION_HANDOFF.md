@@ -2,138 +2,113 @@
 
 ## Current checkpoint
 
-`main` at `96bb3cc` (`Put the projection toggle in the game, where the problem
-is visible`), clean tree, **merged**. `camera-orbits-the-scene` has been
-fast-forwarded into it and is spent. `main` is 25 commits ahead of `origin/main`;
-nothing is pushed, and pushing is the user's call.
+`main` at `1efee9a` (`Take the throwaway browser drivers back out of the repo`),
+**merged**. `animation-tool` has been fast-forwarded into it and is spent. `main`
+is 10 commits ahead of `origin/main`; nothing is pushed, and pushing is the
+user's call.
 
-This session was cameras, not combat. Its five commits, oldest first:
+**The working tree is deliberately not clean.** `src/pose-tuning.ts` carries hurl
+arm-key edits the user saved out of the animation tool while playing with it.
+They are real work and they are also a regression — see "The ordering the throws
+read by" below. Do not sweep them into a commit and do not throw them away
+without asking. `git diff src/pose-tuning.ts` is the whole of it.
 
-- `63096a4` Let the camera orbit the scene
-- `d10c7a3` Give a fighter its own beat from the seed, not the object counter
-- `e0bf84f` Let the sim ask the camera whether it should be orthographic
-- `3f419cf` Zoom a perspective view by walking in, not by narrowing the lens
-- `96bb3cc` Put the projection toggle in the game, where the problem is visible
+This session built the animation tool. Its commits, oldest first:
 
-Checks:
+- `624051c` Make a throw's timing and its arm arc data, not constants
+- `5cdabfb` Read the feet line off one function, not two
+- `ebcb86d` Give the animation a workbench of its own
+- `789d06a` Give the scrub bar a target worth aiming at, and its keys back
+- `e0d57cc` Write down that a slider must not own the keyboard
+- `ad61f9f` Let the free arm be edited, and measure what that costs
+- `adee132` Count the entry points again
+- `59a78c4` Revert everything, not the fields that existed when it was written
+- `809ab52` Mark what is in the file on every slider
+- `1efee9a` Take the throwaway browser drivers back out of the repo
+
+## Checks
 
 ```sh
-npm test        # 80 pass
+npm test        # 87 pass
 npm run build
 blender --background --python tools/render_rigwalker_throw.py
 blender --background --python tools/render_rigwalker_duel.py
-npm run dev
+npm run dev     # 0.0.0.0:5173, so http://10.0.0.102:5173 from another machine
 ```
 
-The Vite warning about the shared chunk exceeding 500 kB is known and
-non-blocking.
+Three pages: the game at `/`, the combat sim at `/sim.html`, the animation tool
+at `/anim.html`. The sim's bar links to the tool and the tool's back.
 
-## The camera, and both modes stay
+Two things that look like failures and are not:
 
-The user is still deciding what the game is and is using the camera to look
-around. **Keep both projections.** Neither is a leftover; the point is being able
-to flip between them.
+- **Two tests in `combat.test.ts` time out under CPU load.** They are seed loops
+  (32 and 120 seeds) inside a 5 s budget, and a headless Chrome rendering through
+  SwiftShader in the background is enough to push them over. They passed on every
+  quiet run this session. Re-run with the machine idle before believing them.
+- Vite's warning about the shared chunk exceeding 500 kB is known and
+  non-blocking.
 
-Controls, identical in the game and the sim:
+## The animation tool
 
-- `WASD` pans, in the camera's own frame — `W` walks away from the eye whatever
-  direction the view has been swung to.
-- `←` `→` orbit; `↑` `↓` raise and lower, clamped to 6°–84° off the ground.
-  Level reads as nothing and straight down leaves `lookAt` no way to tell which
-  way is north.
-- `P` swaps orthographic and perspective. The game's control hint reads
-  `Flat view` / `Depth view`; the sim's status line reads `ortho 3.2×` or
-  `persp 43° · 21 m`.
-- Wheel zooms. `camera=perspective`, `fov`, `yaw`, `pitch` work in both URLs,
-  because a headless capture cannot press a key.
+`AGENTS.md` has the full rules under **The animation tool**. The short version:
+`anim.html` is the sim with the fight taken out — one Rigwalker, one motion, and
+a phase you hold still, plus the numbers that motion is made of as controls that
+move the rig while you drag them.
 
-`src/world.ts` owns all of it: `CameraOrbit` (yaw, pitch, radius), `orbitOffset`,
-`panFocus`, `viewSpan`, `radiusForFov`, and both camera constructors. The game
-and the sim only wire it up.
+It is **not** a keyframe editor for the GLB. The combat poses are not in the
+model. What it edits is `src/pose-tuning.ts`, and **Save** writes that file
+through a dev-only Vite route, replacing only what is below the marker at the
+foot of it so the prose above survives.
 
-### Three things that are easy to get wrong here
+The reason it is the same instrument as `capture_sim.sh` and not a fourth opinion
+is that it poses the rig by handing the real `Rigwalker.update` a hand-written cue
+with `movement: "plant"`. Everything on screen has been through
+`applyThrowPose`, the balance layer and the model offset.
 
-**1. Orthographic has no distance term at all.** That is what the user reported
-as "units get bigger as they get further away". Nothing scales — measured, a 2 m
-unit is 81.6 px at 47 m and at 91 m. What changes is the *ground*, which
-compresses toward the horizon while the unit does not, so a distant unit reads as
-a giant standing at the back. It is a property of the projection, not a bug, and
-it is why the toggle exists.
+The user's own words on it were "wonderful" and "I understand how to use it
+intuitively". Treat the interaction as something worth protecting.
 
-**2. Judge camera questions in the game, not the sim.** The sim holds every
-fighter within a few metres of the focus, so nothing in it is ever far away. The
-effect above is invisible there and obvious in the game, where units and
-buildings are spread over 180 m. Capturing the sim at a low pitch is what made an
-almost-dead feature look verified.
+## The ordering the throws read by
 
-**3. Perspective must spend zoom on distance, never on the lens.** Magnifying by
-narrowing the field of view is what a telephoto does, and a telephoto flattens
-depth: at the sim's usual 3.2× that was a 14° lens 66 m out, orthographic in all
-but name. `applyZoom` in both pages leaves the lens fixed and walks the eye in
-(`radiusForFov(fov, VIEW_HEIGHT / zoomLevel)`) so both projections frame the same
-span at the focus and only depth differs. A wider `fov` comes in closer still and
-reads deeper.
+**Read this before touching the arm.** The three throws have to release in order —
+a hurl above a pitch above a toss — because that ordering is how the unit's three
+ranges read as three different throws rather than one throw at three speeds.
 
-## A seed is only worth what nothing else can touch
+The margin is thin and the arm keys spend it. Measured this session in the tool,
+world height of the held rock at each throw's own release phase:
 
-`combatId` is `group.id`, three.js's **global object counter**, and five sites in
-`rigwalker.ts` used that number as each unit's own beat — separation angle,
-distance-reading cadence, combat step phase. Every mesh, light, rock and camera
-built before the units moved it. Adding one camera to the sim shifted every id by
-one and moved every fighter in every seed by about half a metre at six seconds,
-with an event log and damage tally that matched exactly. A capture sheet compared
-against that looks like a pose regression and is not one.
+| | hurl | pitch | toss | hurl over pitch |
+| --- | --- | --- | --- | --- |
+| as committed | 4.481 | 4.462 | 4.225 | **+0.019** |
+| the user's saved edits | 4.316 | 4.462 | 4.225 | **−0.146** |
 
-It now comes off the seeded spawn stream (`variation` in `createRigwalker`), and
-`rigwalker.test.ts` replays a fight across a shifted object counter to keep it
-that way. `combatId` stays `group.id`, which is fine: it is only compared and
-keyed, never counted on.
+The edits sitting in the working tree flip the elbow (`lowerX`) on four hurl keys
+from folded to extended. It is a defensible change to how the arm looks, and it
+releases 0.165 m lower, which puts the hurl **under** the pitch. Either the pitch
+comes down with it or the hurl's shoulder goes up; the change is not finished on
+its own.
 
-**The rule: anything that changes how a unit moves must come from an injected
-random stream** — never an id, a counter, an array index, or the wall clock. Any
-of those turns a scenery change into a combat change.
-
-**Consequence for the pose work below: every capture sheet taken before `d10c7a3`
-no longer matches.** Outcomes are the same shape; the fine detail moved once.
-Retake references before reading any of them as a regression.
-
-## Verify the thing the user will actually do
-
-`P` shipped twice as a dead key. Both times the URL parameter was tested, the
-picture looked right, and the key itself was never pressed. The first time it was
-wired only into the sim while the user was pressing it in the game.
-
-`tools/capture_sim.sh` and URL parameters test *rendering*. They do not test
-input, and they do not test the page the user has open. For anything driven by a
-key, drive a real browser:
-
-```sh
-chrome --headless=new --remote-debugging-port=9223 about:blank &
-# then Input.dispatchKeyEvent over CDP, and Page.captureScreenshot after it
-```
-
-Node 20 needs `--experimental-websocket` for a CDP client.
-
-Known and unrelated: **`hud=0` renders a blank frame in headless capture.** It
-reproduces on commits before this session's work. The clean-render path is
-documented in AGENTS.md and currently broken.
+**These numbers are in the tool's frame, not Blender's.** The Blender port reports
+the same three release heights as 3.77 / 3.73 / 3.48, measured from a different
+origin. Both are right and they are not comparable across instruments — only
+within one. Whichever you use, use one.
 
 ## Which instrument to trust
 
-**Read this before touching a pose.** There are three, they disagree, and each
-one has shipped a wrong pose that the other two would have caught.
+There are now **four**, they disagree, and each has shipped a wrong pose the
+others would have caught.
 
-**1. The arithmetic in `rigwalker.ts`** (`ankleLift`, `ankleReach`, `hurlStep`)
-is planar and knows nothing about rotation about the vertical. It is right about
-what a pose *costs* and wrong about where anything ends up once the body turns.
-It said the lead foot was planted while the rig had it skating a quarter of a
-metre. Do not tune a foot against it.
+**1. The arithmetic in `rigwalker.ts`** (`ankleLift`, `ankleReach`, `hurlStep`) is
+planar and knows nothing about rotation about the vertical. Right about what a
+pose *costs*, wrong about where anything ends up once the body turns. It said the
+lead foot was planted while the rig had it skating a quarter of a metre. Do not
+tune a foot against it.
 
-**2. `tools/render_rigwalker_throw.py`** ports `applyThrowPose` onto the real
-GLB and measures it. Authoritative about the arm, the rock, and about what a
-throw *asks* the legs for — it sees the yaw, the root pitch and the real bone
-axes, which (1) cannot. It stops before `applyBalancePose`, so it is **not**
-authoritative about where a foot is on screen.
+**2. `tools/render_rigwalker_throw.py`** ports the pose onto the real GLB and
+measures it. Authoritative about the arm, the rock, and what a throw asks the legs
+for — it sees the yaw, the root pitch and the real bone axes, which (1) cannot. It
+stops before `applyBalancePose`, so it is **not** authoritative about where a foot
+is on screen.
 
 ```sh
 MEASURE=1 blender --background --python tools/render_rigwalker_throw.py
@@ -141,132 +116,161 @@ FEET=1 MEASURE=1 blender ...   # a hurl foot by foot, fifty phases
 ARM=1  MEASURE=1 blender ...   # the free arm's depth inside the torso box
 ```
 
-`MEASURE=1` skips the renders, which are most of the runtime; a stance question
-is ten seconds, not three minutes. Drop it to get the contact sheets in
-`/tmp/life-on-mars-throw-review`.
+`MEASURE=1` skips the renders, which are most of the runtime: a stance question is
+ten seconds, not three minutes.
 
-**3. `tools/capture_sim.sh`** drives the real game and is the only one that has
-seen `applyBalancePose`. Final say on silhouette and on anything the balance
-layer touches.
+**It is a hand port and reads nothing.** Every number the animation tool saves has
+to be copied into it by hand, or the two instruments are describing different
+animations. Nothing enforces this. It is the sharpest edge the tool introduced.
+
+**3. `tools/capture_sim.sh`** drives the real game and has seen every pose layer.
+Final say on silhouette, and the only one that sees a pose inside a real fight.
 
 ```sh
-EXTRA='zoom=6&on=HR1&feet=1' tools/capture_sim.sh /tmp/sheet "1h v 1" 3 1.63 1.95 2.21
+EXTRA='zoom=6&on=HR1&feet=1' tools/capture_sim.sh /tmp/sheet "1h v 1" 3 1.63 1.95
 ```
 
-- `on=HR1` rides one fighter by label. At a zoom that fills the frame with a
-  body, the centroid of two fighters twelve metres apart frames neither.
-- `feet=1` prints each foot in that fighter's own frame **after every pose
-  layer**, with its toe pitch. A planted foot reads about `h0.07`; compare
-  against a swordsman in the same frame rather than against zero.
-- Every URL it builds is echoed. Paste one into a browser and it is the same
-  frame — that is what makes a pose arguable with the user rather than
-  describable at them.
-- The balance layer is a live sim, so a single frame at low engagement is noisy.
-  Judge the stance from several frames or from the middle of a throw, where
-  engagement is high and the balance layer has no authority over the legs.
+**4. `anim.html`** is the same three layers as (3), interactive, at a phase that
+holds still. It is the right instrument for *authoring* and for anything about the
+free arm. Its readouts — engagement, the step's forward and drop, the rock's
+height, the free arm's clearance, and the same feet string `feet=1` prints — are
+live and after every layer.
 
-**`renders/index.html`** is an earlier session's output: fourteen phases of the
-same hurl in three columns, each with the frame's sim URL. Regenerate with
-`capture_sim.sh` into `renders/<column>/` and rebuild with
-`python3 renders/build_index.py`. `renders/` is gitignored, and its current
-contents predate `d10c7a3` — see the seed section above.
+Its one caveat: the balance layer is a damped spring, so a scrub takes a moment to
+settle. What it settles to is the pose; the swing on the way there is not. At low
+engagement that layer owns the legs completely, so the idle stance swings either
+side of the authored one by a good margin. That is the sim working.
 
-## The one rule the hurl work found
+## The free arm is editable now, and measured
 
-**A limb has to be clear of the body before it swings through where the body
-is.** It cost two commits, at two different joints, and it generalises:
+The counterweight arm's coefficients are `POSE_TUNING.freeArm`. It is **summed**
+from the beats while the throwing arm is **keyed**, and that is not an
+inconsistency: the throwing arm traces an arc through a narrow band of Euler
+angles a sum walks out of, and this arm has no arc to trace.
 
-- A foot that starts travelling before it lifts skates. Feet hung on the body's
-  power beats did exactly that at both ends of the step, so the legs got six
-  beats of their own (`HURL_TUCK`, `HURL_SWING`, `HURL_STEP`, `HURL_HEEL`,
-  `HURL_DRIVE`, `HURL_HOME`). None of draw/stride/whip/follow start where a foot
-  needs to.
-- The free arm folds across the chest and is then driven down and back. Opening
-  it on the whip is too late, because the whip *is* the swing — so the opening
-  got its own beat too, `HURL_OPEN`, that leads it.
+Editing it needed the measurement to come with it, because this arm's one real
+fault is going *through* the chest instead of round it — and that is the fault a
+picture cannot show. The arm is drawn in front of the torso either way and the
+difference is a few centimetres of one Euler angle. The elbow once sat a quarter
+of a metre inside the body for a fifth of the motion and only a measurement found
+it.
 
-The corollary is that the four body beats are about **power**, and anything
-about **contact** — with the ground, with the torso — needs its own timing.
+So the tool's readout ports `inside_torso` from the Blender tool, sign flipped so
+bigger is safer, and reads red when the elbow, forearm or hand is buried. The two
+agree to the millimetre: 0.259 m clear at phase 0, 0.345 at 0.40, **0.069 at
+0.92**.
+
+That last figure is the budget. It is the tightest moment of a hurl — the elbow on
+its way home — and it is the first number to go negative if this arm is pushed
+around. **The old handoff's claim of "at least 0.156 m at every phase" does not
+survive a fine sweep of the hurl**; treat 0.069 m as the real headroom until
+somebody re-measures all three throws.
+
+## Rules the tool work found
+
+- **A slider must not own the keyboard.** The keydown handler bailed on any
+  focused input, so touching one slider killed every shortcut on the page and
+  turned the arrow keys into an editor for the value last dragged. Only what you
+  type into — number fields, the line picker — gets the keys. Drag a value, then
+  step through the frames it changed, is the loop the tool exists for.
+- **A restore must not enumerate fields.** Revert named the four things it put
+  back and shipped broken the day the free arm was added: everything else went
+  home and the arm stayed dragged, which is worse than not reverting, because it
+  looks like it worked. `restorePoseTuning` copies whatever keys the object has.
+- **A mark must line up with the thumb**, which means knowing how wide the thumb
+  is, which means styling the slider all the way down. A thumb's centre travels
+  inset by half a thumb at each end, and measuring against the full width puts the
+  mark visibly wide at exactly the extremes where the interesting values sit.
+- **The glTF loader strips the dots out of node names.** `Elbow.L` is `ElbowL`.
+  The clearance check measured nothing and reported that as nothing to report
+  until it got the same fallback `findCombatBones` already carries.
+- **Saving reloads the page**, because it writes a module the page imports. That
+  is right — it proves disk matches screen — so the tool keeps the motion, phase
+  and camera in the URL and carries the confirmation back in `saved=`. The
+  consequence: `Revert` after a `Save` reverts to the *saved* values. Undoing a
+  save is a git job.
+- **Verify input in a real browser.** URL parameters test rendering. Everything
+  this session that was wrong was wrong about input or focus, and only a driven
+  browser found it:
+
+```sh
+chrome --headless=new --no-sandbox --disable-gpu --enable-unsafe-swiftshader \
+  --use-gl=swiftshader --remote-debugging-port=9223 --user-data-dir=/tmp/prof
+# then Input.dispatchKeyEvent / dispatchMouseEvent over CDP
+```
+
+Node 20 needs `--experimental-websocket` for a CDP client, and the driver scripts
+belong in the scratchpad — three of them rode into the repo on a `git add -A` this
+session because the shell resets its working directory between commands.
+`window.__anim` exposes the scene, subject, phase and clearance so a check can
+read a measurement instead of scraping the panel.
+
+## A seed is only worth what nothing else can touch
+
+`combatId` is `group.id`, three.js's **global object counter**, and five sites in
+`rigwalker.ts` once used that number as each unit's own beat. Adding one camera to
+the sim shifted every id and moved every fighter in every seed by about half a
+metre at six seconds, with an event log and damage tally that matched exactly. A
+capture sheet compared against that looks like a pose regression and is not one.
+
+It now comes off the seeded spawn stream (`variation` in `createRigwalker`), and
+`rigwalker.test.ts` replays a fight across a shifted object counter to keep it
+that way.
+
+**The rule: anything that changes how a unit moves must come from an injected
+random stream** — never an id, a counter, an array index, or the wall clock.
+
+## The camera, and both modes stay
+
+The user is still deciding what the game is and is using the camera to look
+around. **Keep both projections.** Controls are identical in all three pages:
+`WASD` pans in the camera's own frame, `←` `→` orbit, `↑` `↓` raise and lower
+between 6° and 84°, `P` swaps projection, the wheel zooms. `src/world.ts` owns all
+of it.
+
+Three things easy to get wrong here: orthographic has **no distance term at all**,
+so what the user reported as "units get bigger further away" is the ground
+compressing while the unit does not; judge camera questions **in the game**, where
+things are spread over 180 m, never in the sim; and perspective must spend zoom on
+**distance, never the lens**, because a telephoto flattens the depth the
+projection exists for.
 
 ## The hurl is a step
 
-Read `hurlLegs` first, then `hurlStep`, then `applyThrowPose`'s `hurl` branch.
+Read `hurlLegs`, then `hurlStep`, then `applyThrowPose`'s `hurl` branch. A hurler
+waits bladed with the **throwing-side leg forward** carrying the weight. The
+trailing knee folds *before* anything swings, carries through under the body,
+plants 0.46 m ahead, the body travels over it, the rear leg lifts its heel before
+extending, release is over the planted foot, and the recovery is a step home — not
+a slide.
 
-A hurler waits **bladed with the throwing-side leg forward**, carrying the
-weight, and the other leg trailing behind it. `HURLER_LOAD` gives the weighted
-leg the deeper knee, which is the whole of "weight on that leg" as far as the
-rig is concerned — and because `drop` follows the lower foot, bending it is also
-what puts that foot on the ground and lets the trailing one hang light.
-
-Which leg is forward is not a coin toss. It was the other way round and the
-playtest report was that the wind-up had nowhere to step to: the gather lifted
-the near knee and put it back down where it came from.
-
-1. **Pick up and swing through.** The trailing knee folds before anything
-   swings, so the foot leaves the ground where it stood instead of dragging out
-   of the stance. Then it carries through under the body with the shin tucked.
-2. **The gather.** Knee up, feet passing each other, the body leaning away and
-   winding clockwise off the target. All the weight is still on the
-   throwing-side foot, which has not moved since phase 0.
-3. **The plant.** That leg reaches out and lands 0.46 m ahead of the spot the
-   fighter holds. The body then travels over it — 0.30 m of `forward`, carried
-   as a model offset because the director owns where a hurler stands.
-4. **The drive.** The throwing-side leg lifts its heel *before* it extends
-   behind, and is then allowed to drag: by that point it is in the air, and a
-   trailing foot in the air is a drive rather than a slide.
-5. **Release**, over the planted lead foot, feet 0.47 m apart.
-6. **The recovery is a step, not a slide.** The lead foot picks itself up,
-   travels about a metre, and sets down back in the stance. `HURL_STEP` fades
-   out over the whole back end of the motion for this; reusing the stride beat
-   snapped it home in a tenth of a second.
+**A limb has to be clear of the body before it swings through where the body is.**
+That cost two commits at two joints and it generalises: the four body beats are
+about **power**, and anything about **contact** — with the ground, with the torso —
+needs its own timing. It is why the legs have six beats of their own and why the
+free arm's opening has one.
 
 **The coil drags the planted foot, and only the leg can put it back.** The root
-turns the whole skeleton about a point on the ground between the feet, so the
-hips opening through the release sweeps the foot the fighter is standing on
-round with them. Uncancelled that was 0.24 m of the lead foot skating backwards,
-in a pose whose own planar numbers said it was still. `hurlLegs` takes a term
-off `hurlHips` for it. This is the clearest example of instrument (1) lying.
-
-Measured on the rig, foot position against the spot the fighter holds:
-
-| | stance | gather (0.30) | plant (0.45) | release (0.58) | recovery (0.85) |
-| --- | --- | --- | --- | --- | --- |
-| trailing/lead foot | −0.66 | −0.06, **h0.68** | +0.38 | +0.46 | −0.09 |
-| throwing-side foot | +0.18 | +0.14 planted | +0.06 | −0.01, h0.14 | +0.32 |
-| split | −0.84 | −0.20 | +0.32 | **+0.47** | −0.41 |
+turns the whole skeleton about a point on the ground, so the hips opening sweeps
+the foot the fighter is standing on round with them. `hurlLegs` takes a term off
+`hurlHips` for it. This is the clearest example of instrument (1) lying.
 
 ## The rig has no IK, and that decides more than taste
 
 The hips are pinned to the terrain and each leg is two rigid bones, so **a foot
-cannot reach out and stay on the ground** — it travels an arc. Every stance
-question is that arithmetic, in `ankleLift`/`ankleReach`.
+cannot reach out and stay on the ground** — it travels an arc. The folded knee is
+the biggest lifter; the root bone sits on the ground, not at the hips, so pitching
+it swings the whole skeleton about the soles. The step's size is bounded by this,
+not by taste, and it sits at 0.30 m.
 
-- **The folded knee is the biggest lifter**, worth more than the whole hip
-  sweep. That is only a bill when the leg is the one being stood on: `drop`
-  follows the *lower* foot, so once the lead foot is planted the rear knee may
-  fold as much as the drive wants, and it should. Fold the knee of the leg
-  holding the fighter up and the crouch that pays for it costs release height.
-- **The root bone sits on the ground, not at the hips.** Pitching it forward
-  swings the whole skeleton about the soles, and anything behind that pivot goes
-  up. Bending belongs to the spine and chest. A root pitch of 0.3 rad was half
-  of "standing on its toes".
-- The step's size is bounded by this, not by taste. It sits at 0.30 m.
-
-## Only one layer may own the legs
-
-`applyBalancePose` is authored for a fighter that is only standing. Layered onto
-a stride, its crouch and recovery steps lifted the rear foot and closed the
-split back up. So `hurlStep` reports an `engagement` and the balance layer's leg
-authority is `1 - engagement`. Its lean and its hit reaction are never scaled.
-
-A consequence worth knowing: at low engagement the balance layer owns the legs
-completely, so the **idle** stance on screen swings either side of the authored
-one by a good margin. That is the sim working, not the stance being wrong.
+`applyBalancePose` is authored for a fighter that is only standing, so its leg
+authority is `1 - engagement`. Its lean and hit reaction are never scaled. **Only
+one layer may own the legs.**
 
 ## What the Hurler is
 
-A ranged unit on the same skeleton, with no sword, a rock in its hand and a
-cache of them on its hip. It picks one of three throws from the current gap:
+A ranged unit on the same skeleton, no sword, a rock in hand and a cache on its
+hip. It picks one of three throws from the current gap:
 
 | throw | band | speed | damage | motion |
 | --- | --- | --- | --- | --- |
@@ -274,148 +278,72 @@ cache of them on its hip. It picks one of three throws from the current gap:
 | `pitch` | to twice sword reach, 8.6 m | 17 m/s | 19 | 0.62 s |
 | `toss` | inside sword reach, 4.3 m | 11 m/s | 8 | 0.30 s |
 
-Both derived ranges come from constants rather than being typed in. `AGENTS.md`
-has the full rules; the short version is that it is deadliest at the top of its
-range, that the range it is at picks its throw, and that it is walked down
-through all three by anything that closes on it.
-
-The stance is shared by all four branches — hurl, pitch, toss, and the pose
-between throws — and they have to agree to the decimal, or every throw opens
-with a foot jumping to a new spot. `hurler.test.ts` pins that.
-
-`ROCK_REFERENCE_SPEED` in `effects.ts` is a **fixed** reference, not the fastest
-throw. The hurl is thrown past it and sits pinned at the flat arc base.
-
-## The arm, and why it is keyed rather than summed
-
-All three throws are overhand: the rock gathers back and low, the elbow leads it
-up above the shoulder, the hand comes over the top and lets go out in front and
-high, and the arm rides down across the body. The elbow holds a right angle
-through the top of the wind and extends *late*, so the arm is one straight bar
-from shoulder to rock at release. An elbow still bent at release is a thrower
-pushing rather than throwing.
-
-None of it was written from first principles. The bone axes were **measured**
-first, one rotation at a time on the imported GLB, because the Z-up to Y-up
-conversion moves them. Those signs are in the comment above `applyThrowPose`.
-
-Two traps behind the keys:
-
-1. **Blender's Euler `XYZ` is not Three.js's.** Three.js composes its default
-   XYZ as `qx*qy*qz`; Blender calls that order `ZYX`. All three tools here pose
-   with `'ZYX'`. Get this wrong and you measure a pose the game never drew.
-2. **A sum of beats cannot trace this arc.** The arm is only above shoulder
-   height through a narrow band of shoulder angles, and blending from a cocked
-   pose to a released one walks out of that band in between — halfway through
-   the arm hangs at the hip and the throw reads as a sling. `THROW_ARM_KEYS`
-   places poses along the arc instead, each solved for a written-down hand *and
-   elbow* position. Constraining the elbow is the part that matters.
-
-The aiming arm runs on the *larger* of the draw and stride beats rather than
-their sum, for the same reason.
-
-## A rock knocks its target down
-
-Damage carries `sourceId` and `thrown`. Presentation turns those into a world
-direction, and a killing throw tips the corpse's up-axis onto the rock's line
-and carries it 0.4 m down it. A cut has no line worth carrying — it lands from a
-fighter standing right there — so it keeps its sideways roll off `side`.
-
-## Crowds and waypoints
-
-From an earlier session; `AGENTS.md` has the rules under **Arriving at a
-waypoint** and **Hysteresis, or the stutter step**.
-
-Arrival is "stopped", not "within 8 cm": no ground made up for
-`CROWD_ARRIVAL_SECONDS`, somebody within `CROWD_BLOCK_DISTANCE` between the unit
-and the point, **and** enough bodies already nearer the point to fill the ground
-still to cover. That last clause is the one to leave alone — without it a bay's
-trio walking abreast funnels, loses a moment's ground, and two of the three quit
-8.6 m short.
-
-The stutter had two independent causes, found by running the real loop headless
-for three minutes and counting how often each unit changed its mind. Now
-`ACQUIRE_SLACK` is 1.15 against a named `RELEASE_SLACK`, and separation steps at
-`SEPARATION_NUDGE` until `SEPARATION_CLEAR`.
-
-**The shape recurs:** anything decided by testing one threshold against
-neighbours every frame will be decided both ways at frame rate, because a crowd
-is never quite still. The headless soak is worth rebuilding when hunting one.
+Deadliest at the top of its range; the range picks the throw; anything that closes
+walks it down through all three. The stance is shared by all four branches — hurl,
+pitch, toss and the pose between throws — and they have to agree to the decimal or
+every throw opens with a foot jumping to a new spot. `hurler.test.ts` pins that.
 
 ## Architecture notes worth preserving
 
 - **The strike is resolved at release, replayed on arrival.** The `throw` event
-  carries speed, flight time, and the already-rolled outcome, so presentation
-  launches a rock that lands on the frame the director applies the damage. The
-  exchange's recovery is stretched to outlast the flight.
+  carries speed, flight time and the already-rolled outcome.
 - **A hurler is never a mutual duellist.** One-sided `ranged` encounters, never
-  promoted, never riposting. A swordsman attacking one takes a normal support
-  encounter and does *not* defer to it.
+  promoted, never riposting.
 - **Being hit outranks what you were planning.** `writeCue` stops a landed blow
   being lost to whichever encounter was iterated last.
-- **Rock size and arc are drawn from the rendered result, not from physics.**
-  All three throws are far harder than their distance needs, so honest
-  ballistics gives three flat lines.
+- **Rock size and arc are drawn from the rendered result, not from physics.** All
+  three throws are far harder than their distance needs.
 - **The step is a model offset, not movement.** The director owns where a hurler
-  stands, so a hurl's travel is `modelRoot.position` inside the group. Local +Z
-  is forward. The health bar rides it; the selection ring does not, because the
-  ring marks the ground the unit holds.
-- **Sparks are point sprites and get no perspective divide for free.** The
-  shader now applies one under a uniform; the orthographic path computes the
-  identical pixels-per-unit it always did. Anything else added in screen space
-  will have the same problem.
+  stands. Local +Z is forward. The health bar rides it; the selection ring does
+  not, because the ring marks the ground the unit holds.
+- **Sparks are point sprites and get no perspective divide for free.**
 - **Clear the imported animation data before rendering in Blender.** The GLB
-  carries Idle, Walk and CombatIdle, and Blender re-applies whichever action is
+  carries Idle, Walk and CombatIdle and Blender re-applies whichever action is
   assigned on every render. Miss this and the measurements are right while every
   picture shows a unit standing still.
 
 ## Measured state
 
-- 80 tests pass; production build passes.
-- Camera: default orbit reproduces the old fixed `(36, 42, 36)` eye exactly —
-  verified byte-identical captures before and after `63096a4`. Perspective at
-  the default fov frames the same span at the focus, within 3% on a standing
-  body (the residue is real: the camera looks down, so a head is nearer the eye
-  than the feet).
-- Pose figures below predate `d10c7a3` and still hold as *rig* measurements —
-  they come from the Blender tools, which spawn no units and are unaffected by
-  the seed change. Only sim capture sheets moved.
-- Release heights **3.77 / 3.73 / 3.48 m**, all above the head. The hurl's
-  margin over the pitch is **0.04 m** — treat it as the budget: anything that
-  lowers the hurl or raises the pitch needs the arm keys revisited.
+- 87 tests pass; production build passes; both Blender validators pass.
+- Release heights, Blender frame: **3.77 / 3.73 / 3.48**, all above the head.
+  Tool frame: **4.481 / 4.462 / 4.225**. The hurl's margin over the pitch is the
+  budget and it is about two centimetres.
+- Free arm clearance through a hurl: tightest **0.069 m** at phase 0.92.
 - Support-foot drift 0.081 m; the lead foot moves 0.090 m between planting and
-  the recovery; recovery error 0.0 degrees.
-- The free arm clears the torso by at least 0.156 m at every phase of all three
-  throws.
-- The sword duel still validates at 0.069 m drift and 0.00 degrees.
+  recovery; recovery error 0.0 degrees. The sword duel validates at 0.069 m drift
+  and 0.00 degrees.
+- Camera: the default orbit reproduces the old fixed `(36, 42, 36)` eye exactly.
+- Capture sheets in `renders/` predate the seed fix and no longer match. `renders/`
+  is gitignored.
 
 ## Suggested next steps
 
 The goal remains that combat looks cooler each iteration, not that it becomes
-playable. Player agency is still out of scope. The user is currently exploring
-what the game *is* by moving the camera, so camera work is live.
+playable. Player agency is still out of scope.
 
-1. **The projection is an open question, deliberately.** Both modes stay until
-   the user decides. What has not been tried: perspective at gameplay distance
-   rather than at ground level, and whether unit readability survives it at the
-   zooms an RTS actually plays at.
-2. **`hud=0` renders blank in headless capture.** Pre-existing, blocks the clean
-   render path, small.
-3. **Retake the capture sheets** used to judge poses; the ones in `renders/`
-   predate the seed fix.
+1. **Settle the arm edits in the working tree** with the user — either bring the
+   pitch down to match or lift the hurl's shoulder, then re-measure the ordering.
+   Nothing else should be built on top until that file is decided.
+2. **Make the Blender port stop being a hand copy.** It is the one place the tool
+   can silently desynchronise the project from itself. Emitting the tuning as JSON
+   for the Python to read would end a whole class of wrong measurement.
+3. **The sword has no tunables.** `applyCombatPose` still sums its coefficients
+   inline, so `cut`, `guard` and `struck` scrub but do not edit. The same
+   extraction the throws got would open them, and the torso check would run over
+   the guards and cuts, which nobody has measured.
 4. **Foot IK is still the real unlock.** Everything cramped about the hurl step
-   traces to its absence — the travel bound, the release-height budget, the small
-   slide as the stance recovers. A two-bone solver on the planted foot would let
-   the step be as big as it looks like it should be. It is a feature, and worth
-   scoping properly.
+   traces to its absence. It is a feature, and worth scoping properly.
 5. **The throws have not been heard.** The release reuses the sword's `swing`
    whoosh, graded by throw. The standing lesson is that a fight wants its sound
    spent on contact.
-6. **The torso check is cheap and only the hurler has it.** The same measurement
-   would run over the swordsman's guards and cuts, which nobody has checked.
-7. Hurlers can be held back: the Stoneworks has its own rally point, so a line
-   behind the swords is a right-click rather than a code change.
-8. A hurler that runs out of room backpedals into whatever is behind it.
-   Retreating toward its own side would read better than a straight line.
-9. Earlier items still open: scorch decals under wrecks, encirclement positions
-   for group fights, and trails reading white-hot over bright ground.
+6. **`hud=0` renders blank in headless capture.** Pre-existing, blocks the clean
+   render path, small.
+7. **Retake the capture sheets** used to judge poses; the ones in `renders/`
+   predate the seed fix.
+8. The projection is an open question, deliberately. What has not been tried:
+   perspective at gameplay distance, and whether unit readability survives it at
+   the zooms an RTS actually plays at.
+9. Earlier items still open: hurlers held behind the swords via the Stoneworks
+   rally point, a hurler that backpedals toward its own side rather than in a
+   straight line, scorch decals under wrecks, encirclement positions for group
+   fights, and trails reading white-hot over bright ground.
