@@ -302,6 +302,21 @@ const MAX_SUPPORTERS_PER_TARGET = 2;
  * is still the thing most worth crossing ground for.
  */
 const CLAIMED_TARGET_COST = ATTACK_RANGE;
+/**
+ * What a target at full health costs the battery, priced in metres of range, so
+ * a crowd is worked through weakest-first and a body already down to a sliver
+ * is finished rather than left walking. Deliberately under the range band it
+ * competes against: a fresh swordsman closing to sword reach still outscores a
+ * near-dead one at the back of the crowd, because keeping the crowd off the
+ * throwers is what the battery is for.
+ */
+const FOCUS_HEALTH_WEIGHT = 8;
+/**
+ * What the target the battery is already on is worth when it is scored against
+ * the alternatives. Two enemies of similar health and range would otherwise
+ * trade the focus back and forth every time one of them took a step.
+ */
+const FOCUS_HYSTERESIS = 2.5;
 const LINES: readonly AttackLine[] = ["overhead", "forehand", "backhand", "flank", "rising"];
 const EMPTY_CUE: CombatCue = {
   plannerId: null,
@@ -383,6 +398,8 @@ export function createCombatProfile(random: () => number = Math.random): CombatP
 export class CombatDirector {
   private readonly encounters = new Map<string, Encounter>();
   private readonly fighters = new Map<number, FighterState>();
+  /** The body each team's hurlers are working on together, by corporation. */
+  private readonly hurlerFocus = new Map<string, number>();
 
   constructor(private readonly random: () => number = Math.random) {}
 
@@ -390,6 +407,7 @@ export class CombatDirector {
   reset(): void {
     this.encounters.clear();
     this.fighters.clear();
+    this.hurlerFocus.clear();
   }
 
   update(delta: number, snapshots: readonly CombatantSnapshot[]): CombatFrame {
@@ -492,20 +510,32 @@ export class CombatDirector {
       reserved.add(candidate.b.id);
     }
 
-    for (const hurler of living) {
-      if (hurler.role !== "hurler" || reserved.has(hurler.id)) continue;
-      const target = living
-        .filter((other) => other.corporation !== hurler.corporation &&
-          this.distance(hurler, other) <= LONG_THROW_RANGE * ACQUIRE_SLACK)
-        // Nearest first, but finish what is already hurt.
-        .sort((left, right) =>
-          this.distance(hurler, left) + (left.health / left.maxHealth) * 2.5 -
-          this.distance(hurler, right) - (right.health / right.maxHealth) * 2.5)[0];
-      if (!target) continue;
-      const encounter = this.createRangedEncounter(hurler, target);
-      this.announcePlan(encounter.exchange, events);
-      this.encounters.set("ranged:" + hurler.id, encounter);
-      reserved.add(hurler.id);
+    // A team's hurlers work as one battery. They pick a body together, walk it
+    // down, and swing onto the next one together, which is both the way massed
+    // throwers actually work and the only way the volleys read as a group
+    // decision rather than four fighters each minding their own business.
+    const throwTargets = new Map<number, CombatantSnapshot>();
+    const batteries = new Map<string, CombatantSnapshot[]>();
+    for (const fighter of living) {
+      if (fighter.role !== "hurler") continue;
+      const battery = batteries.get(fighter.corporation);
+      if (battery) battery.push(fighter);
+      else batteries.set(fighter.corporation, [fighter]);
+    }
+    for (const [corporation, battery] of batteries) {
+      const focus = this.chooseFocus(battery, living, this.hurlerFocus.get(corporation) ?? null);
+      if (focus) this.hurlerFocus.set(corporation, focus.id);
+      else this.hurlerFocus.delete(corporation);
+      for (const hurler of battery) {
+        const target = this.throwTarget(hurler, focus, living);
+        if (!target) continue;
+        throwTargets.set(hurler.id, target);
+        if (this.encounters.has("ranged:" + hurler.id)) continue;
+        const encounter = this.createRangedEncounter(hurler, target);
+        this.announcePlan(encounter.exchange, events);
+        this.encounters.set("ranged:" + hurler.id, encounter);
+        reserved.add(hurler.id);
+      }
     }
 
     const threats: Array<{
@@ -534,7 +564,10 @@ export class CombatDirector {
       }
     }
     for (const helper of living) {
-      if (reserved.has(helper.id)) continue;
+      // A hurler is never drafted into this. It has no sword to help with, and
+      // being handed a melee plan is what sent one walking out of its own
+      // standoff and into the crowd with a `beat` it could not throw.
+      if (reserved.has(helper.id) || helper.role === "hurler") continue;
       const choices = threats
         .filter(({ ally, target, ranged }) =>
           ally.corporation === helper.corporation &&
@@ -573,8 +606,11 @@ export class CombatDirector {
       const a = byId.get(encounter.a);
       const b = byId.get(encounter.b);
       if (!a || !b) continue;
-      if (encounter.ranged) this.advanceThrow(encounter, a, b, delta, cues, damage, events);
-      else this.advanceEncounter(encounter, a, b, delta, cues, damage, events);
+      if (encounter.ranged) {
+        this.advanceThrow(
+          encounter, a, b, delta, cues, damage, events, throwTargets.get(encounter.a),
+        );
+      } else this.advanceEncounter(encounter, a, b, delta, cues, damage, events);
     }
 
     return { cues, damage, events };
@@ -620,6 +656,62 @@ export class CombatDirector {
       a: helper.id, b: target.id, support: true, ranged: false,
       exchange: this.planExchange(helper, target, 0, undefined, true),
     };
+  }
+
+  /**
+   * The one body a team's hurlers all throw at. Scored in metres: how close the
+   * candidate has got to the nearest thrower, plus what its remaining health is
+   * worth, less a little for being the body they are already on.
+   */
+  private chooseFocus(
+    battery: readonly CombatantSnapshot[],
+    living: readonly CombatantSnapshot[],
+    current: number | null,
+  ): CombatantSnapshot | null {
+    let best: CombatantSnapshot | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const candidate of living) {
+      if (candidate.corporation === battery[0].corporation) continue;
+      let reach = Number.POSITIVE_INFINITY;
+      for (const hurler of battery) reach = Math.min(reach, this.distance(hurler, candidate));
+      if (reach > LONG_THROW_RANGE * ACQUIRE_SLACK) continue;
+      const score = reach +
+        (candidate.health / candidate.maxHealth) * FOCUS_HEALTH_WEIGHT -
+        (candidate.id === current ? FOCUS_HYSTERESIS : 0);
+      if (score < bestScore) {
+        bestScore = score;
+        best = candidate;
+      }
+    }
+    return best;
+  }
+
+  /**
+   * What one hurler throws at. The battery's focus whenever it can reach it, so
+   * the volleys land together; otherwise the best body it can actually hit,
+   * since a thrower standing idle because the group is working the far flank is
+   * a thrower wasted. It rejoins the focus as soon as that comes into range.
+   */
+  private throwTarget(
+    hurler: CombatantSnapshot,
+    focus: CombatantSnapshot | null,
+    living: readonly CombatantSnapshot[],
+  ): CombatantSnapshot | null {
+    const reach = LONG_THROW_RANGE * ACQUIRE_SLACK;
+    if (focus && this.distance(hurler, focus) <= reach) return focus;
+    let best: CombatantSnapshot | null = null;
+    let bestScore = Number.POSITIVE_INFINITY;
+    for (const candidate of living) {
+      if (candidate.corporation === hurler.corporation) continue;
+      const distance = this.distance(hurler, candidate);
+      if (distance > reach) continue;
+      const score = distance + (candidate.health / candidate.maxHealth) * FOCUS_HEALTH_WEIGHT;
+      if (score < bestScore) {
+        bestScore = score;
+        best = candidate;
+      }
+    }
+    return best;
   }
 
   private createRangedEncounter(hurler: CombatantSnapshot, target: CombatantSnapshot): Encounter {
@@ -791,7 +883,19 @@ export class CombatDirector {
     cues: Map<number, CombatCue>,
     damage: CombatFrame["damage"],
     events: CombatEvent[],
+    desired?: CombatantSnapshot,
   ): void {
+    // Swinging onto the body the rest of the battery is on, while there is
+    // still time to. A thrower that has started the motion is committed, the
+    // same rule the throw band already follows — a rock in the air cannot be
+    // re-aimed, and a wind-up that snapped to a new bearing mid-swing would
+    // read as the model glitching rather than as the group changing its mind.
+    if (desired && desired.id !== b.id && this.canReaim(encounter.exchange)) {
+      encounter.b = desired.id;
+      b = desired;
+      encounter.exchange = this.planThrow(a, desired);
+      this.announcePlan(encounter.exchange, events);
+    }
     const exchange = encounter.exchange;
     const attacker = exchange.attackerId === a.id ? a : b;
     const defender = exchange.defenderId === a.id ? a : b;
@@ -873,8 +977,20 @@ export class CombatDirector {
     );
     writeCue(cues, attacker.id, this.cue(exchange, defender.id, "recover", "hold", recoveryPhase));
     if (recoveryPhase < 1) return;
-    encounter.exchange = this.planThrow(attacker, defender);
+    // The throw is done, so the next one is aimed wherever the battery is now.
+    const next = desired ?? defender;
+    encounter.b = next.id;
+    encounter.exchange = this.planThrow(attacker, next);
     this.announcePlan(encounter.exchange, events);
+  }
+
+  /**
+   * Whether a thrower can still change who it is throwing at: only while it is
+   * judging the gap, before the throwing motion has started and before the rock
+   * has left the hand.
+   */
+  private canReaim(exchange: Exchange): boolean {
+    return !exchange.released && exchange.elapsed < exchange.measureDuration;
   }
 
   /**

@@ -346,6 +346,95 @@ describe("a hurler at the edge of its reach", () => {
   });
 });
 
+describe("a battery of hurlers", () => {
+  /** Positions a fighter freely, since a battery is a question about geometry. */
+  function at(
+    id: number, corporation: string, x: number, z: number,
+    random: () => number, role: "melee" | "hurler", health = 100,
+  ): CombatantSnapshot {
+    return {
+      id, corporation, role, health, maxHealth: 100, isAlive: true, x, z,
+      profile: createCombatProfile(random),
+    };
+  }
+
+  /** Runs long enough for every thrower to come off its wind-up and re-aim. */
+  function settle(director: CombatDirector, fighters: CombatantSnapshot[], seconds: number) {
+    let cues = director.update(STEP, fighters).cues;
+    for (let elapsed = 0; elapsed < seconds; elapsed += STEP) {
+      cues = director.update(STEP, fighters).cues;
+    }
+    return cues;
+  }
+
+  it("throws at one body together rather than one each", () => {
+    const random = createSeededRandom(11);
+    const director = new CombatDirector(random);
+    const fighters = [
+      at(1, "A", 0, -2, random, "hurler"), at(2, "A", 0, 0, random, "hurler"),
+      at(3, "A", 0, 2, random, "hurler"),
+      at(4, "B", 12, -2, random, "melee"), at(5, "B", 12, 0, random, "melee"),
+      at(6, "B", 12, 2, random, "melee"),
+    ];
+    const cues = settle(director, fighters, 3);
+    const aimed = [1, 2, 3].map((id) => cues.get(id)?.targetId);
+    expect(new Set(aimed).size).toBe(1);
+    expect(aimed[0]).not.toBeNull();
+  });
+
+  it("walks the crowd down weakest first, and swings across together", () => {
+    const random = createSeededRandom(12);
+    const director = new CombatDirector(random);
+    const fighters = [
+      at(1, "A", 0, -1, random, "hurler"), at(2, "A", 0, 1, random, "hurler"),
+      at(3, "B", 12, -1, random, "melee"), at(4, "B", 12, 1, random, "melee", 20),
+    ];
+    // The hurt one at the same range is the one the battery works on.
+    expect([...settle(director, fighters, 3)].filter(([id]) => id <= 2)
+      .map(([, cue]) => cue.targetId)).toEqual([4, 4]);
+
+    // It goes down, and both throwers come across to the survivor together.
+    fighters[3].health = 0;
+    fighters[3].isAlive = false;
+    expect([...settle(director, fighters, 3)].filter(([id]) => id <= 2)
+      .map(([, cue]) => cue.targetId)).toEqual([3, 3]);
+  });
+
+  it("comes off a far target onto one that closes on the throwers", () => {
+    const random = createSeededRandom(13);
+    const director = new CombatDirector(random);
+    const fighters = [
+      at(1, "A", 0, -1, random, "hurler"), at(2, "A", 0, 1, random, "hurler"),
+      at(3, "B", 15, 0, random, "melee"),
+    ];
+    expect(settle(director, fighters, 3).get(1)?.targetId).toBe(3);
+
+    // A second body walks out of the crowd and into their laps. Keeping it off
+    // them outranks finishing the one at the back of the field.
+    fighters.push(at(4, "B", 3.5, 0, random, "melee"));
+    const cues = settle(director, fighters, 3);
+    expect(cues.get(1)?.targetId).toBe(4);
+    expect(cues.get(2)?.targetId).toBe(4);
+  });
+
+  it("never hands a hurler a sword plan when it cannot reach anything", () => {
+    const random = createSeededRandom(14);
+    const director = new CombatDirector(random);
+    // The swords are in a fight the hurler is far too far away to throw into.
+    const fighters = [
+      at(1, "A", 0, 0, random, "hurler"),
+      at(2, "A", 17, 0, random, "melee"), at(3, "B", 19.5, 0, random, "melee"),
+    ];
+    for (let elapsed = 0; elapsed < 4; elapsed += STEP) {
+      const frame = director.update(STEP, fighters);
+      const cue = frame.cues.get(1)!;
+      if (cue.strategy !== null) expect(THROW_TYPES).toContain(cue.strategy);
+      expect(cue.movement).not.toBe("close");
+      for (const event of frame.events) expect(event.attackerId).not.toBe(1);
+    }
+  });
+});
+
 describe("a hurler under pressure", () => {
   it("holds near its standoff while it is left alone", () => {
     // Two hurlers have no way to close on each other, so the gap they settle at
