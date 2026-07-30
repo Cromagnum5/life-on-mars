@@ -1140,7 +1140,6 @@ export const ROCK_MATERIAL = new THREE.MeshStandardMaterial({
 // sparks were: at gameplay zoom a rock under about a quarter of a metre is a
 // three-pixel speck and the throw reads as a fighter miming one.
 const heldRockGeometry = createRockGeometry(0.28, 3);
-const cachedRockGeometry = createRockGeometry(0.2, 11);
 
 function addMesh(
   parent: THREE.Object3D,
@@ -1402,27 +1401,6 @@ export function createRigwalker(
   // nothing. It appears once the fighter has been hurt, or on selection.
   healthBar.visible = false;
   group.add(healthBar);
-
-  // A hurler carries its ammunition where it can be seen: a couple of rocks on
-  // the hip. At RTS scale that satchel, and the empty sword hand, are how the
-  // player tells the two units apart before either has done anything.
-  const rockCache = new THREE.Group();
-  rockCache.name = "Rigwalker rock cache";
-  rockCache.visible = role === "hurler";
-  if (role === "hurler") {
-    for (const [offset, tilt] of [
-      [new THREE.Vector3(-0.46, 1.46, -0.2), 0.6],
-      [new THREE.Vector3(-0.36, 1.24, -0.32), 2.1],
-      [new THREE.Vector3(-0.5, 1.2, -0.1), 4.4],
-    ] as const) {
-      const stone = new THREE.Mesh(cachedRockGeometry, ROCK_MATERIAL);
-      stone.position.copy(offset);
-      stone.rotation.set(tilt, tilt * 1.7, tilt * 0.6);
-      stone.castShadow = true;
-      rockCache.add(stone);
-    }
-  }
-  group.add(rockCache);
 
   const pipePivot = new THREE.Group();
   pipePivot.name = "Rigwalker weapon pivot";
@@ -1921,7 +1899,7 @@ export function createRigwalker(
     wasInCombat = inCombat;
     if (weaponVisual) weaponVisual.visible = inCombat;
     // The rock leaves the hand on the release event, and the hurler has another
-    // out of the hip cache by the time the motion is over.
+    // in it by the time the motion is over.
     if (heldRock && combatCue?.action !== "attack") heldRock.visible = true;
 
     const enemyDistance = combatTarget
