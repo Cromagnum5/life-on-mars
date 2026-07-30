@@ -2,19 +2,19 @@
 
 ## Current checkpoint
 
-Branch `remove-hurler-hip-rocks` at `dd6048d` (`Work a team's hurlers as one
-battery`), **not merged**. It sits 5 commits ahead of `main` (`d656376`), which
-is itself 1 ahead of `origin/main`. Nothing is pushed, and pushing is the user's
-call, as is the merge.
+`main` at `c952584` (`Point the handoff at combat target selection`), **merged**.
+`remove-hurler-hip-rocks` was fast-forwarded into it and is spent. `main` is 7
+commits ahead of `origin/main`; nothing is pushed, and pushing is the user's
+call.
 
 **The working tree is deliberately not clean.** `src/pose-tuning.ts` carries hurl
 arm-key edits the user saved out of the animation tool while playing with it.
 They are real work and they are also a regression — see "The ordering the throws
 read by" below. Do not sweep them into a commit and do not throw them away
 without asking. `git diff src/pose-tuning.ts` is the whole of it. Stage files by
-name on this branch; `git add -A` will take that file with them.
+name; `git add -A` will take that file with them.
 
-The branch, oldest first:
+The merged branch, oldest first:
 
 - `3f3ca67` Take the rocks off the hurler's hip
 - `a65ca54` Drop the blob shadow under every unit
@@ -471,32 +471,30 @@ playable. Player agency is still out of scope.
    pitch down to match or lift the hurl's shoulder, then re-measure the ordering.
    Nothing else should be built on top until that file is decided. This is the
    oldest open item and it blocks the arm.
-2. **Merge or drop `remove-hurler-hip-rocks`.** Five commits, played and approved,
-   sitting unmerged while `main` is one ahead of `origin/main`.
-3. **Play the screened matchup and judge the balance**, per the tally above. If
+2. **Play the screened matchup and judge the balance**, per the tally above. If
    the hurler side is now too strong the dials are `MAX_SUPPORTERS_PER_TARGET`,
    `CLAIMED_TARGET_COST` and the hurler backpedal speed — not the targeting.
-4. **Make the Blender port stop being a hand copy.** It is the one place the tool
+3. **Make the Blender port stop being a hand copy.** It is the one place the tool
    can silently desynchronise the project from itself. Emitting the tuning as JSON
    for the Python to read would end a whole class of wrong measurement.
-5. **The sword has no tunables.** `applyCombatPose` still sums its coefficients
+4. **The sword has no tunables.** `applyCombatPose` still sums its coefficients
    inline, so `cut`, `guard` and `struck` scrub but do not edit. The same
    extraction the throws got would open them, and the torso check would run over
    the guards and cuts, which nobody has measured.
-6. **Foot IK is still the real unlock.** Everything cramped about the hurl step
+5. **Foot IK is still the real unlock.** Everything cramped about the hurl step
    traces to its absence. It is a feature, and worth scoping properly.
-7. **The throws have not been heard.** The release reuses the sword's `swing`
+6. **The throws have not been heard.** The release reuses the sword's `swing`
    whoosh, graded by throw. The standing lesson is that a fight wants its sound
    spent on contact. A coordinated volley is a new reason to care: two rocks
    landing together currently make the same noise as two landing apart.
-8. **`hud=0` renders blank in headless capture.** Pre-existing, blocks the clean
+7. **`hud=0` renders blank in headless capture.** Pre-existing, blocks the clean
    render path, small.
-9. **Retake the capture sheets** used to judge poses; the ones in `renders/`
+8. **Retake the capture sheets** used to judge poses; the ones in `renders/`
    predate the seed fix.
-10. The projection is an open question, deliberately. What has not been tried:
-    perspective at gameplay distance, and whether unit readability survives it at
-    the zooms an RTS actually plays at.
-11. Earlier items still open: hurlers held behind the swords via the Stoneworks
-    rally point, a hurler that backpedals toward its own side rather than in a
-    straight line, scorch decals under wrecks, encirclement positions for group
-    fights, and trails reading white-hot over bright ground.
+9. The projection is an open question, deliberately. What has not been tried:
+   perspective at gameplay distance, and whether unit readability survives it at
+   the zooms an RTS actually plays at.
+10. Earlier items still open: hurlers held behind the swords via the Stoneworks
+   rally point, a hurler that backpedals toward its own side rather than in a
+   straight line, scorch decals under wrecks, encirclement positions for group
+   fights, and trails reading white-hot over bright ground.
