@@ -617,6 +617,13 @@ from that:
     for a hand in front of the sternum it crossed 0.12 m past the centre line with
     the forearm over the ribs. A lead hand — forward, a little across, mostly its
     own side — reads as a guard.
+  - **Solve the elbow as well as the grip.** Given only a grip to hit, the
+    solver abducted the shoulder 1.15 rad to reach it and left the elbow winged
+    out 0.69 m to the side and 0.30 m below the shoulder. Where the elbow rides
+    is half of what a guard reads as — the same stone in the same place is
+    carried very differently on an arm tucked at the ribs. It hangs 0.68 m below
+    the shoulder now, near the throwing stance's 0.75, with the forearm folded to
+    carry the rock back up.
 - **The rock has to clear the fist, and it is bigger than the fist.** The stone is
   0.56 m across, the hand is 0.28 m, and the hand mesh is centred on the wrist
   bone itself, so at `ROCK_IN_HAND` = 0.2 m the rock's near face sat 0.08 m

@@ -1144,9 +1144,17 @@ const STONE_BEATS: Record<StoneStrike, {
  *   it ended up 0.12 m past the centre line with the forearm folded over the
  *   sternum, which reads as a fighter hugging itself rather than leading with a
  *   hand. It is a lead hand now: forward, a little across, mostly its own.
+ * - **The stone elbow hangs, it does not wing out.** Solved for the grip alone,
+ *   the shoulder abducted 1.15 rad to put the rock where it was asked for and
+ *   left the elbow 0.69 m out to the side and only 0.30 m below the shoulder —
+ *   a chicken-wing. Where the elbow rides is half of what a guard reads as: the
+ *   same stone in the same place is carried very differently on an arm tucked at
+ *   the ribs. It is 0.69 m below the shoulder now, near the throwing stance's
+ *   0.75, with the forearm folded to carry the rock back up. Solving for the
+ *   grip *and* the elbow together is what gets both.
  */
 const STONE_STANCE_ARM: ThrowArmKey =
-  { at: 0, upperX: 0, upperY: -0.23, upperZ: -1.15, lowerX: -2.03, handX: -0.05 };
+  { at: 0, upperX: -0.09, upperY: -0.24, upperZ: -0.5, lowerX: -1.95, handX: 0.04 };
 const STONE_STANCE_FREE: ThrowArmKey =
   { at: 0, upperX: -0.91, upperY: -0.75, upperZ: 0.09, lowerX: -0.94, handX: 0.08 };
 /** The forearm turned into the blow: elbow tucked, forearm up across the head. */

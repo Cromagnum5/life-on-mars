@@ -520,6 +520,30 @@ describe("the stone strikes", () => {
     }
   }, 300_000);
 
+  it("hangs the stone elbow rather than winging it out", async () => {
+    // Reported from play. Solved for the grip alone, the shoulder abducted to
+    // put the rock where it was asked for and left the elbow 0.69 m out to the
+    // side of the shoulder and only 0.30 m below it — a chicken-wing. Where the
+    // elbow rides is half of what a guard reads as, and it is only visible while
+    // the hurler is waiting or defending, which is most of a fight.
+    const bench = stageFight(await loadAsset());
+    for (const [name, hold] of [
+      ["waiting", () => bench.hold("size-up", 0, "swing")],
+      ["sizing up", () => bench.hold("size-up", 0.6, "rush")],
+      ["a guard", () => bench.hold("block", 0.47, "rush")],
+    ] as Array<[string, () => void]>) {
+      hold();
+      const shoulder = partAt(bench.hurler, "upper_arm.R");
+      const elbow = partAt(bench.hurler, "lower_arm.R");
+      const below = shoulder.y - elbow.y;
+      const out = Math.abs(elbow.x - shoulder.x);
+      expect(below, `${name}: the elbow rides ${below.toFixed(2)} m below the shoulder`)
+        .toBeGreaterThan(0.55);
+      expect(out, `${name}: the elbow is ${out.toFixed(2)} m out to the side`)
+        .toBeLessThan(0.5);
+    }
+  }, 300_000);
+
   it("keeps the off hand on its own side while it waits", async () => {
     // A free arm folded across the sternum reads as a fighter hugging itself
     // rather than leading with a hand. It may cross to block — that is what a
