@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { BattleRuntime } from "./battle";
 import { STRATEGY_LABELS, type CombatCue } from "./combat";
+import { PerfMonitor, PerfReadout } from "./perf";
 import { createSeededRandom } from "./random";
 import { createRigwalker, describeFeet, type Rigwalker } from "./rigwalker";
 import { loadRigwalkerAsset } from "./rigwalker-assets";
@@ -63,8 +64,16 @@ import "./sim.css";
  * that stops short of `applyBalancePose`, and the game never looks like them.
  */
 
-const ARENA_SIZE = 72;
-const MIN_ZOOM = 0.9;
+/**
+ * Wide enough that a sixty-four a side line pulled back to fit still has ground
+ * under it and out to the horizon behind it. The ground itself does not move
+ * when this does — `terrainHeightAt` is a function of world position, not of
+ * the patch drawn around it — so every seeded fight lands on exactly the height
+ * it always did and only the backdrop is bigger.
+ */
+const ARENA_SIZE = 112;
+/** Low enough to hold a sixty-four a side line in frame. */
+const MIN_ZOOM = 0.7;
 const MAX_ZOOM = 7;
 /** How far one arrow key swings the view. Twenty-four presses make a circuit. */
 const ORBIT_STEP = THREE.MathUtils.degToRad(15);
@@ -74,6 +83,17 @@ const LOG_LIMIT = 22;
 const RESTART_DELAY = 2.5;
 /** Cardinal spacing of a team's starting line. */
 const LINE_SPACING = 2.7;
+/** Front to back between ranks. A line is wide before it is deep. */
+const RANK_SPACING = 2;
+/** The widest a block stands before it starts a second rank. */
+const MAX_FILES = 16;
+/**
+ * How many fighters are still worth a card each. Past this the readout says
+ * what each side has left instead: a hundred and twenty-eight cards is not a
+ * readout anybody reads, and rebuilding them is the most expensive thing on the
+ * page — which the `hud` row of the perf panel will now tell you to your face.
+ */
+const MAX_FIGHTER_CARDS = 12;
 
 const TEAMS = [
   { corporation: "Helios", accent: 0x32b9ff, tag: "H", side: -1 },
@@ -91,17 +111,48 @@ type Matchup = {
   standoff: number;
   zoom: number;
   /**
-   * How far behind its own line a hurler starts, which is what makes a mixed
-   * team read as a screen with the throwers behind it. A matchup staging the
-   * close fight has no screen and no use for it: set-back, a hurler put on the
-   * line at three metres still opens six and a half away and spends the first
-   * seconds throwing, which is the thing the matchup exists to skip.
+   * How far behind the screen a hurler starts, which is what makes a mixed team
+   * read as swords in front with the throwers working over them. A matchup
+   * staging the close fight has no screen and no use for it: set-back, a hurler
+   * put on the line at three metres still opens six and a half away and spends
+   * the first seconds throwing, which is the thing the matchup exists to skip.
    */
   setback?: number;
+  /**
+   * Cardinal spacing across a rank. The small matchups stand loose because
+   * there is nothing to be crowded by; a line of sixteen at that spacing is
+   * forty metres wide and will not fit on a screen with the fight in it.
+   */
+  spacing?: number;
 };
 
 const HURLER_SETBACK = 3.5;
 type Roster = { melee: number; hurlers: number };
+
+/**
+ * Three swords to a hurler.
+ *
+ * Measured rather than picked: over a round-robin of every mix from all-sword
+ * to all-hurler, sixteen a side, both sides of the field, eight seeds each way,
+ * twelve-and-four is the mix that comes out level against the field (net −10 of
+ * a possible ±96). It is also what the game itself fields — the Assembly Bay
+ * puts out three swords an opening and the Stoneworks one hurler — so a sim
+ * roster built on it stages the army the player actually gets.
+ *
+ * What it is *not* is an equilibrium. The field it is level against is a
+ * slope: all-sword loses to every mix 0–16, and each further hurler is worth
+ * more than the sword it replaced, right up to an all-hurler army that beats
+ * everything. Three to one is the even point on a curve that never turns over,
+ * and if massed hurlers are ever meant to be beatable that is a combat
+ * question, not a roster one.
+ */
+const SWORDS_PER_HURLER = 3;
+
+/** Splits a team of `total` into swords and hurlers at that ratio. */
+function mixedRoster(total: number): Roster {
+  const hurlers = Math.round(total / (SWORDS_PER_HURLER + 1));
+  return { melee: total - hurlers, hurlers };
+}
 
 const MATCHUPS: Record<string, Matchup> = {
   "1v1": { teams: [{ melee: 1, hurlers: 0 }, { melee: 1, hurlers: 0 }], standoff: 7.5, zoom: 3.2 },
@@ -138,7 +189,42 @@ const MATCHUPS: Record<string, Matchup> = {
     teams: [{ melee: 0, hurlers: 1 }, { melee: 2, hurlers: 0 }],
     standoff: 1.8, zoom: 2.6, setback: 0,
   },
+  // Armies, at the ratio the game produces. Nothing about the fight is new —
+  // these exist so the frame has enough bodies in it to be worth profiling, and
+  // so a line of swords with rocks coming over the top can be looked at as a
+  // battle rather than as a duel with witnesses.
+  "16v16": {
+    teams: [mixedRoster(16), mixedRoster(16)], standoff: 13, zoom: 1.2, spacing: 1.9,
+  },
+  "32v32": {
+    teams: [mixedRoster(32), mixedRoster(32)], standoff: 14, zoom: 1, spacing: 1.9,
+  },
+  "64v64": {
+    teams: [mixedRoster(64), mixedRoster(64)], standoff: 16, zoom: 0.8, spacing: 1.9,
+  },
 };
+
+/**
+ * Where the `index`-th body of a block of `count` stands: how far across its
+ * rank, how many ranks back, and how wide that rank is.
+ *
+ * Ranks are evened out rather than filled to the brim, so a block of
+ * twenty-four is twelve and twelve rather than sixteen and a ragged eight, and
+ * each rank is centred on its own width rather than on the widest one.
+ */
+function formationSlot(index: number, count: number): {
+  file: number; rank: number; width: number;
+} {
+  const ranks = Math.max(1, Math.ceil(count / MAX_FILES));
+  const files = Math.ceil(count / ranks);
+  const rank = Math.floor(index / files);
+  return { file: index % files, rank, width: Math.min(files, count - rank * files) };
+}
+
+/** How many ranks deep a block of `count` stands. */
+function rankDepth(count: number): number {
+  return count === 0 ? 0 : Math.max(1, Math.ceil(count / MAX_FILES));
+}
 
 type LogEntry = { time: number; kind: string; text: string };
 
@@ -177,7 +263,9 @@ const rigwalkerAsset = await loadRigwalkerAsset("/models/rigwalker.glb");
 const scene = new THREE.Scene();
 applyMarsAtmosphere(scene);
 addMarsLighting(scene, 26);
-scene.add(createTerrain(ARENA_SIZE, 96), createRocks(ARENA_SIZE, 26, [new THREE.Vector2()], 13));
+// Segments track the size, so the ground stays about as finely tessellated as
+// it was when the arena was a third smaller rather than getting coarser.
+scene.add(createTerrain(ARENA_SIZE, 144), createRocks(ARENA_SIZE, 40, [new THREE.Vector2()], 13));
 
 const renderer = createMarsRenderer(canvas);
 const startingZoom = Number(params.get("zoom") ?? 3.2);
@@ -217,12 +305,23 @@ const contactOffset = new THREE.Vector3();
 const accentByCorporation = new Map<string, number>(
   TEAMS.map((team) => [team.corporation, team.accent]),
 );
+// Shared with the runtime, so `ai`, `physics` and `fx` are charged against the
+// same frame this page charges `render` and `hud` to.
+const perf = new PerfMonitor();
 const battle = new BattleRuntime(scene, {
   // Read through a mutable holder so restarting reseeds the director without
   // rebuilding its effect pools.
   random: () => directorRandom(),
   accentOf: (corporation) => accentByCorporation.get(corporation) ?? 0xffb35d,
+  perf,
 });
+// Absent when `hud=0` has stripped the panels for a clean render, and dropped
+// for a headless capture too: that mode bursts the whole fight through in one
+// synchronous go and then redraws a frozen frame, so it has no frame rate to
+// report and a panel full of dashes in a screenshot reads as a broken page.
+const perfPanel = document.querySelector<HTMLElement>("#perf");
+if (captureTime !== null) perfPanel?.remove();
+const perfReadout = perfPanel && captureTime === null ? new PerfReadout(perfPanel) : null;
 battle.audio.installUnlockHandlers();
 
 let directorRandom = createSeededRandom(1);
@@ -266,6 +365,9 @@ function startMatch(): void {
   verdict = null;
   verdictTime = 0;
   for (const key of Object.keys(tally) as Array<keyof typeof tally>) tally[key] = 0;
+  // A sixty-four a side restart must not spend half a second reading like the
+  // duel it replaced.
+  perf.reset();
 
   directorRandom = createSeededRandom(seed);
   // A separate stream for temperaments keeps a fighter's personality stable
@@ -277,24 +379,33 @@ function startMatch(): void {
 
   TEAMS.forEach((team, teamIndex) => {
     const roster = setup.teams[teamIndex];
-    const count = roster.melee + roster.hurlers;
-    for (let index = 0; index < count; index += 1) {
-      // Hurlers take the back of the line, so a mixed team reads as a screen
-      // with the throwers behind it rather than an even mix walking forward.
-      const hurler = index >= roster.melee;
-      const unit = createRigwalker(
-        rigwalkerAsset, team.accent, team.corporation, spawnRandom,
-        { role: hurler ? "hurler" : "melee" },
-      );
-      const lateral = (index - (count - 1) / 2) * LINE_SPACING;
-      const x = team.side *
-        (setup.standoff + (hurler ? setup.setback ?? HURLER_SETBACK : 0));
-      unit.group.position.set(x, terrainHeightAt(x, lateral) + 0.2, lateral);
-      // Walk in rather than starting inside awareness range, so the approach
-      // and the first sizing-up read as part of the fight.
-      unit.moveTo(new THREE.Vector3(team.side * 1.6, 0, lateral * 0.35));
-      battle.spawn(unit);
-      labels.set(unit.combatId, `${team.tag}${hurler ? "R" : ""}${index + 1}`);
+    const spacing = setup.spacing ?? LINE_SPACING;
+    // Measured from the back of the screen rather than from the front of it, so
+    // adding ranks of swords does not walk the throwers into them.
+    const setback = Math.max(0, rankDepth(roster.melee) - 1) * RANK_SPACING +
+      (setup.setback ?? HURLER_SETBACK);
+    let index = 0;
+    for (const hurler of [false, true]) {
+      const count = hurler ? roster.hurlers : roster.melee;
+      for (let n = 0; n < count; n += 1) {
+        const unit = createRigwalker(
+          rigwalkerAsset, team.accent, team.corporation, spawnRandom,
+          { role: hurler ? "hurler" : "melee" },
+        );
+        // Each role forms its own block, so the swords stand in front of the
+        // hurlers rather than alongside them in one long mixed line.
+        const { file, rank, width } = formationSlot(n, count);
+        const lateral = (file - (width - 1) / 2) * spacing;
+        const x = team.side *
+          (setup.standoff + rank * RANK_SPACING + (hurler ? setback : 0));
+        unit.group.position.set(x, terrainHeightAt(x, lateral) + 0.2, lateral);
+        // Walk in rather than starting inside awareness range, so the approach
+        // and the first sizing-up read as part of the fight.
+        unit.moveTo(new THREE.Vector3(team.side * 1.6, 0, lateral * 0.35));
+        battle.spawn(unit);
+        index += 1;
+        labels.set(unit.combatId, `${team.tag}${hurler ? "R" : ""}${index}`);
+      }
     }
   });
 
@@ -422,27 +533,7 @@ function renderReadout(): void {
   projectionValue.textContent = describeProjection();
   verdictValue.textContent = verdict ?? (paused ? "paused" : "fighting");
 
-  const byId = new Map(battle.units.map((unit) => [unit.combatId, unit]));
-  fighterList.replaceChildren(...battle.units.map((unit) => {
-    const cue = cues.get(unit.combatId);
-    const { action, detail } = describeCue(cue);
-    const target = cue?.targetId != null ? byId.get(cue.targetId) : undefined;
-
-    const card = document.createElement("div");
-    card.className = unit.isAlive ? "fighter" : "fighter down";
-    card.style.setProperty(
-      "--accent",
-      `#${(accentByCorporation.get(unit.corporation) ?? 0xffb35d).toString(16).padStart(6, "0")}`,
-    );
-    card.innerHTML =
-      `<span class="name">${labelOf(unit)}${unit.role === "hurler" ? " ⟡" : ""}</span>` +
-      `<span class="hp"><span style="width:${(unit.health / unit.maxHealth) * 100}%"></span></span>` +
-      `<span class="line"><b>${Math.ceil(unit.health)} HP</b> · ${unit.combatProfile.temperament}` +
-      `${target ? ` · vs ${labelOf(target)} @ ${unit.group.position.distanceTo(target.group.position).toFixed(2)} m` : ""}</span>` +
-      `<span class="line"><b>${action}</b> · ${detail}${showFeet ? describeFeet(unit) : ""}</span>` +
-      `<span class="phase"><span style="width:${(cue?.phase ?? 0) * 100}%"></span></span>`;
-    return card;
-  }));
+  renderRoster();
 
   tallyList.replaceChildren(...Object.entries(tally).flatMap(([key, value]) => {
     const term = document.createElement("dt");
@@ -464,6 +555,60 @@ function renderReadout(): void {
     text.textContent = entry.text;
     item.append(time, kind, text);
     return item;
+  }));
+}
+
+/**
+ * A card each while a fight is small enough to be followed fighter by fighter,
+ * and what each side has left once it is not. An army's worth of cards is not a
+ * readout, and building it is the single most expensive thing on this page.
+ */
+function renderRoster(): void {
+  if (battle.units.length > MAX_FIGHTER_CARDS) {
+    fighterList.replaceChildren(...TEAMS.map((team) => {
+      const roster = battle.units.filter(
+        (unit) => unit.corporation === team.corporation,
+      );
+      const living = roster.filter((unit) => unit.isAlive);
+      const hurlers = living.filter((unit) => unit.role === "hurler").length;
+      const health = living.reduce((sum, unit) => sum + unit.health, 0);
+      const maxHealth = living.reduce((sum, unit) => sum + unit.maxHealth, 0);
+
+      const card = document.createElement("div");
+      card.className = living.length > 0 ? "fighter" : "fighter down";
+      card.style.setProperty("--accent", `#${team.accent.toString(16).padStart(6, "0")}`);
+      card.innerHTML =
+        `<span class="name">${team.corporation}</span>` +
+        `<span class="hp"><span style="width:${
+          maxHealth > 0 ? (health / maxHealth) * 100 : 0
+        }%"></span></span>` +
+        `<span class="line"><b>${living.length}</b> of ${roster.length} up · ` +
+        `${living.length - hurlers} sword · ${hurlers} hurling</span>`;
+      return card;
+    }));
+    return;
+  }
+
+  const byId = new Map(battle.units.map((unit) => [unit.combatId, unit]));
+  fighterList.replaceChildren(...battle.units.map((unit) => {
+    const cue = cues.get(unit.combatId);
+    const { action, detail } = describeCue(cue);
+    const target = cue?.targetId != null ? byId.get(cue.targetId) : undefined;
+
+    const card = document.createElement("div");
+    card.className = unit.isAlive ? "fighter" : "fighter down";
+    card.style.setProperty(
+      "--accent",
+      `#${(accentByCorporation.get(unit.corporation) ?? 0xffb35d).toString(16).padStart(6, "0")}`,
+    );
+    card.innerHTML =
+      `<span class="name">${labelOf(unit)}${unit.role === "hurler" ? " ⟡" : ""}</span>` +
+      `<span class="hp"><span style="width:${(unit.health / unit.maxHealth) * 100}%"></span></span>` +
+      `<span class="line"><b>${Math.ceil(unit.health)} HP</b> · ${unit.combatProfile.temperament}` +
+      `${target ? ` · vs ${labelOf(target)} @ ${unit.group.position.distanceTo(target.group.position).toFixed(2)} m` : ""}</span>` +
+      `<span class="line"><b>${action}</b> · ${detail}${showFeet ? describeFeet(unit) : ""}</span>` +
+      `<span class="phase"><span style="width:${(cue?.phase ?? 0) * 100}%"></span></span>`;
+    return card;
   }));
 }
 
@@ -638,7 +783,12 @@ if (captureTime !== null) {
     } else {
       updateCamera(frameDelta);
     }
-    renderReadout();
-    renderer.render(scene, camera);
+    perf.measure("hud", () => renderReadout());
+    perf.measure("render", () => renderer.render(scene, camera));
+    // The perf panel is charged to `hud` like the rest of the readout: an
+    // instrument that leaves its own cost out of the picture is an instrument
+    // that reports a frame nobody has.
+    perf.measure("hud", () => perfReadout?.update(frameDelta, perf, battle.units.length));
+    perf.endFrame();
   });
 }

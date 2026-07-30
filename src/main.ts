@@ -9,6 +9,7 @@ import {
 } from "./buildings";
 import { MovementMarkers } from "./feedback";
 import { STRATEGY_LABELS } from "./combat";
+import { PerfMonitor, PerfReadout } from "./perf";
 import {
   BuildingProduction,
   HURLER_ORDER,
@@ -110,8 +111,12 @@ scene.add(
 const accentByCorporation = new Map(
   corporateBases.map((base) => [base.corporation, base.accent]),
 );
+// Shared with the runtime, so `ai`, `physics` and `fx` are charged against the
+// same frame this page charges `render` and `hud` to.
+const perf = new PerfMonitor();
 const battle = new BattleRuntime(scene, {
   accentOf: (corporation) => accentByCorporation.get(corporation) ?? 0xffb35d,
+  perf,
 });
 const units = battle.units;
 for (const base of corporateBases) {
@@ -194,6 +199,7 @@ const productionBar = document.querySelector<HTMLElement>("#production-bar");
 const unitValue = document.querySelector<HTMLElement>("#unit-value");
 const selectionValue = document.querySelector<HTMLElement>("#selection-value");
 const selectionBox = document.querySelector<HTMLElement>("#selection-box");
+const perfPanel = document.querySelector<HTMLElement>("#perf");
 
 if (
   !powerValue ||
@@ -202,10 +208,13 @@ if (
   !productionBar ||
   !unitValue ||
   !selectionValue ||
-  !selectionBox
+  !selectionBox ||
+  !perfPanel
 ) {
   throw new Error("Operations HUD is incomplete.");
 }
+
+const perfReadout = new PerfReadout(perfPanel);
 
 function selectRigwalkers(
   nextSelection: (typeof units)[number][],
@@ -513,13 +522,21 @@ function updateHud(elapsed: number): void {
 
 const clock = new THREE.Clock();
 
+/**
+ * The frame, charged to the five perf paths as it goes. `battle.update` carves
+ * itself into `ai`, `physics` and `fx`; everything this page owns on either
+ * side of it is charged here, so the panel accounts for the whole frame and
+ * whatever is left over is the browser's.
+ */
 function animate(): void {
   const delta = Math.min(clock.getDelta(), 0.05);
-  updateCamera(delta);
-  for (const producer of producers) {
-    producer.production.update(delta);
-  }
-  movementMarkers.update(delta);
+  perf.measure("physics", () => {
+    updateCamera(delta);
+    for (const producer of producers) {
+      producer.production.update(delta);
+    }
+  });
+  perf.measure("fx", () => movementMarkers.update(delta));
   battle.update(delta, clock.elapsedTime, {
     camera,
     focus: cameraTarget,
@@ -528,8 +545,12 @@ function animate(): void {
     obstacles: BUILDING_OBSTACLES,
   });
   selectedRigwalkers = selectedRigwalkers.filter((unit) => unit.isAlive);
-  updateHud(clock.elapsedTime);
-  renderer.render(scene, camera);
+  perf.measure("hud", () => updateHud(clock.elapsedTime));
+  perf.measure("render", () => renderer.render(scene, camera));
+  // The panel is charged to `hud` like the rest of the readout: an instrument
+  // that leaves its own cost out reports a frame nobody has.
+  perf.measure("hud", () => perfReadout.update(delta, perf, units.length));
+  perf.endFrame();
 }
 
 renderer.setAnimationLoop(animate);

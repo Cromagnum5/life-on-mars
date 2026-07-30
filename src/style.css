@@ -140,6 +140,42 @@ body,
   box-shadow: 0 0 8px rgb(242 154 63 / 80%);
 }
 
+/* The frame budget, in the same tabular shape the combat sim uses. Rows do not
+   move or change width as the numbers do, because a readout that jitters is one
+   you watch instead of read. */
+.perf {
+  display: grid;
+  gap: 1px;
+  margin-top: 13px;
+  padding-top: 11px;
+  border-top: 1px solid rgb(255 224 192 / 12%);
+  font-size: 0.66rem;
+}
+
+.perf-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.perf-name {
+  color: #9d8b7e;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.perf-value {
+  color: #f3e4d4;
+  font-family: "Chakra Petch", sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The three-line header — rate, bodies, budget — reads louder than the paths
+   under it, which are a breakdown of the third line. */
+.perf-path .perf-value {
+  color: #c9b3a1;
+}
+
 .controls {
   position: fixed;
   right: 20px;

@@ -146,6 +146,41 @@ output {
   color: rgb(255 224 192 / 55%);
 }
 
+/* The frame budget, in the same tabular shape on both pages. Rows do not move
+   or change width as the numbers do, because a readout that jitters is one you
+   watch instead of read. */
+.perf {
+  display: grid;
+  gap: 1px;
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid rgb(255 224 192 / 12%);
+  font-size: 0.65rem;
+}
+
+.perf-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.perf-name {
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.perf-value {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The three-line header — rate, bodies, budget — reads louder than the paths
+   under it, which are a breakdown of the third line. */
+.perf-path .perf-value {
+  color: rgb(255 224 192 / 62%);
+}
+
 .sim-fighters {
   display: grid;
   gap: 7px;

@@ -8,6 +8,7 @@ import {
   type CombatFrame,
 } from "./combat";
 import { CombatEffects } from "./effects";
+import { PerfMonitor } from "./perf";
 import type { NavigationObstacle, Rigwalker } from "./rigwalker";
 import { viewSpan, type TabletopCamera } from "./world";
 
@@ -40,6 +41,12 @@ export type BattleOptions = {
   /** Injected for deterministic sims; defaults to `Math.random`. */
   random?: () => number;
   accentOf?: (corporation: string) => number;
+  /**
+   * Shared with the page, so the frame this runtime carves into `ai`, `physics`
+   * and `fx` is the same frame the page charges `render` and `hud` to. Left out,
+   * the runtime keeps its own and nobody reads it.
+   */
+  perf?: PerfMonitor;
 };
 
 const DEFAULT_ACCENT = 0xffb35d;
@@ -64,6 +71,7 @@ export class BattleRuntime {
   readonly units: Rigwalker[] = [];
   readonly effects: CombatEffects;
   readonly audio = new CombatAudio();
+  readonly perf: PerfMonitor;
 
   private readonly director: CombatDirector;
   private readonly accentOf: (corporation: string) => number;
@@ -92,6 +100,7 @@ export class BattleRuntime {
     this.effects = new CombatEffects(scene);
     this.director = new CombatDirector(options.random);
     this.accentOf = options.accentOf ?? (() => DEFAULT_ACCENT);
+    this.perf = options.perf ?? new PerfMonitor();
   }
 
   /** Adds a unit to the scene and the roster. */
@@ -113,75 +122,95 @@ export class BattleRuntime {
     this.effects.clear();
   }
 
+  /**
+   * The frame is charged to three of the five perf paths as it goes: `ai` for
+   * the director's decisions, `physics` for what that does to bodies, `fx` for
+   * everything the player is meant to see and hear about it. The page that owns
+   * the renderer charges the other two.
+   */
   update(delta: number, elapsed: number, context: BattleContext): BattleFrame {
     const { camera } = context;
-    this.audio.beginFrame();
-    camera.updateMatrixWorld();
-    camera.matrixWorld.extractBasis(this.cameraRight, this.cameraUp, this.cameraForward);
-    this.audio.setListener(
-      context.focus.x, context.focus.z,
-      this.cameraRight.x, this.cameraRight.z,
-      // Earshot is how much world the frame holds. Under perspective that is
-      // read at the focus, which is the part of the scene being listened to.
-      viewSpan(camera, camera.position.distanceTo(context.focus)),
-    );
+    this.perf.measure("fx", () => {
+      this.audio.beginFrame();
+      camera.updateMatrixWorld();
+      camera.matrixWorld.extractBasis(this.cameraRight, this.cameraUp, this.cameraForward);
+      this.audio.setListener(
+        context.focus.x, context.focus.z,
+        this.cameraRight.x, this.cameraRight.z,
+        // Earshot is how much world the frame holds. Under perspective that is
+        // read at the focus, which is the part of the scene being listened to.
+        viewSpan(camera, camera.position.distanceTo(context.focus)),
+      );
+    });
 
-    const frame = this.director.update(
+    // The snapshots are charged to `ai` rather than to `physics`: rebuilding
+    // one object per unit per frame is not something the fight needs, it is
+    // what the director's interface costs, and it is the first thing anybody
+    // profiling a crowded frame will want to see the price of.
+    const frame = this.perf.measure("ai", () => this.director.update(
       delta,
       this.units.map((unit) => ({
         id: unit.combatId, corporation: unit.corporation, role: unit.role,
         health: unit.health, maxHealth: unit.maxHealth, isAlive: unit.isAlive,
         x: unit.group.position.x, z: unit.group.position.z, profile: unit.combatProfile,
       })),
-    );
+    ));
     const byId = new Map(this.units.map((unit) => [unit.combatId, unit]));
-    this.presentEvents(frame.events, byId);
-    for (const event of frame.damage) {
-      const target = byId.get(event.targetId);
-      if (!target) continue;
-      // A rock carries a direction and a cut does not. Handing the target the
-      // line the rock came in on is what lets a killing throw knock it over
-      // backwards instead of toppling it to its own right every time.
-      const source = event.thrown ? byId.get(event.sourceId) : undefined;
-      const line = source
-        ? this.rockLine
-          .copy(target.group.position).sub(source.group.position).setY(0)
-        : null;
-      target.applyCombatDamage(
-        event.amount, event.side,
-        line && line.lengthSq() > 0.0001 ? line.normalize() : null,
-      );
-    }
+    this.perf.measure("fx", () => this.presentEvents(frame.events, byId));
+    this.perf.measure("physics", () => {
+      for (const event of frame.damage) {
+        const target = byId.get(event.targetId);
+        if (!target) continue;
+        // A rock carries a direction and a cut does not. Handing the target the
+        // line the rock came in on is what lets a killing throw knock it over
+        // backwards instead of toppling it to its own right every time.
+        const source = event.thrown ? byId.get(event.sourceId) : undefined;
+        const line = source
+          ? this.rockLine
+            .copy(target.group.position).sub(source.group.position).setY(0)
+          : null;
+        target.applyCombatDamage(
+          event.amount, event.side,
+          line && line.lengthSq() > 0.0001 ? line.normalize() : null,
+        );
+      }
+    });
 
     this.frameDefeats.length = 0;
-    for (const unit of this.units) {
-      if (unit.isAlive || this.defeated.has(unit.combatId)) continue;
-      this.defeated.add(unit.combatId);
-      this.frameDefeats.push(unit);
-      this.audio.play("defeat", unit.group.position.x, unit.group.position.z, 1);
-      this.effects.flash(
-        this.deathFlash.copy(unit.group.position).setY(unit.group.position.y + 2.2),
-        2.4, 0xff8a4c,
-      );
-      this.effects.ring(unit.group.position, 3.2, this.accentOf(unit.corporation), 0.9);
-    }
+    this.perf.measure("fx", () => {
+      for (const unit of this.units) {
+        if (unit.isAlive || this.defeated.has(unit.combatId)) continue;
+        this.defeated.add(unit.combatId);
+        this.frameDefeats.push(unit);
+        this.audio.play("defeat", unit.group.position.x, unit.group.position.z, 1);
+        this.effects.flash(
+          this.deathFlash.copy(unit.group.position).setY(unit.group.position.y + 2.2),
+          2.4, 0xff8a4c,
+        );
+        this.effects.ring(unit.group.position, 3.2, this.accentOf(unit.corporation), 0.9);
+      }
+    });
 
-    for (const unit of this.units) {
-      unit.update(
-        delta, elapsed, context.terrainHeightAt, this.units, context.obstacles,
-        camera.quaternion, frame.cues.get(unit.combatId),
-      );
-    }
-    // Fed after unit.update so the ribbon samples this frame's pose. A trail
-    // that stops being fed fades itself out and releases its pool slot.
-    for (const unit of this.units) {
-      if (!unit.isSwinging || !unit.sampleBlade(this.trailHilt, this.trailTip)) continue;
-      this.trailHilt.lerp(this.trailTip, TRAIL_INNER_EDGE);
-      this.effects.trail(
-        unit.combatId, this.trailHilt, this.trailTip, this.accentOf(unit.corporation),
-      );
-    }
-    this.effects.update(delta, camera, context.drawingBufferHeight);
+    this.perf.measure("physics", () => {
+      for (const unit of this.units) {
+        unit.update(
+          delta, elapsed, context.terrainHeightAt, this.units, context.obstacles,
+          camera.quaternion, frame.cues.get(unit.combatId),
+        );
+      }
+    });
+    this.perf.measure("fx", () => {
+      // Fed after unit.update so the ribbon samples this frame's pose. A trail
+      // that stops being fed fades itself out and releases its pool slot.
+      for (const unit of this.units) {
+        if (!unit.isSwinging || !unit.sampleBlade(this.trailHilt, this.trailTip)) continue;
+        this.trailHilt.lerp(this.trailTip, TRAIL_INNER_EDGE);
+        this.effects.trail(
+          unit.combatId, this.trailHilt, this.trailTip, this.accentOf(unit.corporation),
+        );
+      }
+      this.effects.update(delta, camera, context.drawingBufferHeight);
+    });
 
     for (let index = this.units.length - 1; index >= 0; index -= 1) {
       const unit = this.units[index];
