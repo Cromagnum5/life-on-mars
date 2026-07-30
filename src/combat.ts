@@ -279,9 +279,29 @@ const THROW_LINES: Record<ThrowType, AttackLine> = {
  * which reads as a unit stuttering under a strobing plan ring.
  */
 const ACQUIRE_SLACK = 1.15;
+/**
+ * Acquire slack for a target nobody is on yet, so a fighter reaches a little
+ * further to meet a second charger rather than crowding the one its partner
+ * already has. Two swords screening four only hold two of them if the sword
+ * that acquires second can see past the enemy the first one took.
+ *
+ * It has to stay under `RELEASE_SLACK` for the same reason `ACQUIRE_SLACK`
+ * does, and it is what sets the narrowest hysteresis band in the director, so
+ * it buys the smallest reach that does the job rather than the largest one the
+ * release range would allow.
+ */
+const UNCLAIMED_ACQUIRE_SLACK = 1.25;
 /** Slack on the range an encounter survives to, which sets the hysteresis band. */
 const RELEASE_SLACK = 1.35;
 const MAX_SUPPORTERS_PER_TARGET = 2;
+/**
+ * What each body already on a target adds to the cost of choosing it, so a
+ * fighter spreads onto a free enemy rather than doubling up on the nearest.
+ * Priced as one sword's reach: worth walking that much further for a target of
+ * your own, and no further. Kept under the bonus for silencing a hurler, which
+ * is still the thing most worth crossing ground for.
+ */
+const CLAIMED_TARGET_COST = ATTACK_RANGE;
 const LINES: readonly AttackLine[] = ["overhead", "forehand", "backhand", "flank", "rising"];
 const EMPTY_CUE: CombatCue = {
   plannerId: null,
@@ -429,14 +449,23 @@ export class CombatDirector {
 
     const reserved = new Set<number>();
     const supportCounts = new Map<number, number>();
+    // Every body already committed to a target, the mutual partner included.
+    // `supportCounts` leaves that one out on purpose, since the cap it drives is
+    // stated as a primary fighter plus supporters; spreading has to count heads.
+    const attackerCounts = new Map<number, number>();
+    const addAttacker = (id: number) =>
+      attackerCounts.set(id, (attackerCounts.get(id) ?? 0) + 1);
     for (const encounter of this.encounters.values()) {
       reserved.add(encounter.a);
       if (!encounter.support) {
         reserved.add(encounter.b);
+        addAttacker(encounter.a);
+        addAttacker(encounter.b);
       } else if (!encounter.ranged) {
         // Rocks arriving from range do not crowd a target the way bodies do, so
         // a hurler does not spend one of its team's melee support slots.
         supportCounts.set(encounter.b, (supportCounts.get(encounter.b) ?? 0) + 1);
+        addAttacker(encounter.b);
       }
     }
 
@@ -513,13 +542,19 @@ export class CombatDirector {
           // paired with, but it certainly may charge the hurler shelling it.
           (ranged || ally.id !== helper.id) &&
           target.corporation !== helper.corporation &&
-          this.distance(helper, target) <= this.awareness(helper, target) * ACQUIRE_SLACK &&
+          this.distance(helper, target) <= this.awareness(helper, target) *
+            ((attackerCounts.get(target.id) ?? 0) === 0
+              ? UNCLAIMED_ACQUIRE_SLACK : ACQUIRE_SLACK) &&
           (supportCounts.get(target.id) ?? 0) < MAX_SUPPORTERS_PER_TARGET)
         .map(({ ally, target, ranged }) => ({
           ally, target,
           score: this.distance(helper, target) +
             (ally.health / ally.maxHealth) * 2 +
-            (target.health / target.maxHealth) * 0.35 -
+            (target.health / target.maxHealth) * 0.35 +
+            // A body nobody is on holds a fighter that is otherwise free to walk
+            // on past. Two swords screening four chargers stop two of them by
+            // taking one each and one by both taking the nearest.
+            (attackerCounts.get(target.id) ?? 0) * CLAIMED_TARGET_COST -
             // Silencing a hurler is worth crossing ground for.
             (ranged ? 6 : 0),
         }))
@@ -531,6 +566,7 @@ export class CombatDirector {
       this.encounters.set("support:" + helper.id + ":" + choice.target.id, encounter);
       reserved.add(helper.id);
       supportCounts.set(choice.target.id, (supportCounts.get(choice.target.id) ?? 0) + 1);
+      addAttacker(choice.target.id);
     }
 
     for (const encounter of this.encounters.values()) {

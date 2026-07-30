@@ -186,6 +186,34 @@ describe("CombatDirector", () => {
     expect(stillCharging).toHaveLength(2);
   });
 
+  it("takes a charger of its own rather than doubling up on its partner's", () => {
+    const random = seededRandom(37);
+    const director = new CombatDirector(random);
+    const screen = [
+      fighter(1, "A", 0, random, "melee", -0.5),
+      fighter(2, "A", 0, random, "melee", 0.5),
+    ];
+    const hurlers = [
+      fighter(3, "A", -6, random, "hurler", -1),
+      fighter(4, "A", -6, random, "hurler", 1),
+    ];
+    // Two chargers a stride apart in reach. The near one is inside the ordinary
+    // acquire range and the far one is just outside it, which is the case that
+    // put both swords on the same body: the second sword could see nothing else.
+    const chargers = [
+      fighter(5, "B", 12, random, "melee", -0.6),
+      fighter(6, "B", 12.5, random, "melee", 0.6),
+    ];
+    const fighters = [...screen, ...hurlers, ...chargers];
+    director.update(1 / 30, fighters);
+    for (const charger of chargers) charger.x -= 2.3;
+
+    const cues = director.update(1 / 30, fighters).cues;
+    const held = screen.map((unit) => cues.get(unit.id)!.targetId);
+    expect(held).toContain(5);
+    expect(held).toContain(6);
+  });
+
   it("never applies damage to a successfully blocked action", () => {
     for (let seed = 1; seed <= 40; seed += 1) expect(simulate(seed).blockedDamage).toBe(0);
   });
