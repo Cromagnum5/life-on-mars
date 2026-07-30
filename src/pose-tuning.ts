@@ -314,12 +314,12 @@ export const POSE_TUNING: PoseTuning = {
   },
   armKeys: {
     hurl: [
-      { at: 0.14, upperX: -0.89, upperY: 0.17, upperZ: -0.79, lowerX: 1.35, handX: 0.45 },
-      { at: 0.3, upperX: -1.25, upperY: 1.62, upperZ: -1.23, lowerX: 1.57, handX: 0.55 },
-      { at: 0.48, upperX: -1.6, upperY: 1.7, upperZ: -1.52, lowerX: 1.05, handX: 0.4 },
-      { at: 0.58, upperX: -1.6, upperY: 1.56, upperZ: -1.5, lowerX: 0, handX: 0 },
+      { at: 0.14, upperX: -0.87, upperY: 0.19, upperZ: -1.94, lowerX: -2.25, handX: 0.45 },
+      { at: 0.3, upperX: -1.25, upperY: 1.62, upperZ: -1.23, lowerX: -0.81, handX: 0.55 },
+      { at: 0.48, upperX: -1.63, upperY: 1.31, upperZ: -1.52, lowerX: -0.25, handX: 0.4 },
+      { at: 0.58, upperX: -1.56, upperY: 1.15, upperZ: -1.5, lowerX: -0.07, handX: 0 },
       { at: 0.7, upperX: -0.98, upperY: 0.94, upperZ: -0.77, lowerX: 0.45, handX: 0.1 },
-      { at: 0.85, upperX: -0.32, upperY: 0.5, upperZ: -0.2, lowerX: 1, handX: 0.25 },
+      { at: 0.85, upperX: -0.32, upperY: 0.5, upperZ: -0.2, lowerX: -0.09, handX: 0.25 },
     ],
     pitch: [
       { at: 0.1, upperX: -0.92, upperY: -0.14, upperZ: -1.16, lowerX: 1.3, handX: 0.45 },
@@ -339,9 +339,9 @@ export const POSE_TUNING: PoseTuning = {
   },
   freeArm: {
     hurl: {
-      upperX: { base: -0.4, wind: -0.72, whip: 1.35, follow: 0.34, aim: -0.34, open: 0 },
-      upperZ: { base: 0.16, wind: -0.24, whip: 0, follow: 0.2, aim: 0, open: 0.7 },
-      lowerX: { base: -1.34, wind: 0.72, whip: -0.43, follow: 0.2, aim: 0.35, open: 0.01 },
+      upperX: { base: -0.4, wind: -0.72, whip: 0.66, follow: 0.34, aim: -0.34, open: 0 },
+      upperZ: { base: 0.16, wind: -0.24, whip: -0.01, follow: 0.2, aim: 0, open: 0.7 },
+      lowerX: { base: -0.63, wind: 0.24, whip: 0.48, follow: 0.2, aim: 0.37, open: -0.07 },
       lowerZ: -0.05,
       handX: -0.06,
     },
