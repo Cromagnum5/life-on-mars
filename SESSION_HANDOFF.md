@@ -2,34 +2,34 @@
 
 ## Current checkpoint
 
-`main` at `1efee9a` (`Take the throwaway browser drivers back out of the repo`),
-**merged**. `animation-tool` has been fast-forwarded into it and is spent. `main`
-is 10 commits ahead of `origin/main`; nothing is pushed, and pushing is the
-user's call.
+Branch `remove-hurler-hip-rocks` at `dd6048d` (`Work a team's hurlers as one
+battery`), **not merged**. It sits 5 commits ahead of `main` (`d656376`), which
+is itself 1 ahead of `origin/main`. Nothing is pushed, and pushing is the user's
+call, as is the merge.
 
 **The working tree is deliberately not clean.** `src/pose-tuning.ts` carries hurl
 arm-key edits the user saved out of the animation tool while playing with it.
 They are real work and they are also a regression — see "The ordering the throws
 read by" below. Do not sweep them into a commit and do not throw them away
-without asking. `git diff src/pose-tuning.ts` is the whole of it.
+without asking. `git diff src/pose-tuning.ts` is the whole of it. Stage files by
+name on this branch; `git add -A` will take that file with them.
 
-This session built the animation tool. Its commits, oldest first:
+The branch, oldest first:
 
-- `624051c` Make a throw's timing and its arm arc data, not constants
-- `5cdabfb` Read the feet line off one function, not two
-- `ebcb86d` Give the animation a workbench of its own
-- `789d06a` Give the scrub bar a target worth aiming at, and its keys back
-- `e0d57cc` Write down that a slider must not own the keyboard
-- `ad61f9f` Let the free arm be edited, and measure what that costs
-- `adee132` Count the entry points again
-- `59a78c4` Revert everything, not the fields that existed when it was written
-- `809ab52` Mark what is in the file on every slider
-- `1efee9a` Take the throwaway browser drivers back out of the repo
+- `3f3ca67` Take the rocks off the hurler's hip
+- `a65ca54` Drop the blob shadow under every unit
+- `5fd5c9f` Let a screen engage chargers that already have a target
+- `3495fe7` Give each sword a charger of its own
+- `dd6048d` Work a team's hurlers as one battery
+
+The last three are this session and are all `src/combat.ts` target selection.
+They were played and approved — "it's nice now" — so treat the behaviour as
+settled and the balance as open.
 
 ## Checks
 
 ```sh
-npm test        # 87 pass
+npm test        # 97 pass
 npm run build
 blender --background --python tools/render_rigwalker_throw.py
 blender --background --python tools/render_rigwalker_duel.py
@@ -47,6 +47,143 @@ Two things that look like failures and are not:
   quiet run this session. Re-run with the machine idle before believing them.
 - Vite's warning about the shared chunk exceeding 500 kB is known and
   non-blocking.
+
+## How to see what the director is thinking
+
+This session's three defects were all invisible in a screenshot and obvious in a
+trace, and getting a trace out is not obvious, so:
+
+**`console.log` from the page does not reach the terminal.** `--enable-logging=stderr`
+with `--v=1` gets you Chrome's own histograms and none of the page's output.
+What works is writing the line into the DOM and dumping it:
+
+```ts
+const d = (globalThis as never as { document?: any }).document;
+if (d?.body) {
+  let node = d.getElementById("dbg");
+  if (!node) { node = d.createElement("pre"); node.id = "dbg"; d.body.appendChild(node); }
+  node.textContent += `...\n`;
+}
+```
+
+```sh
+chrome --headless=new --no-sandbox --disable-gpu --enable-unsafe-swiftshader \
+  --use-gl=swiftshader --virtual-time-budget=18000 --dump-dom \
+  "http://localhost:5173/sim.html?matchup=2h%2B2%20v%204&seed=4&t=14" | grep -o 'HURL .*'
+```
+
+Two traps in that URL. **The matchup must be URL-encoded** — `2h+2 v 4` passed
+raw decodes to `2h 2 v 4`, matches nothing, and the sim silently falls back to
+`1v1`, which looks like your change did nothing. `tools/capture_sim.sh` passes
+the argument through raw, so encode it there too. And `--dump-dom` is also how to
+read the verdict without looking at a picture:
+
+```sh
+... --dump-dom "...&t=60" | grep -o 'id="verdict"[^>]*>[^<]*' | sed 's/.*>//'
+```
+
+That is what the win tallies below were counted with.
+
+## What the target selection defects were
+
+All three were reported from play and all three had a cause other than the
+obvious one. Worth reading before changing `CombatDirector.update`, because the
+order things happen in that function is load-bearing.
+
+**1. The screen did nothing.** In `2h+2 v 4` the two Helios swords never touched
+the four Vanguard swords walking past them to the hurlers; the HUD read `idle ·
+no contact` at 100 HP for the whole fight. Two coupled causes, not one:
+
+- A hurler acquires at 18.5 m and two swordsmen only notice each other at 8.5, so
+  **on the walk in every charger picks a hurler before the screen is in melee
+  awareness range at all.** From that frame each red held a support encounter and
+  was in `reserved`, so the mutual-duel pass skipped all four as unavailable.
+- Melee support encounters were never published into the threat list — only
+  ranged and mutual ones were — so from the blue side nobody registered that a
+  red was threatening the hurler either.
+
+A one-sided attacker is now a threat to the fighter it is walking at. And on
+promotion the target's own outgoing encounter is dropped: without that a held
+charger drives its charge *and* defends the new duel, writing two cues a frame
+that fight each other. Dropping it is what actually makes a screen hold.
+
+**The acquisition ordering is the whole defect**, so the regression test
+reproduces it in two steps — chargers lock onto the hurlers a frame before the
+screen is in range — rather than placing everyone and running one frame. A
+one-frame placement test passes on the broken code.
+
+**2. Both swords took the same charger.** The obvious fix — score a target that
+somebody is already on as more expensive — is in, and **on its own it changed
+nothing on screen.** Tracing the frame the second sword commits: its four
+candidates were at 9.82, 10.26, 10.37 and 11.26 m against an acquire range of
+9.775, and the only one it could reach was the one its partner had taken at
+9.77 m. It doubled up because the nearest free charger was five centimetres out
+of reach. So a target nobody is on is acquired at a longer slack as well.
+
+That slack has a hard ceiling and it is not taste: acquiring past the range an
+encounter survives to takes the encounter and loses it every frame, which is the
+strobing plan ring `ACQUIRE_SLACK` is already written against.
+`UNCLAIMED_ACQUIRE_SLACK` at 1.25 leaves a 0.85 m hysteresis band where the
+ordinary one leaves 1.7. Do not raise it without re-reading that comment.
+
+**3. A hurler charged into the crowd.** Not a hurler deciding anything. The melee
+support pass had no role check, so a hurler that had not yet acquired — and at
+the start of the walk in neither has, the enemy being 23 m off — was drafted as a
+helper, handed a `beat`, and sent to close. It leaves its standoff at x = −13.5
+and does not stop until x = −3.2, throwing nothing the whole way. `hurler.test.ts`
+already claimed a hurler "only ever throws and never picks up a sword plan"; that
+only held because every case in it was one where the hurler acquired first.
+
+## The hurler battery
+
+A team's hurlers now pick one body together and work it down together. The focus
+is scored in metres in `chooseFocus`: how close the candidate has come to the
+**nearest** thrower, plus its remaining health at `FOCUS_HEALTH_WEIGHT` (8), less
+`FOCUS_HYSTERESIS` (2.5) for being the body they are already on. That gives
+weakest-first through a crowd, while a fresh swordsman closing on the throwers
+still outranks a near-dead one at the back — keeping the crowd off is what the
+battery is for. A thrower that cannot reach the focus works on what it can hit
+and rejoins when the focus comes round.
+
+**Re-aiming reuses the rule the throw already had.** The band a throw is chosen
+at may change while the gap is still being judged and not once the motion has
+started; `canReaim` says the same about who it is thrown at. A rock in the air is
+never re-aimed, and a wind-up that snapped to a new bearing mid-swing would read
+as the model glitching rather than as the group changing its mind. Between throws
+the next one is aimed wherever the battery is now, so a switch costs one plan and
+not two — that is why `advanceThrow` takes the desired target rather than
+re-planning against its current defender.
+
+What it looks like when it works, seed 3 of `2h v 3`: both commit to a hurl at
+0.73 s, both release at V2 at 2.00 and 2.10, both commit again at 3.03 and 3.13,
+both pitch at 3.82 and 3.93, V2 at 5 HP with V1 and V3 untouched.
+
+## What was deliberately left alone
+
+- **Hurlers still get overrun in `2h+2 v 4`.** They hold 14 to 15 m until the
+  chargers arrive, then get walked down through pitch and toss. A hurler
+  backpedals at 1.5 m/s against a 3.6 m/s charge, so with four chargers and two
+  screening swords, two get through by design. That is movement, not targeting,
+  and changing it is a balance decision the user has not made.
+- **The battery split once for about a second** in a 25 s trace: one thrower had
+  swung to a closing enemy while the other was mid-wind-up and could not follow,
+  then the focus swung back. It resolves itself. `FOCUS_HYSTERESIS` is the dial if
+  it ever reads badly in motion.
+- **Two swords may still double on one charger** when there is genuinely nothing
+  else in reach. `MAX_SUPPORTERS_PER_TARGET` still caps pressure at a primary
+  plus two, and focus fire is wanted; only the accidental case was removed.
+
+## The balance moved and wants his eyes
+
+Counted with the `--dump-dom` verdict recipe above, `2h+2 v 4` over seeds 1–12:
+**7 Helios wins before the screen spread, 10 after.** Seeds 2 and 3 went from
+still fighting at 40 s to resolving at 17.6 s and 16.7 s; seed 1 flipped the other
+way. After the battery it sits at 7 of 8 on seeds 1–8, and `2h v 3` sits at 4–4.
+Everything resolves inside 60 s.
+
+That is the screen doing its job — holding two chargers instead of one buys the
+hurlers the range they want — but a twelve-seed tally is a weak instrument and
+whether the hurler side is now too strong is a question for playing it.
 
 ## The animation tool
 
@@ -74,8 +211,8 @@ intuitively". Treat the interaction as something worth protecting.
 a hurl above a pitch above a toss — because that ordering is how the unit's three
 ranges read as three different throws rather than one throw at three speeds.
 
-The margin is thin and the arm keys spend it. Measured this session in the tool,
-world height of the held rock at each throw's own release phase:
+The margin is thin and the arm keys spend it. Measured in the tool, world height
+of the held rock at each throw's own release phase:
 
 | | hurl | pitch | toss | hurl over pitch |
 | --- | --- | --- | --- | --- |
@@ -190,8 +327,8 @@ somebody re-measures all three throws.
   consequence: `Revert` after a `Save` reverts to the *saved* values. Undoing a
   save is a git job.
 - **Verify input in a real browser.** URL parameters test rendering. Everything
-  this session that was wrong was wrong about input or focus, and only a driven
-  browser found it:
+  in the tool session that was wrong was wrong about input or focus, and only a
+  driven browser found it:
 
 ```sh
 chrome --headless=new --no-sandbox --disable-gpu --enable-unsafe-swiftshader \
@@ -200,10 +337,10 @@ chrome --headless=new --no-sandbox --disable-gpu --enable-unsafe-swiftshader \
 ```
 
 Node 20 needs `--experimental-websocket` for a CDP client, and the driver scripts
-belong in the scratchpad — three of them rode into the repo on a `git add -A` this
-session because the shell resets its working directory between commands.
-`window.__anim` exposes the scene, subject, phase and clearance so a check can
-read a measurement instead of scraping the panel.
+belong in the scratchpad — three of them once rode into the repo on a `git add -A`
+because the shell resets its working directory between commands. `window.__anim`
+exposes the scene, subject, phase and clearance so a check can read a measurement
+instead of scraping the panel.
 
 ## A seed is only worth what nothing else can touch
 
@@ -269,8 +406,8 @@ one layer may own the legs.**
 
 ## What the Hurler is
 
-A ranged unit on the same skeleton, no sword, a rock in hand and a cache on its
-hip. It picks one of three throws from the current gap:
+A ranged unit on the same skeleton, no sword, a rock in hand. It picks one of
+three throws from the current gap:
 
 | throw | band | speed | damage | motion |
 | --- | --- | --- | --- | --- |
@@ -288,9 +425,18 @@ every throw opens with a foot jumping to a new spot. `hurler.test.ts` pins that.
 - **The strike is resolved at release, replayed on arrival.** The `throw` event
   carries speed, flight time and the already-rolled outcome.
 - **A hurler is never a mutual duellist.** One-sided `ranged` encounters, never
-  promoted, never riposting.
+  promoted, never riposting — and, since this session, never drafted into a melee
+  support encounter either.
+- **A fighter may drive only one encounter.** Anything that hands a fighter a
+  second one writes two cues a frame and reads as neither. The promotion pass
+  drops the target's own outgoing encounter for exactly this reason.
 - **Being hit outranks what you were planning.** `writeCue` stops a landed blow
-  being lost to whichever encounter was iterated last.
+  being lost to whichever encounter was iterated last. It arbitrates *only* that
+  case, which is why the rule above has to hold everywhere else.
+- **Acquire ranges must stay inside release ranges.** Noticing somebody at the
+  range you forget them at is a unit stuttering under a strobing plan ring. Three
+  constants encode the band: `ACQUIRE_SLACK`, `UNCLAIMED_ACQUIRE_SLACK`,
+  `RELEASE_SLACK`.
 - **Rock size and arc are drawn from the rendered result, not from physics.** All
   three throws are far harder than their distance needs.
 - **The step is a model offset, not movement.** The director owns where a hurler
@@ -304,7 +450,7 @@ every throw opens with a foot jumping to a new spot. `hurler.test.ts` pins that.
 
 ## Measured state
 
-- 87 tests pass; production build passes; both Blender validators pass.
+- 97 tests pass; production build passes; both Blender validators pass.
 - Release heights, Blender frame: **3.77 / 3.73 / 3.48**, all above the head.
   Tool frame: **4.481 / 4.462 / 4.225**. The hurl's margin over the pitch is the
   budget and it is about two centimetres.
@@ -323,27 +469,34 @@ playable. Player agency is still out of scope.
 
 1. **Settle the arm edits in the working tree** with the user — either bring the
    pitch down to match or lift the hurl's shoulder, then re-measure the ordering.
-   Nothing else should be built on top until that file is decided.
-2. **Make the Blender port stop being a hand copy.** It is the one place the tool
+   Nothing else should be built on top until that file is decided. This is the
+   oldest open item and it blocks the arm.
+2. **Merge or drop `remove-hurler-hip-rocks`.** Five commits, played and approved,
+   sitting unmerged while `main` is one ahead of `origin/main`.
+3. **Play the screened matchup and judge the balance**, per the tally above. If
+   the hurler side is now too strong the dials are `MAX_SUPPORTERS_PER_TARGET`,
+   `CLAIMED_TARGET_COST` and the hurler backpedal speed — not the targeting.
+4. **Make the Blender port stop being a hand copy.** It is the one place the tool
    can silently desynchronise the project from itself. Emitting the tuning as JSON
    for the Python to read would end a whole class of wrong measurement.
-3. **The sword has no tunables.** `applyCombatPose` still sums its coefficients
+5. **The sword has no tunables.** `applyCombatPose` still sums its coefficients
    inline, so `cut`, `guard` and `struck` scrub but do not edit. The same
    extraction the throws got would open them, and the torso check would run over
    the guards and cuts, which nobody has measured.
-4. **Foot IK is still the real unlock.** Everything cramped about the hurl step
+6. **Foot IK is still the real unlock.** Everything cramped about the hurl step
    traces to its absence. It is a feature, and worth scoping properly.
-5. **The throws have not been heard.** The release reuses the sword's `swing`
+7. **The throws have not been heard.** The release reuses the sword's `swing`
    whoosh, graded by throw. The standing lesson is that a fight wants its sound
-   spent on contact.
-6. **`hud=0` renders blank in headless capture.** Pre-existing, blocks the clean
+   spent on contact. A coordinated volley is a new reason to care: two rocks
+   landing together currently make the same noise as two landing apart.
+8. **`hud=0` renders blank in headless capture.** Pre-existing, blocks the clean
    render path, small.
-7. **Retake the capture sheets** used to judge poses; the ones in `renders/`
+9. **Retake the capture sheets** used to judge poses; the ones in `renders/`
    predate the seed fix.
-8. The projection is an open question, deliberately. What has not been tried:
-   perspective at gameplay distance, and whether unit readability survives it at
-   the zooms an RTS actually plays at.
-9. Earlier items still open: hurlers held behind the swords via the Stoneworks
-   rally point, a hurler that backpedals toward its own side rather than in a
-   straight line, scorch decals under wrecks, encirclement positions for group
-   fights, and trails reading white-hot over bright ground.
+10. The projection is an open question, deliberately. What has not been tried:
+    perspective at gameplay distance, and whether unit readability survives it at
+    the zooms an RTS actually plays at.
+11. Earlier items still open: hurlers held behind the swords via the Stoneworks
+    rally point, a hurler that backpedals toward its own side rather than in a
+    straight line, scorch decals under wrecks, encirclement positions for group
+    fights, and trails reading white-hot over bright ground.
