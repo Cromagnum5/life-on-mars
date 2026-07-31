@@ -66,14 +66,14 @@ import "./sim.css";
  */
 
 /**
- * Wide enough that a sixty-four a side line pulled back to fit still has ground
+ * Wide enough that the deepest line here pulled back to fit still has ground
  * under it and out to the horizon behind it. The ground itself does not move
  * when this does — `terrainHeightAt` is a function of world position, not of
  * the patch drawn around it — so every seeded fight lands on exactly the height
  * it always did and only the backdrop is bigger.
  */
 const ARENA_SIZE = 112;
-/** Low enough to hold a sixty-four a side line in frame. */
+/** Low enough to hold a hundred and twenty-eight a side in frame. */
 const MIN_ZOOM = 0.7;
 const MAX_ZOOM = 7;
 /** How far one arrow key swings the view. Twenty-four presses make a circuit. */
@@ -202,6 +202,15 @@ const MATCHUPS: Record<string, Matchup> = {
   },
   "64v64": {
     teams: [mixedRoster(64), mixedRoster(64)], standoff: 16, zoom: 0.8, spacing: 1.9,
+  },
+  // Two hundred and fifty-six bodies, and the frame budget's worst case. The
+  // block does not get wider — `MAX_FILES` holds a rank at sixteen — so this is
+  // the same line six ranks of swords deep instead of three, opening at the same
+  // gap and only pulled back for the depth behind it. What it costs is not the
+  // drawing, which is still eighty-six calls: it is `ai` and `physics`, both of
+  // which read every body against every other.
+  "128v128": {
+    teams: [mixedRoster(128), mixedRoster(128)], standoff: 16, zoom: 0.72, spacing: 1.9,
   },
 };
 
