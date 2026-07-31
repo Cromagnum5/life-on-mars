@@ -811,9 +811,6 @@ if (captureTime !== null) {
   // time a screenshot is taken, and screenshots are the point of this mode.
   // The batch is synced inside the loop rather than once before it: it owns the
   // scene's matrix update, so a draw that skipped it would draw stale matrices.
-  // Shadows are left on automatic here. Nothing moves in a frozen frame, so
-  // there is no half-rate cadence worth keeping, and a screenshot is the one
-  // thing on this page that has to be right rather than fast.
   renderer.setAnimationLoop(() => {
     batch?.sync(battle.units);
     renderer.render(scene, camera);
@@ -821,17 +818,6 @@ if (captureTime !== null) {
   });
 } else {
   const clock = new THREE.Clock();
-  let frameIndex = 0;
-  // The shadow pass draws every caster a second time, so it costs about what
-  // the colour pass beside it costs. Driven by hand from here it runs every
-  // other frame instead of every frame; a shadow one frame behind the body
-  // casting it is not something the eye has any way to catch at the zoom a
-  // battle is watched from.
-  //
-  // Turned off here rather than in `createMarsRenderer` on purpose: a page that
-  // never sets `needsUpdate` gets no shadows at all, and the animation tool has
-  // no reason to know this cadence exists.
-  renderer.shadowMap.autoUpdate = false;
   renderer.setAnimationLoop(() => {
     const frameDelta = Math.min(clock.getDelta(), 0.05);
     if (stepRequested) {
@@ -847,8 +833,6 @@ if (captureTime !== null) {
     // work done to put this frame on the screen, not work the fight asked for.
     perf.measure("render", () => {
       batch?.sync(battle.units);
-      // Every other frame; the renderer clears the flag once it has drawn them.
-      if ((frameIndex++ & 1) === 0) renderer.shadowMap.needsUpdate = true;
       renderer.render(scene, camera);
     });
     // The perf panel is charged to `hud` like the rest of the readout: an

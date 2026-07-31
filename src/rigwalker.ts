@@ -2298,6 +2298,20 @@ export function createRigwalker(
   ): void {
     previousPosition.copy(group.position);
     if (health <= 0) {
+      // A corpse is not swinging. It reads as an obvious thing to say and it
+      // was not being said: everything below this early return is skipped once
+      // a fighter is down, `swinging` among it, so a fighter cut down in the
+      // middle of its own attack stayed `isSwinging` for the whole three and a
+      // half seconds it took to fall, lie there and sink.
+      //
+      // `BattleRuntime` feeds a blade ribbon for every swinging unit every
+      // frame, so the wreck went on trailing light off a sword it was no longer
+      // moving — a bright smear following a body through its topple and then
+      // down into the ground. Worse, feeding a ribbon resets its idle timer, so
+      // the trail never aged out and never went back to the pool. There are
+      // sixteen ribbons; a melee that killed sixteen mid-swing had every one of
+      // them held by a dead man, and the living stopped trailing at all.
+      swinging = false;
       defeatElapsed += delta;
       const fallProgress = 1 - Math.exp(-5.5 * defeatElapsed);
       group.quaternion.slerpQuaternions(

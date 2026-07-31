@@ -544,14 +544,6 @@ function updateHud(elapsed: number): void {
 }
 
 const clock = new THREE.Clock();
-let frameIndex = 0;
-// The shadow pass draws every caster a second time, so it costs about what the
-// colour pass beside it costs. Driven by hand from here it runs every other
-// frame instead of every frame; a shadow one frame behind the body casting it
-// is not something the eye has any way to catch at this zoom. Turned off here
-// rather than in `createMarsRenderer` because a page that never sets
-// `needsUpdate` gets no shadows at all.
-renderer.shadowMap.autoUpdate = false;
 
 /**
  * The frame, charged to the five perf paths as it goes. `battle.update` carves
@@ -581,8 +573,6 @@ function animate(): void {
   // work done to put this frame on the screen, not work the game asked for.
   perf.measure("render", () => {
     batch?.sync(units);
-    // Every other frame; the renderer clears the flag once it has drawn them.
-    if ((frameIndex++ & 1) === 0) renderer.shadowMap.needsUpdate = true;
     renderer.render(scene, camera);
   });
   // The panel is charged to `hud` like the rest of the readout: an instrument

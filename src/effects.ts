@@ -182,6 +182,26 @@ export function writeTrailColors(
 
 const trailTint = new THREE.Color();
 
+/**
+ * The ribbon owner a rock in pool slot `slot` trails under.
+ *
+ * Negative so it can never collide with a fighter's `combatId`, and a named
+ * function rather than the expression written out twice, because the two places
+ * that need it — launching a rock and streaking it — have to agree or a rock
+ * releases somebody else's ribbon.
+ */
+export function rockTrailOwner(slot: number): number {
+  return -1 - slot;
+}
+
+/** Empties a ribbon and puts it back in the pool. */
+function retireTrail(trail: Trail): void {
+  trail.owner = null;
+  trail.samples = 0;
+  trail.mesh.visible = false;
+  trail.material.opacity = 0;
+}
+
 function flashTexture(): THREE.Texture {
   const size = 64;
   const canvas = document.createElement("canvas");
@@ -359,6 +379,15 @@ export class CombatEffects {
   ): void {
     const slot = this.nextRock;
     this.nextRock = (this.nextRock + 1) % MAX_ROCKS;
+    // A ribbon is found by its owner, and a rock's owner is the pool slot it
+    // flies in. Two dozen slots is a handful of seconds of a sixty-four a side
+    // fight, so a slot comes round again while the ribbon the last rock left in
+    // it is still fading — and `trail` handed that ribbon straight back, six
+    // stale samples and all. The strip then reached from wherever the previous
+    // rock had got to across to the new one leaving a hand somewhere else
+    // entirely: a long bright line drawn between two unrelated throws, which is
+    // exactly what it looked like.
+    this.releaseTrail(rockTrailOwner(slot));
     const rock = this.rocks[slot];
     rock.flightTime = Math.max(0.05, flightTime);
     rock.life = rock.flightTime;
@@ -403,6 +432,19 @@ export class CombatEffects {
     writeTrailColors(trail.colors, trailTint.set(color));
     trail.geometry.attributes.position.needsUpdate = true;
     trail.geometry.attributes.color.needsUpdate = true;
+  }
+
+  /**
+   * Hands a ribbon back to the pool at once, wherever it had got to.
+   *
+   * Used when the thing a ribbon belongs to is gone rather than merely still —
+   * a rock slot being handed to a new throw. Left to fade on its own it would
+   * still answer to that owner, and the next user of the slot would inherit the
+   * samples instead of starting from its own hand.
+   */
+  private releaseTrail(owner: number): void {
+    const trail = this.trails.find((item) => item.owner === owner);
+    if (trail) retireTrail(trail);
   }
 
   /**
@@ -499,12 +541,7 @@ export class CombatEffects {
       ring.life = 0;
       ring.mesh.visible = false;
     }
-    for (const trail of this.trails) {
-      trail.owner = null;
-      trail.samples = 0;
-      trail.mesh.visible = false;
-      trail.material.opacity = 0;
-    }
+    for (const trail of this.trails) retireTrail(trail);
     for (const rock of this.rocks) {
       rock.life = 0;
       rock.mesh.visible = false;
@@ -581,12 +618,11 @@ export class CombatEffects {
       rock.mesh.rotation.y += rock.spin.y * delta;
       rock.mesh.rotation.z += rock.spin.z * delta;
       if (rock.trailed) {
-        // Owner ids are negative so they can never collide with a unit's.
         rockFlightPoint(
           rock.from, rock.to, rock.arc,
           Math.max(0, progress - 0.06), this.rockTrailTail,
         );
-        this.trail(-1 - slot, this.rockTrailTail, this.rockPoint, 0xffb083);
+        this.trail(rockTrailOwner(slot), this.rockTrailTail, this.rockPoint, 0xffb083);
       }
     }
 
@@ -594,10 +630,7 @@ export class CombatEffects {
       if (trail.owner === null) continue;
       trail.idle += delta;
       if (trail.idle >= TRAIL_FADE) {
-        trail.owner = null;
-        trail.samples = 0;
-        trail.mesh.visible = false;
-        trail.material.opacity = 0;
+        retireTrail(trail);
         continue;
       }
       trail.material.opacity = 1 - trail.idle / TRAIL_FADE;
