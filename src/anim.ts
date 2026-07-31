@@ -27,6 +27,7 @@ import {
   createRigwalker, describeFeet, hurlStep, stoneStep, type Rigwalker,
 } from "./rigwalker";
 import { loadRigwalkerAsset } from "./rigwalker-assets";
+import { unitField, type UnitField } from "./unit-field";
 import {
   addMarsLighting,
   applyMarsAtmosphere,
@@ -384,8 +385,9 @@ function currentCue(): CombatCue {
 }
 
 /** Every unit the subject can see: itself, and the mark it is facing. */
-function nearby(): readonly Rigwalker[] {
-  return [subject(), mark];
+/** The two bodies on the workbench, filed the way a battle files an army. */
+function nearby(): UnitField {
+  return unitField([subject(), mark]);
 }
 
 let elapsed = 0;
@@ -409,7 +411,7 @@ function advance(delta: number): void {
   );
   // The mark is given no cue at all, so it idles: something to face and to read
   // a stance against, with nothing of its own going on.
-  mark.update(delta, elapsed, terrainHeightAt, [mark], [], camera.quaternion);
+  mark.update(delta, elapsed, terrainHeightAt, unitField([mark]), [], camera.quaternion);
   hurler.group.visible = current.role === "hurler";
   swordsman.group.visible = current.role === "melee";
   updateCamera();

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as THREE from "three";
 import { CombatDirector, MIN_FIGHT_DISTANCE, type CombatantSnapshot } from "./combat";
 import { createSeededRandom } from "./random";
+import { unitField } from "./unit-field";
 import { createRigwalker, type Rigwalker } from "./rigwalker";
 
 /**
@@ -47,8 +48,9 @@ function drive(seed: number, units: Rigwalker[], seconds: number): {
       target.applyCombatDamage(damage.amount, damage.side);
       if (wasAlive && !target.isAlive) defeats += 1;
     }
+    const field = unitField(units);
     for (const unit of units) {
-      unit.update(STEP, elapsed, flat, units, [], CAMERA, frame.cues.get(unit.combatId));
+      unit.update(STEP, elapsed, flat, field, [], CAMERA, frame.cues.get(unit.combatId));
     }
     units.forEach((unit, index) => {
       if (unit.isAlive && elapsed > seconds - 1) {
@@ -189,8 +191,9 @@ describe("Rigwalkers sent to one waypoint", () => {
       const walking = units.map(() => false);
       const flips = units.map(() => 0);
       for (let elapsed = 0; elapsed < 12; elapsed += STEP) {
+        const field = unitField(units);
         for (const unit of units) {
-          unit.update(STEP, elapsed, flat, units, [], CAMERA);
+          unit.update(STEP, elapsed, flat, field, [], CAMERA);
         }
         units.forEach((unit, index) => {
           const speed = unit.group.position.distanceTo(previous[index]) / STEP;

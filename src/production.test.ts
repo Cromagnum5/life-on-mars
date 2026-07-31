@@ -7,6 +7,7 @@ import {
   type ProductionOrder,
 } from "./production";
 import type { Rigwalker } from "./rigwalker";
+import { unitField } from "./unit-field";
 
 /**
  * A producing building is a timer with a door on it, and what comes through
@@ -98,8 +99,9 @@ describe("building production", () => {
     const start = units.map((unit) => unit.group.position.distanceTo(rally));
     let closest = Number.POSITIVE_INFINITY;
     for (let elapsed = 0; elapsed < 4; elapsed += STEP) {
+      const field = unitField(units);
       for (const unit of units) {
-        unit.update(STEP, elapsed, flat, units, [], new THREE.Quaternion());
+        unit.update(STEP, elapsed, flat, field, [], new THREE.Quaternion());
       }
       closest = Math.min(closest, narrowestGap(units));
     }

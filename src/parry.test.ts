@@ -5,6 +5,7 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import * as SkeletonUtils from "three/addons/utils/SkeletonUtils.js";
 import { BASE_FIGHT_DISTANCE, type AttackLine, type CombatAction, type CombatCue } from "./combat";
 import { createSeededRandom } from "./random";
+import { unitField } from "./unit-field";
 import { createRigwalker, type Rigwalker } from "./rigwalker";
 import type { RigwalkerAsset } from "./rigwalker-assets";
 
@@ -119,9 +120,10 @@ function stageDuel(asset: RigwalkerAsset): Duel {
     defender.group.rotation.set(0, 0, 0);
     attacker.group.rotation.set(0, Math.PI, 0);
     clock += STEP;
-    defender.update(STEP, clock, () => 0, units, [], CAMERA,
+    const field = unitField(units);
+    defender.update(STEP, clock, () => 0, field, [], CAMERA,
       cueOf(attacker.combatId, action, phase, line, side));
-    attacker.update(STEP, clock, () => 0, units, [], CAMERA,
+    attacker.update(STEP, clock, () => 0, field, [], CAMERA,
       cueOf(defender.combatId, "attack", phase, line, side));
   };
 

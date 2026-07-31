@@ -23,6 +23,7 @@ import {
   type StoneStrike,
 } from "./combat";
 import { createSeededRandom } from "./random";
+import { unitField } from "./unit-field";
 import { createRigwalker, stoneStep, type Rigwalker } from "./rigwalker";
 import type { RigwalkerAsset } from "./rigwalker-assets";
 
@@ -360,9 +361,10 @@ function stageFight(asset: RigwalkerAsset): Bench {
     hurler.group.rotation.set(0, 0, 0);
     mark.group.rotation.set(0, Math.PI, 0);
     clock += STEP;
-    hurler.update(STEP, clock, flat, units, [], CAMERA,
+    const field = unitField(units);
+    hurler.update(STEP, clock, flat, field, [], CAMERA,
       cueOf(hurler.combatId, mark.combatId, action, phase, strategy, doubleGuard));
-    mark.update(STEP, clock, flat, units, [], CAMERA);
+    mark.update(STEP, clock, flat, field, [], CAMERA);
   };
   return {
     hurler,

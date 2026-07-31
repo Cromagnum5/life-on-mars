@@ -16,6 +16,7 @@ import {
   type CombatantSnapshot,
 } from "./combat";
 import { createSeededRandom } from "./random";
+import { unitField } from "./unit-field";
 import { createRigwalker, hurlStep, type Rigwalker } from "./rigwalker";
 
 /**
@@ -112,8 +113,9 @@ function runFight(seed: number, seconds: number, hurlerStandoff: number): {
       target.applyCombatDamage(entry.amount, entry.side);
       if (wasAlive && !target.isAlive) defeats += 1;
     }
+    const field = unitField(units);
     for (const unit of units) {
-      unit.update(STEP, elapsed, flat, units, [], CAMERA, frame.cues.get(unit.combatId));
+      unit.update(STEP, elapsed, flat, field, [], CAMERA, frame.cues.get(unit.combatId));
     }
     gaps.push(hurler.group.position.distanceTo(sword.group.position));
   }
@@ -488,8 +490,9 @@ describe("a hurler under pressure", () => {
         x: unit.group.position.x, z: unit.group.position.z, profile: unit.combatProfile,
       }));
       const frame = director.update(STEP, snapshots);
+      const field = unitField(units);
       for (const unit of units) {
-        unit.update(STEP, elapsed, flat, units, [], CAMERA, frame.cues.get(unit.combatId));
+        unit.update(STEP, elapsed, flat, field, [], CAMERA, frame.cues.get(unit.combatId));
       }
       gap = units[0].group.position.distanceTo(units[1].group.position);
     }

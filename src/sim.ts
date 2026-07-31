@@ -221,19 +221,20 @@ const MATCHUPS: Record<string, Matchup> = {
   // the same line six ranks of swords deep instead of three, opening at the same
   // gap and only pulled back for the depth behind it.
   //
-  // What it costs is not the drawing, which is still eighty-six calls. It is
-  // `ai` and `physics`, both of which read every body against every other.
-  // Measured headless, one frame averaged over the two seconds after contact:
+  // Drawing does not care — still eighty-six calls, now carrying 520k triangles
+  // instead of 260k. What it costs is `ai` and `physics`. Measured headless, one
+  // frame averaged over the two seconds after contact, before and after the
+  // bodies were indexed by where they stand (`unit-field.ts`):
   //
-  //   64 bodies   ai 0.25 ms   physics  1.3 ms
-  //   128 bodies  ai 0.58 ms   physics  5.7 ms
-  //   256 bodies  ai 3.0 ms    physics 38.0 ms
+  //                 physics before   after      ai
+  //   64 bodies         1.3 ms      0.45 ms   0.27 ms
+  //   128 bodies        5.7 ms      1.0 ms    0.45 ms
+  //   256 bodies       38.0 ms      3.4 ms    2.2 ms
   //
-  // Thirty-eight milliseconds of `physics` is a frame budget spent twice over
-  // before anything is drawn. The separation and clearance passes in
-  // `rigwalker.ts` walk the whole roster per body; nothing here is indexed by
-  // where a body is standing. That is the next thing to fix if this matchup is
-  // ever meant to be played rather than profiled.
+  // Thirty-eight milliseconds was a frame budget spent twice over before
+  // anything was drawn. What is left at 256 is `ai`, which still walks every
+  // pair to decide who fights whom — a fifth of what `physics` used to cost,
+  // and the next thing to look at if this ever needs to be cheaper.
   "128v128": {
     teams: [mixedRoster(128), mixedRoster(128)], standoff: 16, zoom: 0.72, spacing: 1.9,
   },

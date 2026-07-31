@@ -10,6 +10,7 @@ import {
 import { CombatEffects } from "./effects";
 import { PerfMonitor } from "./perf";
 import type { NavigationObstacle, Rigwalker } from "./rigwalker";
+import { UnitField } from "./unit-field";
 import { viewSpan, type TabletopCamera } from "./world";
 
 /**
@@ -95,6 +96,12 @@ export class BattleRuntime {
   private readonly dustUp = new THREE.Vector3(0, 1, 0);
   private readonly orderedEvents: CombatEvent[] = [];
   private readonly frameDefeats: Rigwalker[] = [];
+  /**
+   * Where everybody is standing, rebuilt each frame and kept across them so the
+   * cell arrays are reused rather than reallocated. Every unit reads its
+   * neighbours through this; see `unit-field.ts` for why it stays exact.
+   */
+  private readonly field = new UnitField();
 
   constructor(private readonly scene: THREE.Scene, options: BattleOptions = {}) {
     this.effects = new CombatEffects(scene);
@@ -192,9 +199,13 @@ export class BattleRuntime {
     });
 
     this.perf.measure("physics", () => {
+      // Filed after this frame's damage, so a body that has just gone down is
+      // already out of everybody's way, and before the first unit moves, so the
+      // roster it holds is the one about to be walked.
+      this.field.rebuild(this.units);
       for (const unit of this.units) {
         unit.update(
-          delta, elapsed, context.terrainHeightAt, this.units, context.obstacles,
+          delta, elapsed, context.terrainHeightAt, this.field, context.obstacles,
           camera.quaternion, frame.cues.get(unit.combatId),
         );
       }

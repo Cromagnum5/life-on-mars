@@ -7,6 +7,7 @@ import {
   type ThrowArmKey,
 } from "./pose-tuning";
 import type { RigwalkerAsset } from "./rigwalker-assets";
+import type { UnitField } from "./unit-field";
 import {
   BASE_FIGHT_DISTANCE,
   HURLER_FIGHT_DISTANCE,
@@ -61,7 +62,7 @@ export type Rigwalker = {
     delta: number,
     elapsed: number,
     terrainHeightAt: (x: number, z: number) => number,
-    nearbyUnits: readonly Rigwalker[],
+    field: UnitField,
     obstacles: readonly NavigationObstacle[],
     cameraQuaternion: THREE.Quaternion,
     combatCue?: CombatCue,
@@ -2160,14 +2161,18 @@ export function createRigwalker(
    * short of where they were sent.
    */
   function isWaypointTakenByCrowd(
-    nearbyUnits: readonly Rigwalker[],
+    field: UnitField,
     distanceToWaypoint: number,
   ): boolean {
     if (!destination) return false;
     let blocked = false;
     let ahead = 0;
-    for (const other of nearbyUnits) {
-      if (other === rigwalker || !other.isAlive) continue;
+    // The one question here that is not local: how many bodies got to the
+    // waypoint first, wherever they are standing now. The grid cannot narrow
+    // that, and does not have to — this only runs for a unit that has already
+    // been stalled for a second on its way somewhere.
+    for (const other of field.living) {
+      if (other === rigwalker) continue;
       const otherToWaypoint = Math.hypot(
         destination.x - other.group.position.x,
         destination.z - other.group.position.z,
@@ -2291,7 +2296,7 @@ export function createRigwalker(
     delta: number,
     elapsed: number,
     terrainHeightAt: (x: number, z: number) => number,
-    nearbyUnits: readonly Rigwalker[],
+    field: UnitField,
     obstacles: readonly NavigationObstacle[],
     cameraQuaternion: THREE.Quaternion,
     combatCue?: CombatCue,
@@ -2388,13 +2393,11 @@ export function createRigwalker(
 
     combatTarget = combatCue?.targetId == null
       ? null
-      : nearbyUnits.find((other) => other.combatId === combatCue.targetId && other.isAlive) ?? null;
+      : field.byCombatId(combatCue.targetId);
 
     const separationRadius = combatTarget ? COMBAT_SEPARATION_RADIUS : SEPARATION_RADIUS;
-    for (const other of nearbyUnits) {
-      if (other === rigwalker || !other.isAlive) {
-        continue;
-      }
+    field.forEachNear(group.position.x, group.position.z, separationRadius, (other) => {
+      if (other === rigwalker) return;
 
       radial.set(
         group.position.x - other.group.position.x,
@@ -2414,7 +2417,7 @@ export function createRigwalker(
           (separationRadius - distance) / separationRadius,
         );
       }
-    }
+    });
 
     const inCombat = combatTarget !== null;
     activeStrategy = inCombat ? combatCue?.strategy ?? null : null;
@@ -2548,7 +2551,7 @@ export function createRigwalker(
 
         if (
           approachStallElapsed > CROWD_ARRIVAL_SECONDS &&
-          isWaypointTakenByCrowd(nearbyUnits, distance)
+          isWaypointTakenByCrowd(field, distance)
         ) {
           destination = null;
         } else {
@@ -2650,15 +2653,15 @@ export function createRigwalker(
     }
 
     const clearance = combatTarget ? COMBAT_CLEARANCE : UNIT_CLEARANCE;
-    for (const other of nearbyUnits) {
-      if (other === rigwalker || !other.isAlive) continue;
+    field.forEachNear(group.position.x, group.position.z, clearance, (other) => {
+      if (other === rigwalker) return;
       radial.set(
         group.position.x - other.group.position.x,
         0,
         group.position.z - other.group.position.z,
       );
       const distance = radial.length();
-      if (distance >= clearance) continue;
+      if (distance >= clearance) return;
       if (distance < 0.001) {
         const angle = (variation % 8) * (Math.PI / 4);
         radial.set(Math.cos(angle), 0, Math.sin(angle));
@@ -2668,7 +2671,7 @@ export function createRigwalker(
       // Half the overlap each: the other unit resolves its own half on its own
       // update, so a pair separates without either being thrown clear.
       group.position.addScaledVector(radial, (clearance - distance) * 0.5);
-    }
+    });
 
     group.position.y = THREE.MathUtils.damp(
       group.position.y,
@@ -2806,6 +2809,12 @@ export function createRigwalker(
       hasPreviousContact = false;
       bladeVelocity.set(0, 0, 0);
     }
+
+    // The body has finished moving, so the index is told where it ended up.
+    // This is what keeps the grid exact rather than approximate: a unit still
+    // waiting its turn this frame has not moved and is already filed correctly,
+    // and one that has had its turn has just said so.
+    field.refile(rigwalker);
   }
 
   const rigwalker: Rigwalker = {
