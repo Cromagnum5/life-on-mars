@@ -131,21 +131,34 @@ const HURLER_SETBACK = 3.5;
 type Roster = { melee: number; hurlers: number };
 
 /**
- * Three swords to a hurler.
+ * Three swords to a hurler, because that is what the game itself fields — the
+ * Assembly Bay puts out three swords an opening and the Stoneworks one hurler —
+ * so a sim roster built on it stages the army the player actually gets.
  *
- * Measured rather than picked: over a round-robin of every mix from all-sword
- * to all-hurler, sixteen a side, both sides of the field, eight seeds each way,
- * twelve-and-four is the mix that comes out level against the field (net −10 of
- * a possible ±96). It is also what the game itself fields — the Assembly Bay
- * puts out three swords an opening and the Stoneworks one hurler — so a sim
- * roster built on it stages the army the player actually gets.
+ * **It is no longer the even point, and it is not an equilibrium.** It was
+ * measured as one: twelve-and-four used to come out level against a round-robin
+ * of every mix. Splitting the hurler battery across targets — a body is worth
+ * the rocks it takes to put it down and no more — took away the waste that was
+ * holding massed throwers back, and moved the whole curve. Re-run since, over
+ * every mix from all-sword to all-hurler, both sides of the field:
  *
- * What it is *not* is an equilibrium. The field it is level against is a
- * slope: all-sword loses to every mix 0–16, and each further hurler is worth
- * more than the sword it replaced, right up to an all-hurler army that beats
- * everything. Three to one is the even point on a curve that never turns over,
- * and if massed hurlers are ever meant to be beatable that is a combat
- * question, not a roster one.
+ * | swords : hurlers | 16 a side | 32 a side | 64 a side |
+ * | --- | --- | --- | --- |
+ * | all sword | 0% | 0% | 0% |
+ * | 3 : 1 | 30% | 25% | 25% |
+ * | 1 : 1 | 52% | 52% | 50% |
+ * | 1 : 3 | 81% | 77% | 84% |
+ * | all hurler | 88% | 98% | 94% |
+ *
+ * One to one is now the even point, and all three sizes agree on it to within a
+ * couple of per cent. The shape did not change: the field is still a slope with
+ * no turn in it, all-sword still loses to everything, and each further hurler is
+ * still worth more than the sword it replaced. Only it is steeper, and at
+ * sixty-four a side more hurlers beats fewer hurlers in almost every fight.
+ *
+ * So this constant now records what the player is handed, not what wins. If
+ * massed hurlers are ever meant to be beatable that is still a combat question
+ * and not a roster one, and it is a louder one than it was.
  */
 const SWORDS_PER_HURLER = 3;
 
@@ -206,9 +219,21 @@ const MATCHUPS: Record<string, Matchup> = {
   // Two hundred and fifty-six bodies, and the frame budget's worst case. The
   // block does not get wider — `MAX_FILES` holds a rank at sixteen — so this is
   // the same line six ranks of swords deep instead of three, opening at the same
-  // gap and only pulled back for the depth behind it. What it costs is not the
-  // drawing, which is still eighty-six calls: it is `ai` and `physics`, both of
-  // which read every body against every other.
+  // gap and only pulled back for the depth behind it.
+  //
+  // What it costs is not the drawing, which is still eighty-six calls. It is
+  // `ai` and `physics`, both of which read every body against every other.
+  // Measured headless, one frame averaged over the two seconds after contact:
+  //
+  //   64 bodies   ai 0.25 ms   physics  1.3 ms
+  //   128 bodies  ai 0.58 ms   physics  5.7 ms
+  //   256 bodies  ai 3.0 ms    physics 38.0 ms
+  //
+  // Thirty-eight milliseconds of `physics` is a frame budget spent twice over
+  // before anything is drawn. The separation and clearance passes in
+  // `rigwalker.ts` walk the whole roster per body; nothing here is indexed by
+  // where a body is standing. That is the next thing to fix if this matchup is
+  // ever meant to be played rather than profiled.
   "128v128": {
     teams: [mixedRoster(128), mixedRoster(128)], standoff: 16, zoom: 0.72, spacing: 1.9,
   },
