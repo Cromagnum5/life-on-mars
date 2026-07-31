@@ -1541,6 +1541,47 @@ const visor = new THREE.MeshStandardMaterial({
 });
 
 /**
+ * The corporate tint, one material per colour rather than one per painted mesh
+ * per fighter.
+ *
+ * This used to clone on the spot, inside the traverse that finds the painted
+ * parts. Eight parts a body at sixty-four a side is a thousand and twenty-four
+ * distinct materials describing two colours, and the renderer sorts its draw
+ * list by program and then by material — so every one of them was a state
+ * change the frame had to pay for, to say a thing the material beside it had
+ * already said.
+ *
+ * Sharing them is safe because nothing repaints a fighter while it is alive.
+ * That is a standing rule here rather than an accident: a corpse sinks into the
+ * dust instead of fading out precisely because its materials belong to every
+ * other Rigwalker too.
+ *
+ * It is also what makes the army drawable in one call a part. Instances of a
+ * single draw share one material by definition, so a per-fighter clone would
+ * have split `RigwalkerBatch` back into a draw per fighter and undone the whole
+ * point of it.
+ */
+const accentMaterials = new Map<string, THREE.MeshStandardMaterial>();
+
+function accentMaterialFor(
+  source: THREE.MeshStandardMaterial,
+  accentColor: number,
+): THREE.MeshStandardMaterial {
+  // Keyed by the source too, not by the colour alone: the painted parts all
+  // happen to come off one Blender material today, and a second one would
+  // otherwise be handed the first one's tint.
+  const key = `${source.uuid}:${accentColor}`;
+  const existing = accentMaterials.get(key);
+  if (existing) return existing;
+
+  const material = source.clone();
+  material.color.setHex(accentColor);
+  material.emissive?.setHex(accentColor);
+  accentMaterials.set(key, material);
+  return material;
+}
+
+/**
  * Martian rock: an icosahedron with its vertices knocked about, flat shaded so
  * the facets catch the low sun. Built once and shared — a hurler holds one, the
  * effects pool flies them, and there may be dozens on the field.
@@ -1874,10 +1915,9 @@ export function createRigwalker(
     const model = asset.instantiate();
     model.traverse((object) => {
       if (object instanceof THREE.Mesh && /Accent|Stripe|Shoulder|Knee|Toe/.test(object.name)) {
-        const material = (object.material as THREE.MeshStandardMaterial).clone();
-        material.color.setHex(accentColor);
-        material.emissive?.setHex(accentColor);
-        object.material = material;
+        object.material = accentMaterialFor(
+          object.material as THREE.MeshStandardMaterial, accentColor,
+        );
       }
     });
     group.add(model);

@@ -67,17 +67,33 @@ export function createTerrain(size: number, segments = 128): THREE.Mesh {
   return terrain;
 }
 
+/**
+ * The scattered surface rocks, all of them in one draw.
+ *
+ * They were a mesh apiece, which is seventy draws in the game and forty in the
+ * sim — and then again in the shadow pass — for a boulder field that never
+ * moves and is one geometry and one material throughout. Nothing about where
+ * they are placed has changed: the same `pseudoRandom` sequence is walked in
+ * the same order, so the same rocks stand in the same places as before.
+ */
 export function createRocks(
   size: number,
   count = 70,
   keepClearOf: readonly THREE.Vector2[] = [],
   clearance = 8,
-): THREE.Group {
-  const rocks = new THREE.Group();
-  rocks.name = "Rocks";
+): THREE.InstancedMesh {
   const geometry = new THREE.DodecahedronGeometry(1, 0);
   const material = new THREE.MeshStandardMaterial({ color: 0x542017, roughness: 0.94 });
+  // Allocated for the whole draw and then trimmed: how many survive the
+  // clearance test is not known until they have all been tried, and a few
+  // unused slots are cheaper than counting them twice.
+  const rocks = new THREE.InstancedMesh(geometry, material, count);
+  rocks.name = "Rocks";
+  rocks.castShadow = true;
+  rocks.receiveShadow = true;
   const site = new THREE.Vector2();
+  const rock = new THREE.Object3D();
+  let placed = 0;
 
   for (let index = 0; index < count; index += 1) {
     const scale = 0.25 + pseudoRandom(index + 300) * 1.6;
@@ -89,7 +105,6 @@ export function createRocks(
       continue;
     }
 
-    const rock = new THREE.Mesh(geometry, material);
     rock.position.set(x, terrainHeightAt(x, z) + scale * 0.48, z);
     rock.rotation.set(
       pseudoRandom(index + 400) * Math.PI,
@@ -97,11 +112,14 @@ export function createRocks(
       pseudoRandom(index + 600) * Math.PI,
     );
     rock.scale.set(scale, scale * (0.55 + pseudoRandom(index + 700)), scale);
-    rock.castShadow = true;
-    rock.receiveShadow = true;
-    rocks.add(rock);
+    rock.updateMatrix();
+    rocks.setMatrixAt(placed, rock.matrix);
+    placed += 1;
   }
 
+  rocks.count = placed;
+  rocks.instanceMatrix.needsUpdate = true;
+  rocks.computeBoundingSphere();
   return rocks;
 }
 
@@ -143,6 +161,13 @@ export function createMarsRenderer(canvas: HTMLCanvasElement): THREE.WebGLRender
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.1;
+  // The renderer clears its own counters between the shadow pass and the colour
+  // pass, so a page reading them afterwards is told about half its frame. The
+  // shadow pass draws every caster a second time and is worth roughly as much
+  // as the pass that follows it; a draw count leaving it out would have said a
+  // crowded frame was half the size it is. So the pages reset it themselves,
+  // once, at the end of the frame.
+  renderer.info.autoReset = false;
   return renderer;
 }
 

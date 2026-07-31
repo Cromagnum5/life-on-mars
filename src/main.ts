@@ -9,7 +9,7 @@ import {
 } from "./buildings";
 import { MovementMarkers } from "./feedback";
 import { STRATEGY_LABELS } from "./combat";
-import { PerfMonitor, PerfReadout } from "./perf";
+import { PerfMonitor, PerfReadout, type DrawCount } from "./perf";
 import {
   BuildingProduction,
   HURLER_ORDER,
@@ -18,6 +18,7 @@ import {
 } from "./production";
 import { createRigwalker } from "./rigwalker";
 import { loadRigwalkerAsset } from "./rigwalker-assets";
+import { RigwalkerBatch } from "./unit-render";
 import {
   addMarsLighting,
   applyMarsAtmosphere,
@@ -119,6 +120,16 @@ const battle = new BattleRuntime(scene, {
   perf,
 });
 const units = battle.units;
+/**
+ * Draws the army through one call a part instead of thirty-three calls a body.
+ * `batch=0` turns it off and puts the bodies back on their own meshes, which is
+ * how a picture drawn this way is checked against the picture it replaced.
+ *
+ * No capacity is named here the way the sim names one: production has no cap,
+ * so there is no largest field to size for and the batches grow as the soak
+ * test fills the map.
+ */
+const batch = params.get("batch") === "0" ? null : new RigwalkerBatch(scene);
 for (const base of corporateBases) {
   const spawn = base.assemblyBay.spawnPosition;
   const rigwalker = createRigwalker(rigwalkerAsset, base.accent, base.corporation);
@@ -215,6 +226,18 @@ if (
 }
 
 const perfReadout = new PerfReadout(perfPanel);
+/**
+ * What the renderer drew, reused between frames rather than rebuilt. It counts
+ * the shadow pass as well as the colour one, because `createMarsRenderer` stops
+ * the renderer clearing the counters between the two; the frame resets it once
+ * it has been read.
+ */
+const drawCount: DrawCount = { calls: 0, triangles: 0 };
+function readDraws(): DrawCount {
+  drawCount.calls = renderer.info.render.calls;
+  drawCount.triangles = renderer.info.render.triangles;
+  return drawCount;
+}
 
 function selectRigwalkers(
   nextSelection: (typeof units)[number][],
@@ -521,6 +544,14 @@ function updateHud(elapsed: number): void {
 }
 
 const clock = new THREE.Clock();
+let frameIndex = 0;
+// The shadow pass draws every caster a second time, so it costs about what the
+// colour pass beside it costs. Driven by hand from here it runs every other
+// frame instead of every frame; a shadow one frame behind the body casting it
+// is not something the eye has any way to catch at this zoom. Turned off here
+// rather than in `createMarsRenderer` because a page that never sets
+// `needsUpdate` gets no shadows at all.
+renderer.shadowMap.autoUpdate = false;
 
 /**
  * The frame, charged to the five perf paths as it goes. `battle.update` carves
@@ -546,10 +577,18 @@ function animate(): void {
   });
   selectedRigwalkers = selectedRigwalkers.filter((unit) => unit.isAlive);
   perf.measure("hud", () => updateHud(clock.elapsedTime));
-  perf.measure("render", () => renderer.render(scene, camera));
+  // Filling the instances is charged to `render` because that is what it is:
+  // work done to put this frame on the screen, not work the game asked for.
+  perf.measure("render", () => {
+    batch?.sync(units);
+    // Every other frame; the renderer clears the flag once it has drawn them.
+    if ((frameIndex++ & 1) === 0) renderer.shadowMap.needsUpdate = true;
+    renderer.render(scene, camera);
+  });
   // The panel is charged to `hud` like the rest of the readout: an instrument
   // that leaves its own cost out reports a frame nobody has.
-  perf.measure("hud", () => perfReadout.update(delta, perf, units.length));
+  perf.measure("hud", () => perfReadout.update(delta, perf, units.length, readDraws()));
+  renderer.info.reset();
   perf.endFrame();
 }
 

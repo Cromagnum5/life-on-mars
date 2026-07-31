@@ -1,10 +1,11 @@
 import * as THREE from "three";
 import { BattleRuntime } from "./battle";
 import { STRATEGY_LABELS, type CombatCue } from "./combat";
-import { PerfMonitor, PerfReadout } from "./perf";
+import { PerfMonitor, PerfReadout, type DrawCount } from "./perf";
 import { createSeededRandom } from "./random";
 import { createRigwalker, describeFeet, type Rigwalker } from "./rigwalker";
 import { loadRigwalkerAsset } from "./rigwalker-assets";
+import { RigwalkerBatch } from "./unit-render";
 import {
   addMarsLighting,
   applyMarsAtmosphere,
@@ -205,6 +206,14 @@ const MATCHUPS: Record<string, Matchup> = {
 };
 
 /**
+ * The most bodies any matchup here can put on the field, so the instanced draw
+ * buffers are allocated once at the size the biggest fight needs rather than
+ * grown a rank at a time while it is being staged.
+ */
+const LARGEST_MATCHUP = Math.max(...Object.values(MATCHUPS).map((setup) =>
+  setup.teams.reduce((sum, roster) => sum + roster.melee + roster.hurlers, 0)));
+
+/**
  * Where the `index`-th body of a block of `count` stands: how far across its
  * rank, how many ranks back, and how wide that rank is.
  *
@@ -323,6 +332,16 @@ const battle = new BattleRuntime(scene, {
   accentOf: (corporation) => accentByCorporation.get(corporation) ?? 0xffb35d,
   perf,
 });
+/**
+ * Draws the whole army through one call a part instead of thirty-three calls a
+ * body. `batch=0` turns it off and puts the bodies back on their own meshes,
+ * which is how a picture drawn this way is checked against the picture it
+ * replaced — the two must be identical.
+ */
+const batch = params.get("batch") === "0"
+  ? null
+  : new RigwalkerBatch(scene, LARGEST_MATCHUP);
+
 // Absent when `hud=0` has stripped the panels for a clean render, and dropped
 // for a headless capture too: that mode bursts the whole fight through in one
 // synchronous go and then redraws a frozen frame, so it has no frame rate to
@@ -330,6 +349,18 @@ const battle = new BattleRuntime(scene, {
 const perfPanel = document.querySelector<HTMLElement>("#perf");
 if (captureTime !== null) perfPanel?.remove();
 const perfReadout = perfPanel && captureTime === null ? new PerfReadout(perfPanel) : null;
+/**
+ * What the renderer drew, reused between frames rather than rebuilt. It counts
+ * the shadow pass as well as the colour one, because `createMarsRenderer` stops
+ * the renderer clearing the counters between the two; the frame resets it once
+ * it has been read.
+ */
+const drawCount: DrawCount = { calls: 0, triangles: 0 };
+function readDraws(): DrawCount {
+  drawCount.calls = renderer.info.render.calls;
+  drawCount.triangles = renderer.info.render.triangles;
+  return drawCount;
+}
 battle.audio.installUnlockHandlers();
 
 let directorRandom = createSeededRandom(1);
@@ -778,9 +809,29 @@ if (captureTime !== null) {
   Object.assign(window, { __simCapture: { matchup, seed, time: simTime, verdict, tally } });
   // Redraw the frozen frame every tick. A canvas rendered once is empty by the
   // time a screenshot is taken, and screenshots are the point of this mode.
-  renderer.setAnimationLoop(() => renderer.render(scene, camera));
+  // The batch is synced inside the loop rather than once before it: it owns the
+  // scene's matrix update, so a draw that skipped it would draw stale matrices.
+  // Shadows are left on automatic here. Nothing moves in a frozen frame, so
+  // there is no half-rate cadence worth keeping, and a screenshot is the one
+  // thing on this page that has to be right rather than fast.
+  renderer.setAnimationLoop(() => {
+    batch?.sync(battle.units);
+    renderer.render(scene, camera);
+    renderer.info.reset();
+  });
 } else {
   const clock = new THREE.Clock();
+  let frameIndex = 0;
+  // The shadow pass draws every caster a second time, so it costs about what
+  // the colour pass beside it costs. Driven by hand from here it runs every
+  // other frame instead of every frame; a shadow one frame behind the body
+  // casting it is not something the eye has any way to catch at the zoom a
+  // battle is watched from.
+  //
+  // Turned off here rather than in `createMarsRenderer` on purpose: a page that
+  // never sets `needsUpdate` gets no shadows at all, and the animation tool has
+  // no reason to know this cadence exists.
+  renderer.shadowMap.autoUpdate = false;
   renderer.setAnimationLoop(() => {
     const frameDelta = Math.min(clock.getDelta(), 0.05);
     if (stepRequested) {
@@ -792,11 +843,21 @@ if (captureTime !== null) {
       updateCamera(frameDelta);
     }
     perf.measure("hud", () => renderReadout());
-    perf.measure("render", () => renderer.render(scene, camera));
+    // Filling the instances is charged to `render` because that is what it is:
+    // work done to put this frame on the screen, not work the fight asked for.
+    perf.measure("render", () => {
+      batch?.sync(battle.units);
+      // Every other frame; the renderer clears the flag once it has drawn them.
+      if ((frameIndex++ & 1) === 0) renderer.shadowMap.needsUpdate = true;
+      renderer.render(scene, camera);
+    });
     // The perf panel is charged to `hud` like the rest of the readout: an
     // instrument that leaves its own cost out of the picture is an instrument
     // that reports a frame nobody has.
-    perf.measure("hud", () => perfReadout?.update(frameDelta, perf, battle.units.length));
+    perf.measure("hud", () => perfReadout?.update(
+      frameDelta, perf, battle.units.length, readDraws(),
+    ));
+    renderer.info.reset();
     perf.endFrame();
   });
 }

@@ -173,10 +173,27 @@ export class PerfMonitor {
  * itself a measurable share of the frame it claims to be reporting on. Ten
  * updates a second is faster than the eye wants and cheap enough to ignore.
  */
+/**
+ * What the renderer was asked to draw. Read off `WebGLRenderer.info.render`,
+ * but taken as a plain pair so this module stays free of three.js and goes on
+ * being testable without a GL context.
+ *
+ * It earns its row because the count of *things* is what a frame is spent on
+ * long before the count of triangles is: a Rigwalker is thirty-three separate
+ * meshes carrying nine hundred and sixty triangles between them, so an army is
+ * thousands of draws for a hundred thousand triangles, and only one of those
+ * two numbers explains the frame.
+ */
+export type DrawCount = {
+  calls: number;
+  triangles: number;
+};
+
 export class PerfReadout {
   private readonly rows = new Map<PerfPath, HTMLElement>();
   private readonly fpsValue: HTMLElement;
   private readonly unitValue: HTMLElement;
+  private readonly drawValue: HTMLElement;
   private readonly frameValue: HTMLElement;
   private nextUpdate = 0;
 
@@ -188,6 +205,7 @@ export class PerfReadout {
     host.classList.add("perf");
     this.fpsValue = this.addRow("fps");
     this.unitValue = this.addRow("units");
+    this.drawValue = this.addRow("draws");
     this.frameValue = this.addRow("frame");
     for (const path of PERF_PATHS) {
       this.rows.set(path, this.addRow(PERF_PATH_LABELS[path], "perf-path"));
@@ -213,7 +231,12 @@ export class PerfReadout {
    * seconds, not sim seconds, so pausing the sim does not freeze the readout of
    * a renderer that is still drawing every frame.
    */
-  update(delta: number, monitor: PerfMonitor, unitCount: number): void {
+  update(
+    delta: number,
+    monitor: PerfMonitor,
+    unitCount: number,
+    draws?: DrawCount,
+  ): void {
     this.nextUpdate -= delta;
     if (this.nextUpdate > 0) return;
     this.nextUpdate = this.period;
@@ -221,6 +244,9 @@ export class PerfReadout {
     const sample = monitor.read();
     this.fpsValue.textContent = sample.fps.toFixed(0);
     this.unitValue.textContent = String(unitCount);
+    this.drawValue.textContent = draws
+      ? `${draws.calls} · ${(draws.triangles / 1000).toFixed(0)}k tri`
+      : "—";
     this.frameValue.textContent = `${sample.frameMilliseconds.toFixed(1)} ms · ` +
       `${(sample.cpuShare * 100).toFixed(0)}%`;
     for (const entry of sample.paths) {
