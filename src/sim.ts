@@ -252,6 +252,14 @@ const pauseButton = requireElement<HTMLButtonElement>("#pause");
 const followInput = requireElement<HTMLInputElement>("#follow");
 const loopInput = requireElement<HTMLInputElement>("#loop");
 const muteInput = requireElement<HTMLInputElement>("#mute");
+// Looked up here with the rest of the bar rather than beside the listeners they
+// are given further down, because `hud=0` removes the bar on the next line —
+// and a `requireElement` that ran after that threw, which took the whole page
+// with it. Every headless capture asking for a clean frame came back as an
+// empty canvas, `EXTRA='hud=0'` in `tools/capture_sim.sh` included.
+const restartButton = requireElement("#restart");
+const reseedButton = requireElement("#reseed");
+const stepButton = requireElement("#step");
 
 if (params.get("hud") === "0") {
   document.querySelectorAll(".sim-bar, .sim-readout, .sim-log, .sim-help")
@@ -686,8 +694,8 @@ function setPaused(next: boolean): void {
   pauseButton.textContent = paused ? "Resume" : "Pause";
 }
 
-requireElement("#restart").addEventListener("click", startMatch);
-requireElement("#reseed").addEventListener("click", () => {
+restartButton.addEventListener("click", startMatch);
+reseedButton.addEventListener("click", () => {
   seed = Math.floor(Math.random() * 100000);
   seedInput.value = String(seed);
   startMatch();
@@ -696,7 +704,7 @@ seedInput.addEventListener("change", () => {
   seed = Number(seedInput.value) || 0;
   startMatch();
 });
-requireElement("#step").addEventListener("click", () => {
+stepButton.addEventListener("click", () => {
   setPaused(true);
   stepRequested = true;
 });
