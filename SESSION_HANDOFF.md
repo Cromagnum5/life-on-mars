@@ -2,31 +2,35 @@
 
 ## Current checkpoint
 
-`main` at `8b6cfb6` plus this file on top of it. The session's branch
-`draw-fewer-things` was fast-forwarded into `main` and is deleted.
+Branch **`fight-the-man-in-front`**, five commits on top of `main`. `main` and
+`origin/main` are both at `115a6b1` — he pushed since the last handoff, so for
+once nothing is sitting unpushed. Merging this branch and pushing it are his
+calls and he has not made either.
 
-`origin/main` is at `16c0d0e Point the handoff at the hurler's close fight`, so
-`main` is **five commits ahead of it** plus this file. Pushing is the user's call
-and he has not made it.
-
-Seven older branches are still lying around (`animation-tool`, `parry-the-cut`,
-`rigwalker-hurler` and so on). All are merged and spent; none is worth reading.
+Eight older branches are lying around (`animation-tool`, `parry-the-cut`,
+`rigwalker-hurler` and so on). All merged and spent; none is worth reading.
 
 **The working tree is clean.**
 
-This session is three commits, and one number is the whole story of it:
+The session came out of one report from play, in his words: the frontline
+swordsmen *"do not engage each other much… trying to walk through each other"*,
+and *"an excessive amount of hurlers select the same target"*. Both were real,
+both are fixed, and fixing the second one moved the game's balance.
 
-- `674dde6` Hold the bar's buttons before hud=0 takes the bar away
-- `c42a6d6` Draw the army in eighty-six calls instead of eight thousand
-- `8b6cfb6` Stop a dead man trailing his sword, and a rock inheriting the last one's streak
+- `e5a92d1` Let a swordsman fight the enemy in front of it
+- `a4da149` Split the battery instead of putting sixteen rocks on one man
+- `417b100` Stage a hundred and twenty-eight a side
+- `ff372e4` Write down that three to one is no longer the even point
+- `09d6480` Index the bodies by where they stand
 
-He asked why sixty-four a side ran five times slower than a small matchup, with
-`render` at 82% of the frame. It was **8,260 draw calls a frame. It is now 86.**
+Two numbers are the whole story: **three swords to a hurler is no longer the
+even point — one to one is**, and **`physics` at 256 bodies went from 38 ms a
+frame to 3.4**.
 
 ## Checks
 
 ```sh
-npm test        # 125 pass
+npm test        # 134 pass
 npm run build
 blender --background --python tools/render_rigwalker_throw.py
 blender --background --python tools/render_rigwalker_duel.py
@@ -36,7 +40,7 @@ npm run dev     # 0.0.0.0:5173, so http://10.0.0.102:5173 from another machine
 Three pages: the game at `/`, the combat sim at `/sim.html`, the animation tool
 at `/anim.html`. The sim's bar links to the tool and the tool's back.
 
-Two things that look like failures and are not:
+Three things that look like failures and are not:
 
 - **Two tests in `combat.test.ts` time out under CPU load.** They are seed loops
   (32 and 120 seeds) inside a 5 s budget, and a headless Chrome rendering through
@@ -44,129 +48,197 @@ Two things that look like failures and are not:
   machine idle before believing them.
 - Vite's warning about the shared chunk exceeding 500 kB is known and
   non-blocking.
+- **`console.log` in a vitest run is not swallowed** — an earlier handoff said it
+  was, and that cost a session. It is *hidden by default*. `npx vitest run
+  path.test.ts --reporter=verbose --silent=false` prints it. Writing to a file
+  with `appendFileSync` still works and is better for anything long, because the
+  output survives the run.
 
-## Why the frame was slow, and what was done about it
+## The frontline: a charge used to be a commitment nothing could break
 
-**Read this before touching anything that draws.**
+**Read this before touching target selection.**
 
-`public/models/rigwalker.glb` is **33 separate rigid meshes** — 960 triangles in
-total across 5 materials — hung off a 17-bone armature. Nothing in it is skinned
-(a `skins` array is declared but no node references it), and all 54 animation
-channels in `Idle`, `Walk` and `CombatIdle` target bones only. So every one of
-those 33 parts has a local transform that never changes.
+A fighter that acquired a target held it until that target died or drifted past
+the release band, and "walk at it" was the whole of its behaviour on the way.
+That is right for one fighter crossing open ground. When two lines collide it is
+ruinous, because almost every body in both of them is mid-charge at somebody
+three ranks back — and `CLAIMED_TARGET_COST`, the spreading rule that stops three
+swords piling onto one man, is exactly what aims them past the near enemy at the
+far ranks. Two enemies would meet at arm's length, each unable to see the other,
+shoulder past, and grind on. That is what a front rank walking through itself is.
 
-That shape is fine for one fighter and ruinous for 128. Measured, at 64v64:
+The fix is `LINE_CONTACT_RANGE` (one sword's reach) plus a `charging` set in
+`CombatDirector.update`. A fighter held by nothing but a one-sided melee support
+it drives is reserved **only against the far half of the field**: an enemy inside
+reach outranks whatever it set off after, the two pair off into a trade, and both
+drop their charges — the same rule the promotion pass already worked by.
 
-| | before | after |
-| --- | --- | --- |
-| draw calls a frame | **8,260** | **86** |
-| triangles those calls carry | 282,000 | 282,000 |
+The band matters in both directions. Wider and a line re-pairs on every jostle;
+narrower and nobody ever crosses ground to reach anything. `combat.test.ts` pins
+both sides of that: *"turns two charges into a duel when they meet at reach"* and
+*"leaves a charge alone while the enemy it passes is still off at a distance"*.
 
-The triangles were never the problem. Three.js spends a few microseconds of
-JavaScript per draw — material state, a model-view multiply, a normal-matrix
-inverse-transpose, uniform uploads — and eight thousand of those was the forty-odd
-milliseconds the panel was charging to `render`.
+Measured headless at 64v64, swordsmen with an enemy inside reach they were
+ignoring: **56 of 93 before, 33 after** at the moment of contact, 41 → 16 two
+seconds later, 22 → 9 after that. The picture is the real evidence — the scrum
+became a front with a seam down it.
 
-### `src/unit-render.ts` — how it works now
+**Roughly one in six of the front rank still has a target past reach at the
+instant of collision.** Some of that is honest: two fighters committed to
+partners, crossing. If it ever reads wrong again, the next thing to look at is
+pairs that form at up to `AWARENESS_RANGE` (8.5 m) and then walk toward each
+other *through* the crowd — that path was left alone deliberately.
 
-Because the parts are rigid, every fighter's copy of a part differs only by a
-matrix. `RigwalkerBatch` gives each distinct geometry-and-material pair one
-`InstancedMesh` holding the whole army's copies, filled each frame from the world
-matrices the renderer was already computing. **The draw count no longer depends
-on how many fighters are on the field** — 128 v 128 costs the same 86.
+## The battery splits
 
-Four things about it that are not obvious and should not be undone:
+A team's hurlers picked **one** body together and every last one of them threw at
+it. With four throwers that is a volley. With sixteen — which is what 64v64
+fields — it is a body killed three times over while the rest of the line walks in
+untouched. `chooseFocus` returned a single target per corporation and that was
+the design, not an accident.
 
-- **The scene graph is left standing.** Only `unit.group.visible` is turned off.
-  `projectObject` returns the instant it meets an invisible object, so the
-  renderer skips the whole 52-node subtree for the price of one check — while
-  `updateMatrixWorld` and raycasting both **ignore** visibility. That is what
-  keeps `sampleBlade`, `getContactPoint`, `describeFeet`, the animation tool's
-  `freeArmClearance`, the by-name probes in `parry.test.ts` and `stone.test.ts`,
-  and click selection in the game all reading exactly what they read before.
-- **Parts are found by traversal, never by a list of names.** Re-export the GLB
-  with a new part on it and it is picked up without anybody remembering this file
-  exists. Per-part `visible` is honoured, along with every ancestor's, which is
-  what preserves the sword's `visible = inCombat`, the held rock, the selection
-  ring and the health bar for free.
-- **The batch owns the scene's matrix update.** It sets
-  `scene.matrixWorldAutoUpdate = false` and calls `scene.updateMatrixWorld()`
-  itself, so the seven thousand nodes are walked once a frame rather than twice.
-  Anything that draws without calling `sync` first draws stale matrices.
-- **`?batch=0` turns it off** on both the game and the sim, putting the bodies
-  back on their own meshes. That is the A/B for any doubt about the picture.
+Now: a body is worth the rocks it takes to put it down and no more.
+`throwersWorth` is one thrower per landed rock (`hurl` damage, less the deflect
+and miss rates), floored at `MIN_THROWERS_PER_TARGET` = 2, because a single
+thrower on a body is a body that may not go down. A fresh body comes to three.
 
-**It is not literally pixel-identical, and do not expect it to be.** `batch=0`
-against `batch=1` at 64v64 differs by **32 isolated pixels in 1.1 million**, mean
-delta 6 of 255, scattered one and two at a time. That is antialiasing and depth
-ties resolving under a changed draw order, not a drawing error — a drawing error
-would be a connected blob.
+- `chooseFocuses` takes bodies off the top of the old scoring until the
+  battery's places are spoken for.
+- `assignBattery` splits the throwers across them, closest pairing first, with
+  `FOCUS_HYSTERESIS` for a thrower already working a body.
+- **A place a thrower cannot reach is a place wasted** — it falls back on
+  whatever is nearest, and the group it could not reach becomes a crowd somewhere
+  else. `canThrowAt` gates the pairing on that. A hurler genuinely left over still
+  falls back, which is the one case where piling on is right.
 
-### The three smaller wins in the same commit
+Rounded to the *nearest* rock, not up: a fresh body is 3.02, and the ceiling
+would spend a fourth thrower on every enemy on the field to cover two per cent.
 
-- **The accent material is shared per colour** (`accentMaterialFor` in
-  `rigwalker.ts`), not cloned per painted mesh per fighter. That was 1,024
-  materials describing two colours. It is also a *precondition*: instances of one
-  draw share a material by definition, so a per-fighter clone would have split
-  the batch back into a draw per fighter.
-- **The 33 leaves compose their local matrix once**, in `loadRigwalkerAsset`,
-  instead of rebuilding a constant answer 4,224 times a frame. `Object3D.copy`
-  carries `matrix` and `matrixAutoUpdate` together, so the clones inherit it.
-  **Do not do this to the model root** — the hurl's lunge moves it. `traverse`
-  will not, because the root is a Group.
-- **The scattered rocks are one `InstancedMesh`**, not seventy. The same
-  `pseudoRandom` sequence is walked in the same order, so the same rocks stand in
-  the same places.
+Throwers per target at 64v64 went from a flat `16,16` to `2,2,2,3,3,3…` across a
+dozen bodies. A battery small enough to be spent on one body still picks only
+that one, which is what keeps the existing pair-and-trio tests honest.
 
-### The perf panel has a `draws` row
+## Three to one is no longer the even point
 
-`renderer.info.render`, read after the draw. `createMarsRenderer` sets
-`info.autoReset = false` and **each page resets it itself at the end of the
-frame**, because the renderer otherwise clears its counters *between* the shadow
-pass and the colour pass — so a page reading them afterwards is told about half
-its frame. The shadow pass draws every caster a second time and is worth about as
-much as the pass after it.
+**This is the most important thing in this file.** The old handoff said 12-and-4
+was level against the field. It is not any more, and the battery fix is why.
 
-### A trap this session set and then walked into
+Sweep re-run this session: every mix from all-sword to all-hurler, both sides of
+the field, real director and real `unit.update`, 648 fights. Win rate against the
+whole field:
 
-`shadowMap.autoUpdate = false` was briefly put in `createMarsRenderer` so the
-pages could run the shadow pass every other frame. **That silently removed the
-animation tool's shadows** — 13% of its pixels — because a page that never sets
-`needsUpdate` gets no shadow map at all, not a stale one.
+| swords : hurlers | 16 a side | 32 a side | 64 a side |
+| --- | --- | --- | --- |
+| all sword | 0% | 0% | 0% |
+| 7 : 1 | 12.5% | 12.5% | 12.5% |
+| **3 : 1** | **29.7%** | **25.0%** | **25.0%** |
+| 1.67 : 1 | 37.5% | 37.5% | 37.5% |
+| **1 : 1** | **51.6%** | **52.1%** | **50.0%** |
+| 0.6 : 1 | 62.5% | 62.5% | 62.5% |
+| 1 : 3 | 81.3% | 77.1% | 84.4% |
+| all hurler | 87.5% | 97.9% | 93.8% |
 
-The cadence is **gone now** and should stay gone: halving that pass was worth
-doing when it was 4,200 draw calls, and the whole frame is now 86, of which the
-pass is about 40. It bought twenty draw calls and paid for them with a shadow
-lagging the body casting it. If a global renderer default ever needs changing
-again, remember there are three pages and only two of them were being thought
-about.
+**One to one is the even point, and all three sizes agree on it to within two per
+cent** — tighter agreement than the old number ever had.
 
-## Two ribbon bugs, reported from play
+The *shape* did not change. The field is still a slope with no turn in it:
+all-sword loses every fight it plays, and each further hurler is worth more than
+the sword it replaced. It is simply steeper. At 64 a side the ordering is very
+nearly strict — more hurlers beats fewer hurlers in almost every fight.
 
-Both were older than the batching work and both were found by reading rather
-than by catching them on camera. He described them as "long glowing lines along
-hurlers' rock paths, almost like a stretched out spark".
+This was foreseeable and was flagged before it was measured: wasted rocks were
+most of what held massed throwers back, and the battery no longer wastes them.
 
-- **A corpse went on swinging.** Everything below the `health <= 0` early return
-  in `update` is skipped once a fighter is down, and `swinging` was among it. A
-  fighter cut down mid-attack stayed `isSwinging` for the whole 3.4 s it took to
-  topple, lie there and sink — and `BattleRuntime` feeds a blade ribbon for every
-  swinging unit every frame. Worse: feeding a ribbon resets its idle timer, so
-  those never aged out and never went back to the pool. **There are sixteen
-  ribbons**; a melee that killed sixteen mid-swing had every one held by a dead
-  man and the living stopped trailing at all.
-- **A rock inherited the previous rock's ribbon.** A ribbon is found by owner and
-  a flying rock's owner is its pool slot. Twenty-four slots is a few seconds of a
-  64v64, so a slot comes round while the last rock's ribbon is still fading — and
-  `trail` handed it straight back, six stale samples and all. The strip then
-  reached from wherever the old rock had got to across to the new one leaving a
-  hand somewhere else: **one long bright line drawn between two unrelated
-  throws.** `rock` now releases the slot's ribbon as it launches, and
-  `rockTrailOwner(slot)` is a named function so the two sites that depend on the
-  id cannot drift apart.
+**`SWORDS_PER_HURLER` stays at 3**, and its comment now says why: it records what
+the player is handed — the Assembly Bay puts out three swords an opening and the
+Stoneworks one hurler — and no longer claims to record what wins. Changing it
+would stop the sim staging the army the game actually produces. **That is his
+call and he has not been asked to make it.**
 
-He confirmed both artifacts are gone. **Neither was ever reproduced in a still**
-— see the next section for why that is structural.
+**If massed hurlers are meant to be beatable, that is a combat question and not a
+roster one, and it is louder now than it was.** Candidates nobody has tried: a
+much longer reload at the top band, or making the approach cheaper — shields, a
+charge, anything that makes crossing sixteen metres cost less. (The third old
+candidate, "a throw that cannot be aimed at a target already committed to by N
+throwers", is now *implemented* — that is the battery split — and it made hurlers
+stronger, not weaker, because the waste it removed was theirs.)
+
+### Rebuilding the sweep harness
+
+Scratch again, and deleted again. The recipe, which worked:
+
+Copy the staging out of `startMatch` in `sim.ts` — `formationSlot`, `LINE_SPACING`
+1.9, `RANK_SPACING` 2, `MAX_FILES` 16, the hurler setback, and `moveTo(side *
+1.6, 0, lateral * 0.35)` — build both teams with `createRigwalker(null, …)` so it
+uses the primitive fallback and needs no GLB, then loop: refresh the snapshots
+off the units, `director.update`, apply `frame.damage` with `applyCombatDamage`,
+`field.rebuild(units)`, `unit.update`. Stop on a wipe or 90 s and score wins.
+
+Budget it against the clock. One fight costs roughly **1.4 s at 16 a side, 1.8 s
+at 32, 10 s at 64**, so buy mix granularity and seeds accordingly — the run above
+was step-2/4-seeds, step-4/3-seeds, step-8/2-seeds and took about 31 minutes
+total on this box. Run it in the background; it saturates all four cores.
+
+## `UnitField`: how `physics` stopped being quadratic
+
+At 256 bodies `physics` was **38 ms a frame** — a sixty-hertz budget spent twice
+over before anything was drawn.
+
+Three things every Rigwalker did each frame walked the whole roster: the
+separation drift, the clearance push, and a linear `find` for the unit its cue
+names. None of it is a question about the army. Two bodies thirty metres apart do
+not push on each other; the loop asked anyway. The scaling gave it away — four
+times the pairs cost six and a half times the milliseconds, because the roster
+had stopped fitting in cache.
+
+`src/unit-field.ts` is a uniform grid on a 2.6 m cell (just over
+`COMBAT_SEPARATION_RADIUS`, the largest query anything makes), rebuilt once a
+frame by `BattleRuntime` after damage and before the first body moves. Cell
+arrays are emptied rather than dropped, so a running fight allocates nothing.
+
+| | `physics` before | after | `ai` |
+| --- | --- | --- | --- |
+| 64 bodies | 1.3 ms | 0.45 ms | 0.27 ms |
+| 128 bodies | 5.7 ms | 1.0 ms | 0.45 ms |
+| 256 bodies | **38.0 ms** | **3.4 ms** | 2.2 ms |
+
+**It is exact, not approximate, and that is the part worth understanding.** A
+grid normally drifts out of date because bodies move after it is built, and the
+usual answer is to pad the cell and accept misses. This one cannot drift, because
+of the order the frame runs in: a unit that has not been updated yet has not
+moved, so its filed cell is still right, and a unit that has been updated
+**re-files itself on the way out** of `update`. Every lookup therefore sees live
+positions. `unit-field.test.ts` checks exactly that claim — every query against
+reading the whole roster, including probe points between cells and after bodies
+are shoved across cell edges.
+
+If you add another neighbour query, route it through `forEachNear` and keep the
+`refile` call last in `update`. `isWaypointTakenByCrowd` is the one loop left over
+`field.living`, deliberately: how many bodies reached the waypoint first is not a
+local question, and it only runs for a unit already stalled for a second.
+
+## Why the frame was slow before that
+
+**Read this before touching anything that draws.** Fully written up at the top of
+`src/unit-render.ts`; the short version:
+
+`public/models/rigwalker.glb` is **33 separate rigid meshes** — 960 triangles
+across 5 materials — hung off a 17-bone armature, none of it skinned, every
+animation channel targeting a bone. So all 33 parts have a local transform that
+never changes. Fine for one fighter, ruinous for 128: it was **8,260 draw calls a
+frame at 64v64. It is now 86**, and 86 again at 128v128 carrying 520k triangles.
+`RigwalkerBatch` merges by material into `InstancedMesh`es and writes world
+matrices per part per body.
+
+The perf panel has a `draws` row and `?batch=0` turns the batch off, which is how
+that number is read off rather than argued.
+
+Two ribbon bugs from the same work, both confirmed gone by him and **neither ever
+reproduced in a still** — a corpse kept `swinging` because everything below the
+`health <= 0` early return in `update` never runs for it, and a pooled rock trail
+inherited the previous rock's samples, drawing one long bright line between two
+unrelated throws. `rockTrailOwner(slot)` exists so the two sites that depend on
+that id cannot drift apart.
 
 ## Which instrument to trust
 
@@ -194,12 +266,10 @@ has to be copied into it by hand, `ROCK_IN_HAND` included.
 
 **3. `tools/capture_sim.sh`** drives the real game and has seen every pose layer.
 Final say on silhouette, and the only one that sees a pose inside a real fight.
-**`EXTRA='hud=0'` works again** — it had been throwing on a `requireElement` that
-ran after `hud=0` removed the bar, which killed the module on the way in and
-returned an empty canvas for every clean-frame capture.
 
 ```sh
 EXTRA='zoom=5.5&on=HR1' tools/capture_sim.sh /tmp/sheet "1h in close" 3 2.4
+SIM_URL=http://localhost:5174/sim.html tools/capture_sim.sh /tmp/sheet 128v128 5 8 20
 ```
 
 **4. `anim.html`** is the same three layers as (3), interactive, at a phase that
@@ -207,93 +277,45 @@ holds still. The right instrument for *authoring* and for anything about the fre
 arm.
 
 **And a fifth, for anything the four cannot see:** a scratch `*.test.ts` that
-loads the GLB and measures. Use `parry.test.ts` or `stone.test.ts` as the
-template — they stage a pinned pair and hold a phase until the balance spring
-settles. Two things this rig gets wrong if they are not done every frame: a held
-phase lets the separation force shove the pair apart, and the facing update lives
-inside the moving branch of `update`, so a standing fighter never turns and both
-have to be aimed by hand.
+loads the GLB and measures. `parry.test.ts` and `stone.test.ts` are the template
+for poses; the sweep recipe above is the template for whole fights. Two things
+this rig gets wrong if they are not done every frame: a held phase lets the
+separation force shove a pair apart, and the facing update lives inside the moving
+branch of `update`, so a standing fighter never turns and both have to be aimed by
+hand.
 
 **None of the five can measure a frame rate.** The sim's `t=` capture mode bursts
-the whole fight through synchronously and redraws one frozen frame, so it has no
-frame rate to report, and headless Chrome here runs through SwiftShader at a few
-frames a second, which is the software rasteriser and not the game. **Real frame
-numbers only exist in a real browser on his machine.** The `draws` row is the
-exception and is worth trusting anywhere — it is a count, not a clock.
+the whole fight through synchronously and redraws one frozen frame, and it
+*removes the perf panel*. Running headless without `t=` keeps the panel but
+Chrome's `--virtual-time-budget` makes every timing read 0.00 ms, and SwiftShader
+is a software rasteriser and not the game. **Real frame numbers only exist in a
+real browser on his machine.** `draws` and `units` are the exceptions and are
+worth trusting anywhere — they are counts, not clocks. Everything CPU-side (`ai`,
+`physics`) can be measured honestly in node, which is where the tables above come
+from.
 
 ### Comparing two pictures, which is harder than it looks
 
-Three traps, all of them cost time this session:
-
 - **The effects are not seeded.** The fight replays exactly, but `sparkBurst` and
-  `rock` draw velocities and spin from `Math.random()`. Two runs of the *same*
-  URL at `t=8` in 64v64 differ by ~1,100 pixels. **Compare at a moment before
-  first contact** — `t=1` in a big matchup — where two identical runs are
-  byte-identical and anything that differs is the change under test.
-- **Always render the control.** Same URL twice, as the noise floor, alongside
-  the A/B. Without it a real difference and a spark are the same number.
+  `rock` draw velocities and spin from `Math.random()`. Two runs of the *same* URL
+  at `t=8` in 64v64 differ by ~1,100 pixels. **Compare at a moment before first
+  contact** — `t=1` in a big matchup — where two identical runs are byte-identical
+  and anything that differs is the change under test.
+- **Always render the control.** Same URL twice, as the noise floor, alongside the
+  A/B. Without it a real difference and a spark are the same number.
 - **Capture mode cannot see anything about frame cadence**, by construction: it
-  draws one frozen frame. Any bug that lives in the difference between
-  consecutive frames — a half-rate shadow, a pooled slot recycling — is invisible
-  to every screenshot in this repo. That is why the two ribbon bugs above had to
-  be argued from the code.
+  draws one frozen frame. Any bug living in the difference between consecutive
+  frames — a half-rate shadow, a pooled slot recycling — is invisible to every
+  screenshot in this repo.
 
-For the determinism half of a check, read the tally out of `#tally` with
-Chromium `--dump-dom`. That stays exact at any `t`, because it comes off the
-seeded fight rather than off the effects:
+For the determinism half of a check, read the tally out of `#tally` with Chromium
+`--dump-dom`. That stays exact at any `t`, because it comes off the seeded fight
+rather than off the effects:
 
 ```sh
 chrome --headless=new --virtual-time-budget=180000 --dump-dom \
   "http://localhost:5173/sim.html?matchup=64v64&seed=1&t=20"
 ```
-
-## Three to one is the even point on a slope
-
-The army matchups field **three swords to one hurler**, measured rather than
-picked. But the measurement turned up something more important than the number,
-and it is the first thing to know before tuning anything about the hurler.
-
-Round-robin of every mix from all-sword to all-hurler, sixteen a side, both sides
-of the field, eight seeds each way, real director and real `unit.update`:
-
-| mix | net across the field |
-| --- | --- |
-| 16s / 0h | −96 |
-| 14s / 2h | −60 |
-| **12s / 4h** | **−10** |
-| 10s / 6h | +24 |
-| 8s / 8h | +14 |
-| 4s / 12h | +56 |
-| 0s / 16h | +72 |
-
-Twelve-and-four is level against the field, and it is also what the game produces
-— the Assembly Bay puts out three swords an opening and the Stoneworks one
-hurler — so the sim stages the army the player actually gets. That is why
-`SWORDS_PER_HURLER` is 3.
-
-**It is not an equilibrium. The field is a slope.** All-sword loses to every
-single mix 0–16. Each further hurler is worth more than the sword it replaced,
-monotonically, right up to an all-hurler army that beats everything.
-
-The mechanism is visible in a 64v64 capture at eight seconds: a dozen hurlers all
-release at the *same* target within a tenth of a second, and the log is a wall of
-`hurl at H16`. A hurler is roughly a fair fight one-on-one — 14 sword / 10 hurler
-over 24 seeds — and two swords kill one 20 of 20. None of that survives contact
-with mass, because at sixteen metres the swords have no answer at all until they
-arrive, and massed throwers delete the front rank during the walk.
-
-**If massed hurlers are meant to be beatable, that is a combat question, not a
-roster one.** Candidates nobody has tried: a throw that cannot be aimed at a
-target already committed to by N throwers, a much longer reload at the top band,
-or making the approach cheaper — shields, a charge, anything that makes crossing
-sixteen metres cost less than it currently does.
-
-**The sweep harness was scratch and was deleted.** To rebuild it: copy `runFight`
-from `hurler.test.ts` — director plus `unit.update` plus `applyCombatDamage`,
-which is the real thing — stage two team lines the way `startMatch` in `sim.ts`
-does, run to a wipe or 90 s, and score wins. It runs a 16-a-side round-robin in
-about two minutes. Note that `console.log` is swallowed by this vitest setup;
-append to a file instead.
 
 ## What the Hurler is
 
@@ -329,19 +351,24 @@ before changing any of it.
 ## The sim's matchups
 
 Rosters form up in **blocks**: each role centred on its own ranks, up to
-`MAX_FILES` across before a second rank, swords in front, throwers set back
+`MAX_FILES` (16) across before a second rank, swords in front, throwers set back
 behind the *whole* screen rather than behind their own first rank.
 
+- **`128v128` is new this session** — 256 bodies. The block does not get wider,
+  because `MAX_FILES` holds a rank at sixteen, so it is the same line six ranks of
+  swords deep instead of three. It opens at the same standoff as 64v64 and is only
+  pulled back for the depth behind it; `MIN_ZOOM` at 0.7 already allowed for it and
+  the matchup asks for 0.72.
 - **Past twelve fighters the readout stops issuing a card each** and says what
-  each side has left instead. A hundred and twenty-eight cards is not a readout,
-  and building them was the most expensive thing on the page.
-- **The arena is 112 m wide**, so a sixty-four a side line pulled back to fit
-  still has ground under it. This moved no fight: `terrainHeightAt` is a function
-  of world position, not of the patch drawn around it.
-- `16v16`, `32v32` and `64v64` are past the ninth entry, so the `1`–`9` keys do
-  not reach them. Buttons only, same as `1h in close` before them.
-- `LARGEST_MATCHUP` is derived from the table and handed to `RigwalkerBatch` so
-  the instance buffers are allocated once at the size the biggest fight needs.
+  each side has left instead. Building the cards was the most expensive thing on
+  the page.
+- **The arena is 112 m wide**, which still holds the deepest line here. This moved
+  no fight: `terrainHeightAt` is a function of world position, not of the patch
+  drawn around it.
+- The army matchups are all past the ninth entry, so the `1`–`9` keys do not reach
+  them. Buttons only, same as `1h in close` before them.
+- `LARGEST_MATCHUP` is derived from the table and handed to `RigwalkerBatch`, so
+  adding a matchup grows the instance buffers on its own.
 
 ## The ordering the throws read by
 
@@ -382,12 +409,20 @@ Two things it taught that are not obvious:
 
 ## Architecture notes worth preserving
 
+- **A charge is held only against the far field.** An enemy inside
+  `LINE_CONTACT_RANGE` outranks it, and both fighters drop what they were walking
+  at. Any new pass that creates a pair has to do that dropping, or a fighter drives
+  two encounters.
 - **A hurler enters a mutual duel, but only when charged into one.** Two ways in
   and neither is redundant: the promotion pass turns a swordsman's support
   encounter into a trade at `STONE_RANGE`, and the mutual-candidate pass pairs a
   hurler with an enemy already that close — needed because a hurler does not throw
   at a body on top of it, so it may have no encounter to be promoted out of, and
   with nothing published nobody would ever engage it.
+- **A battery is a group per body, not the whole team on one body.** Anything that
+  hands a thrower a target has to respect `throwersWorth`, and has to check the
+  thrower can actually reach it — an unreachable assignment silently becomes a
+  crowd somewhere else.
 - **A defensive plan hands the attack to the other fighter**, so `react` and
   `distance-trap` are off the table against a hurler — they made it the attacker
   of a *sword* exchange, cutting with a weapon it does not carry.
@@ -395,8 +430,8 @@ Two things it taught that are not obvious:
   pair.** The battery pass reads it to know which throwers are busy.
 - **A fighter may drive only one encounter.** Anything that hands a fighter a
   second writes two cues a frame and reads as neither.
-- **Being hit outranks what you were planning.** `writeCue` arbitrates *only*
-  that case, which is why the rule above has to hold everywhere else.
+- **Being hit outranks what you were planning.** `writeCue` arbitrates *only* that
+  case, which is why the rule above has to hold everywhere else.
 - **A defender's cue carries the attacker's plan.** Anything keyed off
   `cue.strategy` to decide what a fighter *is* will flicker several times an
   exchange. `closeFight` reads the gap instead.
@@ -408,12 +443,13 @@ Two things it taught that are not obvious:
   stands. Local +Z is forward. The health bar rides it; the selection ring does
   not, because the ring marks the ground the unit holds.
 - **Anything below the `health <= 0` early return in `update` never runs for a
-  corpse.** That return is three hundred lines above the pose layers, and it is
-  why a dead fighter kept `swinging` and kept its sword drawn. Any new per-frame
-  state on a unit has to decide whether it belongs above that line.
-- **Materials are shared between fighters, deliberately.** A corpse sinks into
-  the dust rather than fading out for exactly this reason, and the accent cache
-  now depends on it too. Do not mutate a material at runtime.
+  corpse.** That return is three hundred lines above the pose layers. Any new
+  per-frame state on a unit has to decide whether it belongs above that line.
+- **`field.refile` must stay the last statement in `update`.** It is what keeps
+  the grid exact rather than approximate.
+- **Materials are shared between fighters, deliberately.** A corpse sinks into the
+  dust rather than fading out for exactly this reason, and the accent cache depends
+  on it too. Do not mutate a material at runtime.
 - **Rock size and arc are drawn from the rendered result, not from physics.**
 - **Sparks are point sprites and get no perspective divide for free.**
 - **Clear the imported animation data before rendering in Blender.** The GLB
@@ -451,11 +487,15 @@ random stream** — never an id, a counter, an array index, or the wall clock.
 `performance.now()` is in the codebase for the perf panel; nothing that decides
 how a unit moves may read it.
 
-This session added forty-odd `InstancedMesh`es to the scene, which shifts every
-`group.id` by a constant. That is harmless — nothing sorts by raw id — but it is
-exactly the shape of the bug above, so **the 64v64 seed-1 tally at `t=20` was
-diffed before and after and is identical.** Do that again for anything that
-constructs objects.
+**A correction the last handoff earned the hard way.** It predicted the spatial
+grid "cannot move a seeded fight" because it does not touch the director. That
+was wrong. `forEachNear` visits neighbours in cell order rather than roster order,
+and the clearance pass mutates position as it goes, so the float accumulation
+differs and **every seeded fight is now a different fight than it was before
+`09d6480`**. Determinism is intact — same seed, same fight, every time — but any
+seed being used as a visual reference is gone. The general lesson is the one the
+old note already gave and then talked itself out of: **iteration order is state.**
+Diff the tally rather than reasoning about whether something could matter.
 
 ## The camera, and both modes stay
 
@@ -485,8 +525,8 @@ broadly.
 
 **It does not install `RigwalkerBatch`** and must not: it draws two units and
 toggles `group.visible` itself, which the batch would fight with. It is also the
-page that gets forgotten whenever a renderer default changes — see the shadow trap
-above.
+page that gets forgotten whenever something changes under it — this session it
+needed a `UnitField` of its own, because `update` no longer takes an array.
 
 The stone strikes are in it as motions — `hammer`, `swing`, `jab`, `punch`, `ward`,
 `cover` — but they **scrub and do not edit**, like the sword's poses, because their
@@ -500,81 +540,87 @@ is a git job.
 
 ## Measured state
 
-- 125 tests pass; production build passes.
-- **64v64 draw calls: 8,260 → 86**, at 282,000 triangles either way. Read off the
-  panel's new `draws` row, `batch=0` against `batch=1`.
-- **The frame time on his machine was never measured here** and cannot be — see
-  "Which instrument to trust". He played it and said "looks good now"; that is the
-  whole of the evidence for the frame rate and it is the evidence that counts.
-- Per-frame CPU, **node, fallback visual, no bone posed**, averaged over the first
-  eight seconds of a fight. Unchanged this session — nothing here touched the
-  fight:
+- 134 tests pass; production build passes.
+- **Draw calls: 86** at 64v64 (from 8,260) and 86 again at 128v128, carrying 520k
+  triangles. Read off the panel's `draws` row, `batch=0` against `batch=1`.
+- **Per-frame CPU, node, primitive fallback, averaged over the two seconds after
+  contact** — the window matters, because an army still walking in is not the
+  frame anybody worries about:
 
   | bodies | `ai` | `physics` |
   | --- | --- | --- |
-  | 2 | 0.026 ms | 0.074 ms |
-  | 10 | 0.083 ms | 0.221 ms |
-  | 32 | 0.163 ms | 0.540 ms |
-  | 64 | 0.415 ms | 1.540 ms |
-  | 128 | 0.563 ms | 5.988 ms |
+  | 32 | 0.17 ms | 0.40 ms |
+  | 64 | 0.27 ms | 0.45 ms |
+  | 128 | 0.45 ms | 1.01 ms |
+  | 256 | 2.18 ms | 3.36 ms |
 
-  **`physics` is the quadratic one and it is separation** — every unit walks every
-  other unit, every frame. With `render` now cheap, this is the next thing.
+  **`ai` is now the quadratic one** — `CombatDirector.update` still pairs every
+  fighter against every other.
+- **The frame time on his machine was never measured here** and cannot be — see
+  "Which instrument to trust". He played the previous work and said "looks good
+  now"; on this session's he said the performance *"has increase a ton"*. That is
+  the whole of the evidence for the frame rate and it is the evidence that counts.
+  **The browser-side `render`/`fx`/`hud` rows at 128v128 have not been read by
+  anyone.**
 - The sword duel is untouched and still reads foot drift 0.069 m, recovery error
   0.00 degrees. Release heights, Blender frame: 3.80 / 3.78 / 3.55.
 - Balance, `1h v 1` over 24 seeds: 14 sword / 10 hurler. Two swords onto one
   hurler kill it in 20 of 20 at a median of 7.6 s. **Neither number survives
-  mass** — see the slope above.
-- Capture sheets in `renders/` predate the seed fix and no longer match.
-  `renders/` is gitignored.
+  mass** — see the slope above, which is now steeper than when those were taken.
+- Capture sheets in `renders/` predate both the seed fix and the grid, and no
+  longer match anything. `renders/` is gitignored.
 
 ## Suggested next steps
 
 The goal remains that combat looks cooler each iteration, not that it becomes
 playable. Player agency is still out of scope.
 
-1. **Separation is O(n²) and is now the biggest thing left.** `unit.update` walks
-   every other unit twice — `rigwalker.ts` separation and clearance — plus a
-   `find` for the combat target, and `CombatDirector.update` pairs every fighter
-   against every other. At 128 bodies that is roughly 50,000 distance checks a
-   frame, and it quadruples if he ever wants 128 v 128. A uniform grid sized to
-   `SEPARATION_RADIUS`, rebuilt once a frame, turns all of it near-linear. Nothing
-   about it touches the director, so it cannot move a seeded fight — but diff the
-   tally and check, because the seed rule above says how easy that is to get wrong.
-2. **Animation cost is second.** 128 `AnimationMixer`s × 54 tracks is ~6,900
-   interpolant evaluations a frame, and every unit runs the full pose stack whether
-   it is forty pixels tall or filling the screen. Throttling the mixer and pose
-   layers to 30 Hz beyond some distance from the camera focus is invisible at RTS
-   zoom. Do it *after* the grid — it is the more delicate of the two, because a
-   throttled pose sampled by `sampleBlade` on an off-beat frame would move the
-   sparks.
-3. **The sim steps the fight by wall-clock delta** (`advance(frameDelta * speed)`,
+1. **Open `128v128` in a real browser and read the perf panel.** Everything above
+   says the CPU half is fine; nothing here has seen `render`, `fx` and `hud` at 256
+   bodies, and that is now the only unknown in the frame. It is five minutes of his
+   time and it decides whether item 2 matters.
+2. **`ai` is the last quadratic**, at 2.2 ms per frame at 256 bodies. The
+   candidate loop in `CombatDirector.update` pairs every fighter against every
+   other, and `readIncoming` and the threat list walk all encounters. The director
+   works on snapshots rather than units, so it cannot reuse `UnitField` directly,
+   but the same grid over snapshots would do it. **This one *can* move a seeded
+   fight** — pairing order decides who duels whom — so it is a bigger deal than the
+   physics grid was, and the tally has to be diffed.
+3. **Animation cost has never been measured and is probably third.** 256
+   `AnimationMixer`s × 54 tracks is ~14,000 interpolant evaluations a frame, and
+   every unit runs the full pose stack whether it is forty pixels tall or filling
+   the screen. Throttling the mixer and pose layers to 30 Hz beyond some distance
+   from the camera focus is invisible at RTS zoom — but a throttled pose sampled by
+   `sampleBlade` on an off-beat frame would move the sparks.
+4. **The hurler now dominates mass combat harder than before and nothing answers
+   it.** The fullest statement is in "Three to one is no longer the even point".
+   This is a design decision before it is a code one, and it is the biggest open
+   question in the project.
+5. **The sim steps the fight by wall-clock delta** (`advance(frameDelta * speed)`,
    clamped at 0.05), so a seed already plays out differently at 30 fps than at 60,
    and only the headless `t=` path uses a fixed step. A fixed-timestep accumulator
    would make live play match the captures and stop a slow frame changing a fight.
    **It changes what every existing seed produces**, so it is a decision, not an
-   optimisation. Worth raising with him.
-4. **The hurler dominates mass combat and nothing currently answers it.** The
-   fullest statement is in "Three to one is the even point on a slope", including
-   three candidate mechanisms. This is a design decision before it is a code one.
-5. **Play the close fight and judge the four strikes.** Still not done. They are
+   optimisation. Worth raising with him — and cheaper to do now than later, since
+   `09d6480` already invalidated every reference seed.
+6. **Play the close fight and judge the four strikes.** Still not done. They are
    measured but not judged: whether `hammer`, `swing`, `jab` and `punch` are
    distinguishable in motion at gameplay speed, and whether the lunge reads as
    stepping in or as sliding. `1h in close` and `1h v 2 close` stage it.
-6. **The hurl/pitch release margin is two centimetres.** Either widen it
-   deliberately or accept that the validator is the only thing standing between
-   the project and a hurl that reads as a pitch.
-7. **Make the Blender port stop being a hand copy.** It is the one place the
+7. **The hurl/pitch release margin is two centimetres.** Either widen it
+   deliberately or accept that the validator is the only thing standing between the
+   project and a hurl that reads as a pitch.
+8. **Make the Blender port stop being a hand copy.** It is the one place the
    project can silently desynchronise from itself. Emitting the tuning as JSON for
    the Python to read would end a whole class of wrong measurement.
-8. **The sword has no tunables**, and neither do the stone strikes.
+9. **The sword has no tunables**, and neither do the stone strikes.
    `applyCombatPose` and `applyStonePose` both sum inline.
-9. **Foot IK is still the real unlock.** Everything cramped about the hurl step
+10. **Foot IK is still the real unlock.** Everything cramped about the hurl step
    and the stone lunge traces to its absence.
-10. **The close fight has not been heard.** A stone strike reuses the sword's
+11. **The close fight has not been heard.** A stone strike reuses the sword's
    contact sounds; a two-handed hammer and a punch make the same noise graded only
    by intensity.
-11. Earlier items still open: hurlers held behind the swords via the Stoneworks
+12. Earlier items still open: hurlers held behind the swords via the Stoneworks
    rally point, a hurler that backpedals toward its own side rather than in a
    straight line, scorch decals under wrecks, encirclement positions for group
    fights, trails reading white-hot over bright ground, retaking the capture
