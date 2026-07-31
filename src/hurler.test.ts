@@ -422,6 +422,34 @@ describe("a battery of hurlers", () => {
     expect(cues.get(2)?.targetId).toBe(4);
   });
 
+  it("splits into groups rather than putting a dozen rocks on one body", () => {
+    const random = createSeededRandom(15);
+    const director = new CombatDirector(random);
+    const fighters: CombatantSnapshot[] = [];
+    for (let n = 0; n < 12; n += 1) {
+      fighters.push(at(n + 1, "A", 0, (n - 5.5) * 1.9, random, "hurler"));
+    }
+    for (let n = 0; n < 8; n += 1) {
+      fighters.push(at(n + 13, "B", 12, (n - 3.5) * 1.9, random, "melee"));
+    }
+    const cues = settle(director, fighters, 3);
+    const perTarget = new Map<number, number>();
+    for (let n = 0; n < 12; n += 1) {
+      const target = cues.get(n + 1)?.targetId;
+      expect(target).not.toBeNull();
+      perTarget.set(target!, (perTarget.get(target!) ?? 0) + 1);
+    }
+    // Three rocks put a fresh body down, so three throwers is a volley and the
+    // rest of the battery is somewhere else. Twelve on one is what this is for.
+    for (const count of perTarget.values()) expect(count).toBeLessThanOrEqual(3);
+    expect(perTarget.size).toBeGreaterThanOrEqual(4);
+    // Groups of two, not of one: a rock is swatted often enough that a single
+    // thrower on a body is a body that may not go down. A straggler mid-wind-up
+    // on a body the group has already left is allowed — it cannot re-aim.
+    const alone = [...perTarget.values()].filter((count) => count < 2);
+    expect(alone.length).toBeLessThanOrEqual(1);
+  });
+
   it("never hands a hurler a sword plan when it cannot reach anything", () => {
     const random = createSeededRandom(14);
     const director = new CombatDirector(random);

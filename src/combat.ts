@@ -503,6 +503,15 @@ const FOCUS_HEALTH_WEIGHT = 8;
  * trade the focus back and forth every time one of them took a step.
  */
 const FOCUS_HYSTERESIS = 2.5;
+/**
+ * The fewest throwers a battery splits into groups of.
+ *
+ * A rock is swatted or missed about one throw in seven, so a body left to a
+ * single thrower is a body that may simply not go down; two is the smallest
+ * group that reliably finishes one, and it is what keeps a pair of hurlers
+ * working together rather than each minding its own enemy.
+ */
+const MIN_THROWERS_PER_TARGET = 2;
 const LINES: readonly AttackLine[] = ["overhead", "forehand", "backhand", "flank", "rising"];
 const EMPTY_CUE: CombatCue = {
   plannerId: null,
@@ -607,8 +616,8 @@ export function createCombatProfile(random: () => number = Math.random): CombatP
 export class CombatDirector {
   private readonly encounters = new Map<string, Encounter>();
   private readonly fighters = new Map<number, FighterState>();
-  /** The body each team's hurlers are working on together, by corporation. */
-  private readonly hurlerFocus = new Map<string, number>();
+  /** The bodies each team's hurlers are working on, in order, by corporation. */
+  private readonly hurlerFocus = new Map<string, number[]>();
   /** What is arriving at each fighter, rebuilt every frame. See `Incoming`. */
   private readonly incoming = new Map<number, Incoming>();
 
@@ -777,10 +786,15 @@ export class CombatDirector {
       primaryParticipants.add(candidate.b.id);
     }
 
-    // A team's hurlers work as one battery. They pick a body together, walk it
-    // down, and swing onto the next one together, which is both the way massed
-    // throwers actually work and the only way the volleys read as a group
-    // decision rather than four fighters each minding their own business.
+    // A team's hurlers work as one battery. They pick their bodies together,
+    // walk them down, and swing onto the next ones together, which is both the
+    // way massed throwers actually work and the only way the volleys read as a
+    // group decision rather than four fighters each minding their own business.
+    //
+    // "Together" is not "all on one". A body is worth the rocks it takes to put
+    // it down and no more, so the battery splits into groups that size and works
+    // that many bodies at once. Four throwers on one enemy is a volley; sixteen
+    // is fourteen wasted rocks and a line that walks in unopposed.
     const throwTargets = new Map<number, CombatantSnapshot>();
     const batteries = new Map<string, CombatantSnapshot[]>();
     for (const fighter of living) {
@@ -795,13 +809,14 @@ export class CombatDirector {
       // the whole team's focus onto the body standing on top of it and have its
       // teammates throwing rocks into their own melee.
       const free = battery.filter((hurler) => !primaryParticipants.has(hurler.id));
-      const focus = free.length
-        ? this.chooseFocus(free, living, this.hurlerFocus.get(corporation) ?? null)
-        : null;
-      if (focus) this.hurlerFocus.set(corporation, focus.id);
+      const focuses = free.length
+        ? this.chooseFocuses(free, living, this.hurlerFocus.get(corporation) ?? [])
+        : [];
+      if (focuses.length) this.hurlerFocus.set(corporation, focuses.map((body) => body.id));
       else this.hurlerFocus.delete(corporation);
+      const groups = this.assignBattery(free, focuses);
       for (const hurler of free) {
-        const target = this.throwTarget(hurler, focus, living);
+        const target = this.throwTarget(hurler, groups.get(hurler.id) ?? null, living);
         if (!target) continue;
         throwTargets.set(hurler.id, target);
         if (this.encounters.has("ranged:" + hurler.id)) continue;
@@ -1056,31 +1071,98 @@ export class CombatDirector {
   }
 
   /**
-   * The one body a team's hurlers all throw at. Scored in metres: how close the
-   * candidate has got to the nearest thrower, plus what its remaining health is
-   * worth, less a little for being the body they are already on.
+   * How many throwers a body is worth: one for every rock it takes to put it
+   * down, allowing for the ones that are swatted or go wide, and never fewer
+   * than `MIN_THROWERS_PER_TARGET`.
+   *
+   * Rounded to the nearest rock rather than up. A fresh body comes to a hair
+   * over three, and the ceiling would round that two per cent into a fourth
+   * thrower on every enemy on the field; a body left a sliver short is finished
+   * by what the group has already committed at it.
    */
-  private chooseFocus(
+  private throwersWorth(target: CombatantSnapshot): number {
+    const hurl = THROW_PROFILES.hurl;
+    const landed = hurl.damage * (1 - hurl.deflect - hurl.miss);
+    return Math.max(MIN_THROWERS_PER_TARGET, Math.round(target.health / landed));
+  }
+
+  /**
+   * The bodies a team's hurlers work, best first, taken until the battery is
+   * spoken for. Each is scored in metres: how close it has got to the nearest
+   * thrower, plus what its remaining health is worth, less a little for being
+   * one they are already on.
+   *
+   * A battery small enough to be spent on the first body picks only that one,
+   * which is what keeps a pair or a trio throwing together.
+   */
+  private chooseFocuses(
     battery: readonly CombatantSnapshot[],
     living: readonly CombatantSnapshot[],
-    current: number | null,
-  ): CombatantSnapshot | null {
-    let best: CombatantSnapshot | null = null;
-    let bestScore = Number.POSITIVE_INFINITY;
+    current: readonly number[],
+  ): CombatantSnapshot[] {
+    const scored: Array<{ body: CombatantSnapshot; score: number }> = [];
     for (const candidate of living) {
       if (candidate.corporation === battery[0].corporation) continue;
       let reach = Number.POSITIVE_INFINITY;
       for (const hurler of battery) reach = Math.min(reach, this.distance(hurler, candidate));
       if (reach > LONG_THROW_RANGE * ACQUIRE_SLACK) continue;
-      const score = reach +
-        (candidate.health / candidate.maxHealth) * FOCUS_HEALTH_WEIGHT -
-        (candidate.id === current ? FOCUS_HYSTERESIS : 0);
-      if (score < bestScore) {
-        bestScore = score;
-        best = candidate;
+      scored.push({
+        body: candidate,
+        score: reach +
+          (candidate.health / candidate.maxHealth) * FOCUS_HEALTH_WEIGHT -
+          (current.includes(candidate.id) ? FOCUS_HYSTERESIS : 0),
+      });
+    }
+    scored.sort((left, right) => left.score - right.score);
+    const focuses: CombatantSnapshot[] = [];
+    let places = 0;
+    for (const { body } of scored) {
+      if (places >= battery.length) break;
+      focuses.push(body);
+      places += this.throwersWorth(body);
+    }
+    return focuses;
+  }
+
+  /**
+   * Which of those bodies each thrower takes. Closest pairing first, so a
+   * battery spread across a line splits along it rather than crossing over
+   * itself, and a thrower already working a body keeps it while there is room.
+   *
+   * A hurler left over — more throwers than the field has bodies to spend them
+   * on — is given nothing here and falls back to whatever it can reach on its
+   * own, which is the case where piling on is the right answer.
+   */
+  private assignBattery(
+    battery: readonly CombatantSnapshot[],
+    focuses: readonly CombatantSnapshot[],
+  ): Map<number, CombatantSnapshot> {
+    const groups = new Map<number, CombatantSnapshot>();
+    if (!focuses.length) return groups;
+    const room = new Map(focuses.map((body) => [body.id, this.throwersWorth(body)]));
+    const pairs: Array<{ hurler: CombatantSnapshot; body: CombatantSnapshot; cost: number }> = [];
+    for (const hurler of battery) {
+      const held = this.encounters.get("ranged:" + hurler.id)?.b;
+      for (const body of focuses) {
+        // A place in a group it cannot reach is a place wasted, and the thrower
+        // it was spent on falls back onto whatever is nearest — which is how the
+        // group it could not reach becomes a crowd somewhere else.
+        if (!this.canThrowAt(hurler, body)) continue;
+        pairs.push({
+          hurler, body,
+          cost: this.distance(hurler, body) - (body.id === held ? FOCUS_HYSTERESIS : 0),
+        });
       }
     }
-    return best;
+    pairs.sort((left, right) => left.cost - right.cost);
+    for (const { hurler, body } of pairs) {
+      if (groups.has(hurler.id)) continue;
+      const left = room.get(body.id) ?? 0;
+      if (left <= 0) continue;
+      groups.set(hurler.id, body);
+      room.set(body.id, left - 1);
+    }
+    return groups;
   }
 
   /**
@@ -1094,22 +1176,13 @@ export class CombatDirector {
     focus: CombatantSnapshot | null,
     living: readonly CombatantSnapshot[],
   ): CombatantSnapshot | null {
-    const reach = LONG_THROW_RANGE * ACQUIRE_SLACK;
-    // Nothing standing inside arm's length. A rock is not thrown at a body that
-    // close — it is hit with — and the frame between a charger arriving and the
-    // duel being struck used to be spent flicking a pebble at somebody already
-    // on top of the thrower, plan ring and all.
-    const throwable = (candidate: CombatantSnapshot) => {
-      const distance = this.distance(hurler, candidate);
-      return distance > STONE_RANGE && distance <= reach;
-    };
-    if (focus && throwable(focus)) return focus;
+    if (focus && this.canThrowAt(hurler, focus)) return focus;
     let best: CombatantSnapshot | null = null;
     let bestScore = Number.POSITIVE_INFINITY;
     for (const candidate of living) {
       if (candidate.corporation === hurler.corporation) continue;
       const distance = this.distance(hurler, candidate);
-      if (!throwable(candidate)) continue;
+      if (!this.canThrowAt(hurler, candidate)) continue;
       const score = distance + (candidate.health / candidate.maxHealth) * FOCUS_HEALTH_WEIGHT;
       if (score < bestScore) {
         bestScore = score;
@@ -1117,6 +1190,19 @@ export class CombatDirector {
       }
     }
     return best;
+  }
+
+  /**
+   * Whether this thrower could put a rock on that body at all.
+   *
+   * The near edge is not an oversight: a rock is not thrown at a body standing
+   * inside arm's length — it is hit with — and the frame between a charger
+   * arriving and the duel being struck used to be spent flicking a pebble at
+   * somebody already on top of the thrower, plan ring and all.
+   */
+  private canThrowAt(hurler: CombatantSnapshot, candidate: CombatantSnapshot): boolean {
+    const distance = this.distance(hurler, candidate);
+    return distance > STONE_RANGE && distance <= LONG_THROW_RANGE * ACQUIRE_SLACK;
   }
 
   private createRangedEncounter(hurler: CombatantSnapshot, target: CombatantSnapshot): Encounter {
