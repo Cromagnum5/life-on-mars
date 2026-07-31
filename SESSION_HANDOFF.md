@@ -2,12 +2,13 @@
 
 ## Current checkpoint
 
-Branch **`fight-the-man-in-front`**, five commits on top of `main`. `main` and
-`origin/main` are both at `115a6b1` — he pushed since the last handoff, so for
-once nothing is sitting unpushed. Merging this branch and pushing it are his
-calls and he has not made either.
+`main` at `6636ccf`. The session's branch `fight-the-man-in-front` was
+fast-forwarded into it at his word and still exists, fully merged.
 
-Eight older branches are lying around (`animation-tool`, `parry-the-cut`,
+`origin/main` is at `115a6b1`, so `main` is **six commits ahead of it**. Pushing
+is his call and he has not made it.
+
+Nine older branches are lying around (`animation-tool`, `parry-the-cut`,
 `rigwalker-hurler` and so on). All merged and spent; none is worth reading.
 
 **The working tree is clean.**
