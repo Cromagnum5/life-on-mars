@@ -472,6 +472,23 @@ const MAX_SUPPORTERS_PER_TARGET = 2;
  */
 const CLAIMED_TARGET_COST = ATTACK_RANGE;
 /**
+ * How near an enemy has to be before a fighter already walking at somebody else
+ * turns and fights the one in front of it instead.
+ *
+ * A charge is a commitment that nothing used to break: a fighter that acquired a
+ * target held it until that target died or drifted out of the release band, and
+ * "walking at it" was the whole of its behaviour on the way. That is right for
+ * one fighter crossing open ground and ruinous for a line, because when two
+ * lines collide almost every body in both of them is mid-charge at somebody
+ * three ranks back. Two enemies would meet at arm's length, each with the other
+ * unclaimed and neither able to see it, shoulder past, and grind on — which is
+ * what a front rank walking through itself actually is.
+ *
+ * A sword's reach, because that is the honest statement of it: an enemy inside
+ * the distance you could hit it from is the fight, whatever you set out to do.
+ */
+const LINE_CONTACT_RANGE = ATTACK_RANGE;
+/**
  * What a target at full health costs the battery, priced in metres of range, so
  * a crowd is worked through weakest-first and a body already down to a sliver
  * is finished rather than left walking. Deliberately under the range band it
@@ -670,6 +687,13 @@ export class CombatDirector {
     }
 
     const reserved = new Set<number>();
+    /**
+     * Fighters held by nothing but a charge of their own — the driving half of a
+     * one-sided melee support. They are reserved like anybody else, but only
+     * against the far half of the field: an enemy that walks into arm's length
+     * of one outranks whatever it set off after. See `LINE_CONTACT_RANGE`.
+     */
+    const charging = new Set<number>();
     const supportCounts = new Map<number, number>();
     // Every body already committed to a target, the mutual partner included.
     // `supportCounts` leaves that one out on purpose, since the cap it drives is
@@ -688,15 +712,21 @@ export class CombatDirector {
         // a hurler does not spend one of its team's melee support slots.
         supportCounts.set(encounter.b, (supportCounts.get(encounter.b) ?? 0) + 1);
         addAttacker(encounter.b);
+        charging.add(encounter.a);
       }
     }
+    // A promoted fighter is in a trade, not a charge, whatever it was doing when
+    // the frame opened.
+    for (const id of primaryParticipants) charging.delete(id);
+    /** Held against everything: a charge is only held against the far field. */
+    const engaged = (id: number) => reserved.has(id) && !charging.has(id);
 
     const candidates: Array<{ a: CombatantSnapshot; b: CombatantSnapshot; distance: number }> = [];
     for (let aIndex = 0; aIndex < living.length; aIndex += 1) {
       for (let bIndex = aIndex + 1; bIndex < living.length; bIndex += 1) {
         const a = living[aIndex];
         const b = living[bIndex];
-        if (a.corporation === b.corporation || reserved.has(a.id) || reserved.has(b.id)) continue;
+        if (a.corporation === b.corporation || engaged(a.id) || engaged(b.id)) continue;
         // A hurler pairs off only with somebody already inside stone reach.
         // Further out it is throwing, and a mutual pair would hand its cue to a
         // fighter it cannot touch; nearer than that the rock in its hand is a
@@ -708,14 +738,31 @@ export class CombatDirector {
         // with nothing published, nobody would ever engage it.
         const bound = a.role === "hurler" || b.role === "hurler"
           ? STONE_RANGE
-          : AWARENESS_RANGE;
+          // A fighter mid-charge is only interrupted by an enemy on top of it.
+          // Anything looser and a line would re-pair on every jostle rather than
+          // on contact, and nobody would ever cross ground to reach anything.
+          : charging.has(a.id) || charging.has(b.id)
+            ? LINE_CONTACT_RANGE
+            : AWARENESS_RANGE;
         const distance = this.distance(a, b);
         if (distance <= bound) candidates.push({ a, b, distance });
       }
     }
     candidates.sort((left, right) => left.distance - right.distance);
     for (const candidate of candidates) {
-      if (reserved.has(candidate.a.id) || reserved.has(candidate.b.id)) continue;
+      if (engaged(candidate.a.id) || engaged(candidate.b.id)) continue;
+      // Whatever either of them set off after is let go: this is the fight now,
+      // and a fighter driving a charge while trading blows writes two cues a
+      // frame and reads as neither — the same rule promotion works by.
+      for (const fighter of [candidate.a, candidate.b]) {
+        if (!charging.delete(fighter.id)) continue;
+        for (const [key, other] of this.encounters) {
+          if (!other.support || other.ranged || other.a !== fighter.id) continue;
+          this.encounters.delete(key);
+          supportCounts.set(other.b, (supportCounts.get(other.b) ?? 1) - 1);
+          attackerCounts.set(other.b, (attackerCounts.get(other.b) ?? 1) - 1);
+        }
+      }
       const encounter = this.createEncounter(candidate.a, candidate.b);
       this.announcePlan(encounter.exchange, events);
       this.encounters.set(this.key(candidate.a.id, candidate.b.id), encounter);

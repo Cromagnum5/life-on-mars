@@ -214,6 +214,55 @@ describe("CombatDirector", () => {
     expect(held).toContain(6);
   });
 
+  it("turns two charges into a duel when they meet at reach", () => {
+    const random = seededRandom(41);
+    const director = new CombatDirector(random);
+    // Two pairs a long way apart, crossed over: each side's spare walks at the
+    // far pair's fighter, so both spares set off past each other. This is one
+    // line collapsing into another in miniature.
+    const fighters = [
+      fighter(1, "A", -9.5, random), fighter(2, "B", -12, random),
+      fighter(3, "A", 12, random), fighter(4, "B", 9.5, random),
+      fighter(5, "A", 6, random, "melee", -6), fighter(6, "B", -6, random, "melee", 6),
+    ];
+    const opening = director.update(1 / 30, fighters).cues;
+    expect(opening.get(5)?.targetId).toBe(4);
+    expect(opening.get(6)?.targetId).toBe(1);
+    // Each is still driving its own charge, and neither is anybody's partner.
+    expect(opening.get(4)?.targetId).not.toBe(5);
+    expect(opening.get(1)?.targetId).not.toBe(6);
+
+    // They walk into each other on the way. The enemy at arm's length is the
+    // fight now, whatever either of them set off after.
+    fighters[4].x = 0.4;
+    fighters[4].z = 1.4;
+    fighters[5].x = -0.4;
+    fighters[5].z = -1.4;
+    const met = director.update(1 / 30, fighters).cues;
+    expect(met.get(5)?.targetId).toBe(6);
+    expect(met.get(6)?.targetId).toBe(5);
+  });
+
+  it("leaves a charge alone while the enemy it passes is still off at a distance", () => {
+    const random = seededRandom(43);
+    const director = new CombatDirector(random);
+    const fighters = [
+      fighter(1, "A", -9.5, random), fighter(2, "B", -12, random),
+      fighter(3, "A", 12, random), fighter(4, "B", 9.5, random),
+      fighter(5, "A", 6, random, "melee", -6), fighter(6, "B", -6, random, "melee", 6),
+    ];
+    director.update(1 / 30, fighters);
+    // Six metres apart as they cross: within melee awareness, well outside the
+    // reach either could do anything about. Both keep walking.
+    fighters[4].x = 0;
+    fighters[4].z = 3;
+    fighters[5].x = 0;
+    fighters[5].z = -3;
+    const passing = director.update(1 / 30, fighters).cues;
+    expect(passing.get(5)?.targetId).toBe(4);
+    expect(passing.get(6)?.targetId).toBe(1);
+  });
+
   it("never applies damage to a successfully blocked action", () => {
     for (let seed = 1; seed <= 40; seed += 1) expect(simulate(seed).blockedDamage).toBe(0);
   });
