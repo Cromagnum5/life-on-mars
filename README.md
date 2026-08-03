@@ -30,4 +30,5 @@ Animation Tweak Tool
 
 Future Stuff
 <img width="824" height="490" alt="image" src="https://github.com/user-attachments/assets/6f18ca1a-3d2c-458e-b5e0-e4ac206de031" />
+<img width="886" height="522" alt="image" src="https://github.com/user-attachments/assets/f760d4b6-a3ce-49da-a60f-e0384410b0e9" />
 
